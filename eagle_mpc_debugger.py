@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-19 11:40:31
-LastEditTime: 2025-02-21 18:04:24
+LastEditTime: 2025-02-21 18:18:55
 Description: MPC Debug Interface, useful for debugging your MPC controller before deploying it to the real robot
 Github: https://github.com/heleidsn
 '''
@@ -40,26 +40,26 @@ class MpcDebugInterface(QWidget):
         self.useSquash = useSquash
         self.dt_traj_opt = dt_traj_opt  # ms
         
-        # 创建布局
+        # Create layout
         self.layout = QVBoxLayout()
         
-        # 时间控制
+        # Time control
         time_layout = QHBoxLayout()
         self.time_slider = QSlider(QtCore.Qt.Horizontal)
         self.time_slider.setMinimum(0)
-        self.time_slider.setMaximum(3000)  # 3秒
+        self.time_slider.setMaximum(3000)  # 3 seconds
         self.time_slider.valueChanged.connect(self.time_changed)
         self.time_label = QLabel('0 ms')
         time_layout.addWidget(QLabel('Time (ms):'))
         time_layout.addWidget(self.time_slider)
         time_layout.addWidget(self.time_label)
         
-        # 状态修改
+        # State modification
         state_layout = QHBoxLayout()
         self.state_sliders = {}
         self.state_labels = {}
         
-        # 创建状态组布局
+        # Create state group layouts
         state_groups = {
             'Position (m)': ['X', 'Y', 'Z'],
             'Orientation (deg)': ['roll', 'pitch', 'yaw'],
@@ -67,38 +67,38 @@ class MpcDebugInterface(QWidget):
             'Angular Velocity (deg/s)': ['wx', 'wy', 'wz']
         }
         
-        # 创建滑块和标签
+        # Create sliders and labels
         slider_configs = [
-            # 位置控制 (x, y, z)
+            # Position control (x, y, z)
             ('X', -2, 2),
             ('Y', -2, 2),
             ('Z', 0, 4),
-            # 姿态欧拉角控制 (roll, pitch, yaw)
+            # Attitude Euler angles control (roll, pitch, yaw)
             ('roll', -90, 90),
             ('pitch', -90, 90),
             ('yaw', -90, 90),
-            # 线速度控制 (vx, vy, vz)
+            # Linear velocity control (vx, vy, vz)
             ('vx', -2, 2),
             ('vy', -2, 2),
             ('vz', -2, 2),
-            # 角速度控制 (wx, wy, wz)
+            # Angular velocity control (wx, wy, wz)
             ('wx', -90, 90),
             ('wy', -90, 90),
             ('wz', -90, 90)
         ]
         
-        # 为每个组创建一个垂直布局
+        # Create a vertical layout for each group
         for group_name, states in state_groups.items():
-            # 创建一个QGroupBox作为容器
+            # Create a QGroupBox as container
             group_box = QtWidgets.QGroupBox()
             group_box.setTitle(group_name)
             
-            # 创建垂直布局作为GroupBox的内部布局
+            # Create vertical layout as GroupBox's internal layout
             group_layout = QVBoxLayout(group_box)
             group_layout.setSpacing(10)
-            group_layout.setContentsMargins(10, 15, 10, 10)  # 左、上、右、下的边距
+            group_layout.setContentsMargins(10, 15, 10, 10)  # Left, Top, Right, Bottom margins
             
-            # 设置GroupBox的样式
+            # Set GroupBox style
             group_box.setStyleSheet("""
                 QGroupBox {
                     font-weight: bold;
@@ -114,13 +114,13 @@ class MpcDebugInterface(QWidget):
                 }
             """)
             
-            # 创建水平布局来放置该组的所有状态
+            # Create horizontal layout to place all states in this group
             states_layout = QHBoxLayout()
-            states_layout.setSpacing(15)  # 增加状态之间的间距
+            states_layout.setSpacing(15)  # Increase spacing between states
             
-            # 为该组中的每个状态创建滑块
+            # Create sliders for each state in this group
             for state_name in states:
-                # 找到对应的配置
+                # Find corresponding configuration
                 config = next(cfg for cfg in slider_configs if cfg[0] == state_name)
                 state_layout_single = self.create_state_slider(*config)
                 states_layout.addLayout(state_layout_single)
@@ -128,49 +128,49 @@ class MpcDebugInterface(QWidget):
             group_layout.addLayout(states_layout)
             state_layout.addWidget(group_box)
         
-        # 设置主状态布局的间距
+        # Set main state layout spacing
         state_layout.setSpacing(20)
         state_layout.setContentsMargins(10, 10, 10, 10)
         
-        # 图表显示  position, attitude, linear velocity, angular velocity
+        # Plot display: position, attitude, linear velocity, angular velocity
         self.figure = Figure(figsize=(20, 10))
-        # 设置子图之间的间距
+        # Set spacing between subplots
         self.figure.subplots_adjust(
-            left=0.08,    # 左边距
-            right=0.95,   # 右边距
-            bottom=0.08,  # 下边距
-            top=0.95,     # 上边距
-            wspace=0.25,  # 子图之间的水平间距
-            hspace=0.35   # 子图之间的垂直间距
+            left=0.08,    # Left margin
+            right=0.95,   # Right margin
+            bottom=0.08,  # Bottom margin
+            top=0.95,     # Top margin
+            wspace=0.25,  # Horizontal spacing between subplots
+            hspace=0.35   # Vertical spacing between subplots
         )
         self.canvas = FigureCanvas(self.figure)
         plot_row_num = 3
         plot_col_num = 2
-        self.ax_state = self.figure.add_subplot(plot_row_num, plot_col_num, 1)  # 状态
-        self.ax_attitude = self.figure.add_subplot(plot_row_num, plot_col_num, 2)  # 姿态
-        self.ax_linear_velocity = self.figure.add_subplot(plot_row_num, plot_col_num, 3)  # 线速度
-        self.ax_angular_velocity = self.figure.add_subplot(plot_row_num, plot_col_num, 4)  # 角速度
+        self.ax_state = self.figure.add_subplot(plot_row_num, plot_col_num, 1)  # State
+        self.ax_attitude = self.figure.add_subplot(plot_row_num, plot_col_num, 2)  # Attitude
+        self.ax_linear_velocity = self.figure.add_subplot(plot_row_num, plot_col_num, 3)  # Linear velocity
+        self.ax_angular_velocity = self.figure.add_subplot(plot_row_num, plot_col_num, 4)  # Angular velocity
         
-        self.ax_control = self.figure.add_subplot(plot_row_num, plot_col_num, 5)  # 控制
-        self.ax_time = self.figure.add_subplot(plot_row_num, plot_col_num, 6)   # 求解时间
+        self.ax_control = self.figure.add_subplot(plot_row_num, plot_col_num, 5)  # Control
+        self.ax_time = self.figure.add_subplot(plot_row_num, plot_col_num, 6)   # Solving time
         
-        # 添加到主布局
+        # Add to main layout
         self.layout.addLayout(time_layout)
         self.layout.addLayout(state_layout)
         self.layout.addWidget(self.canvas)
         self.setLayout(self.layout)
       
-        # 数据存储
+        # Data storage
         self.state_history = []
         self.control_history = []
-        self.mpc_solve_time_history = []  # 存储求解时间历史
+        self.mpc_solve_time_history = []  # Store solving time history
         
-        # 定时更新图表
+        # Timer for updating plots
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.update_plot)
-        self.timer.start(100)  # 10Hz更新
+        self.timer.start(100)  # 10Hz update
         
-        # initialize MPC
+        # Initialize MPC
         traj_solver, traj_state_ref, traj_problem, trajectory_obj = get_opt_traj(
             self.robot_name, 
             self.trajectory_name, 
@@ -180,7 +180,7 @@ class MpcDebugInterface(QWidget):
         
         self.traj_solver = traj_solver
         
-        # create mpc controller to get tau_f
+        # Create MPC controller to get tau_f
         mpc_name = self.mpc_name
         mpc_yaml = '{}/mpc/{}_mpc.yaml'.format(self.mpc_yaml_path, self.robot_name)
         self.mpc_controller = create_mpc_controller(
@@ -191,28 +191,27 @@ class MpcDebugInterface(QWidget):
             mpc_yaml
         )
         
-        self.mpc_controller.solver.setCallbacks([])  # 取消回调函数输出
+        self.mpc_controller.solver.setCallbacks([])  # Disable callback outputs
         
         self.state = self.mpc_controller.state.zero()
         self.state_ref = np.copy(self.mpc_controller.state_ref)
         self.mpc_ref_time = 0
         self.solving_time = 0.0
         
-        # 存储MPC的时间步长
-        self.dt_mpc = self.mpc_controller.dt  # 转换为毫秒
+        # Store MPC time step (convert to milliseconds)
+        self.dt_mpc = self.mpc_controller.dt  # Convert to milliseconds
         print(f"Trajectory dt: {self.dt_traj_opt}ms, MPC dt: {self.dt_mpc}ms")
         
-        # create mpc controller with different timer
+        # Create MPC controller with different timer
         if self.using_ros:
             rospy.loginfo("MPC controller initialized")
             
-            # ROS订阅和发布
+            # ROS subscribers and publishers
             self.pose_pub = rospy.Publisher('/debug/pose', PoseStamped, queue_size=1)
             self.time_pub = rospy.Publisher('/debug/time', Float64, queue_size=1)
             
             self.state_sub = rospy.Subscriber('/debug/mpc_state', MpcState, self.state_callback)
             self.control_sub = rospy.Subscriber('/debug/mpc_control', MpcControl, self.control_callback)
-            
             
             self.mpc_state_pub = rospy.Publisher('/mpc/state', MpcState, queue_size=10)
             self.mpc_control_pub = rospy.Publisher('/mpc/control', MpcControl, queue_size=10)
@@ -221,7 +220,7 @@ class MpcDebugInterface(QWidget):
             
             self.attitude_pub = rospy.Publisher('/mavros/setpoint_raw/attitude', AttitudeTarget, queue_size=10)
             
-            # start MPC controller and wait for it to start
+            # Start MPC controller and wait for it to start
             self.mpc_rate = 10.0  # Hz
             self.mpc_timer = rospy.Timer(rospy.Duration(1.0/self.mpc_rate), self.mpc_timer_callback_ros)
             
@@ -251,16 +250,16 @@ class MpcDebugInterface(QWidget):
 
         self.solving_time = (time_end - time_start).to_sec()
         
-        # 发布MPC数据
+        # Publish MPC data
         self.publish_mpc_data()
         self.publish_mavros_rate_command()
         
     def publish_mavros_rate_command(self):
-        # using mavros setpoint to achieve rate control
+        # Using MAVROS setpoint to achieve rate control
         
         self.control_command = self.mpc_controller.solver.us_squash[0]
         
-        # get planned state
+        # Get planned state
         self.state_ref = self.mpc_controller.solver.xs[1]
         
         self.roll_rate_ref = self.state_ref[self.mpc_controller.robot_model.nq + 3]
@@ -272,30 +271,30 @@ class MpcDebugInterface(QWidget):
         att_msg = AttitudeTarget()
         att_msg.header.stamp = rospy.Time.now()
         
-        # 设置 type_mask，忽略姿态，仅使用角速度 + 推力
+        # Set type_mask to ignore attitude, only use angular velocity + thrust
         att_msg.type_mask = AttitudeTarget.IGNORE_ATTITUDE 
         
-        # 机体系角速度 (rad/s)
-        att_msg.body_rate = Vector3(self.roll_rate_ref, self.pitch_rate_ref, self.yaw_rate_ref)  # 仅绕 Z 轴旋转 0.1 rad/s
+        # Body frame angular velocity (rad/s)
+        att_msg.body_rate = Vector3(self.roll_rate_ref, self.pitch_rate_ref, self.yaw_rate_ref)
         
-        # 推力值 (范围 0 ~ 1)
+        # Thrust value (range 0 ~ 1)
         max_thrust = 7.0664 * 4
-        att_msg.thrust = self.total_thrust / max_thrust  # 60% 油门
+        att_msg.thrust = self.total_thrust / max_thrust
         
-        # 对推力进行限幅
+        # Clamp thrust value
         att_msg.thrust = np.clip(att_msg.thrust, 0, 1)
 
         self.attitude_pub.publish(att_msg)
         
     def publish_mpc_data(self):
-        # 发布MPC状态
+        # Publish MPC state
         state_msg = MpcState()
         state_msg.header.stamp = rospy.Time.now()
         state_msg.state = self.state.tolist()
         state_msg.state_ref = self.state_ref.tolist()
         state_msg.state_error = (self.state_ref - self.state).tolist()
         
-        # 填充位置和姿态信息
+        # Fill position and attitude information
         state_msg.position.x = self.state[0]
         state_msg.position.y = self.state[1]
         state_msg.position.z = self.state[2]
@@ -304,7 +303,7 @@ class MpcDebugInterface(QWidget):
         state_msg.orientation.z = self.state[5]
         state_msg.orientation.w = self.state[6]
         
-        # 发布控制输入
+        # Publish control input
         control_msg = MpcControl()
         control_msg.header.stamp = rospy.Time.now()
         control_msg.control_raw = self.mpc_controller.solver.us[0].tolist()
@@ -312,7 +311,7 @@ class MpcDebugInterface(QWidget):
         control_msg.thrust_command = self.mpc_controller.solver.xs[0].tolist()
         control_msg.speed_command = self.mpc_controller.solver.xs[1].tolist()
         
-        # 发布消息
+        # Publish messages
         self.mpc_state_pub.publish(state_msg)
         self.mpc_control_pub.publish(control_msg)
         self.solving_time_pub.publish(Float64(self.solving_time))
@@ -322,11 +321,11 @@ class MpcDebugInterface(QWidget):
         if len(self.state_history) > 100:
             self.state_history.pop(0)
             
-        # 更新滑块位置以匹配当前状态
+        # Update slider positions to match current state
         if self.state_history:
             current_state = self.state_history[-1].state
             for i, axis in enumerate(['X', 'Y', 'Z']):
-                self.state_sliders[axis].blockSignals(True)  # 防止触发回调
+                self.state_sliders[axis].blockSignals(True)  # Prevent callback triggering
                 self.state_sliders[axis].setValue(int(current_state[i] * 100))
                 self.state_labels[axis].setText(f'{current_state[i]:.2f}')
                 self.state_sliders[axis].blockSignals(False)
@@ -718,7 +717,7 @@ class MpcDebugInterface(QWidget):
 if __name__ == '__main__':
     import sys
     
-    # some settings
+    # Settings
     using_ros = False
     mpc_name = 'rail'
     mpc_yaml_path = '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml'
