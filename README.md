@@ -57,7 +57,7 @@ Main configuration files are located in:
 ## TODO
 
 1. Adding New State Variables for quadrotor with robotic arm.
-2. Adding button to change current state to reference state directly.
+2. Adding button to change current state to reference state directly. (Finished at 20250226)
 
 ## Contributing
 

@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-19 11:40:31
-LastEditTime: 2025-02-21 18:18:55
+LastEditTime: 2025-02-26 14:44:10
 Description: MPC Debug Interface, useful for debugging your MPC controller before deploying it to the real robot
 Github: https://github.com/heleidsn
 '''
@@ -53,6 +53,48 @@ class MpcDebugInterface(QWidget):
         time_layout.addWidget(QLabel('Time (ms):'))
         time_layout.addWidget(self.time_slider)
         time_layout.addWidget(self.time_label)
+        
+        # Reference state selection
+        ref_layout = QHBoxLayout()
+        self.ref_selector = QtWidgets.QComboBox()
+        self.ref_selector.addItems(['Current State', 'Initial State', 'Final State', 'Current Reference'])
+        self.ref_selector.setStyleSheet("""
+            QComboBox {
+                padding: 5px;
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                min-width: 150px;
+            }
+            QComboBox:hover {
+                border: 1px solid #4a90e2;
+            }
+        """)
+        
+        self.set_ref_button = QPushButton('Set to Reference')
+        self.set_ref_button.clicked.connect(self.set_to_reference_button_clicked)
+        self.set_ref_button.setStyleSheet("""
+            QPushButton {
+                padding: 5px 15px;
+                background-color: #4a90e2;
+                color: white;
+                border: none;
+                border-radius: 3px;
+            }
+            QPushButton:hover {
+                background-color: #357abd;
+            }
+            QPushButton:pressed {
+                background-color: #2a5d8c;
+            }
+        """)
+        
+        ref_layout.addWidget(QLabel('Reference:'))
+        ref_layout.addWidget(self.ref_selector)
+        ref_layout.addWidget(self.set_ref_button)
+        ref_layout.addStretch()
+
+        # Add to main layout after time_layout
+        self.layout.addLayout(ref_layout)
         
         # State modification
         state_layout = QHBoxLayout()
@@ -197,6 +239,10 @@ class MpcDebugInterface(QWidget):
         self.state_ref = np.copy(self.mpc_controller.state_ref)
         self.mpc_ref_time = 0
         self.solving_time = 0.0
+        
+                # Set time slider maximum based on trajectory length
+        traj_duration_ms = (len(self.state_ref) - 1) * self.dt_traj_opt
+        self.time_slider.setMaximum(traj_duration_ms+2000)
         
         # Store MPC time step (convert to milliseconds)
         self.dt_mpc = self.mpc_controller.dt  # Convert to milliseconds
@@ -507,6 +553,9 @@ class MpcDebugInterface(QWidget):
         self.time_label.setText(f'{value} ms')
         self.mpc_ref_time = int(value)   # 单位为ms
         
+        # 发布新的参考轨迹
+        self.set_to_reference()
+        
         # self.mpc_ref_index = int(value / self.dt_traj_opt)
         
         # # contstrain the time to be within the range of the trajectory
@@ -563,7 +612,7 @@ class MpcDebugInterface(QWidget):
     def update_state_plot(self, state_predict, state_ref):
         self.ax_state.clear()
         
-        self.ax_state.set_title('State')
+        self.ax_state.set_title('Position')
         self.ax_state.set_xlabel('Time (s)')
         self.ax_state.set_ylabel('Position (m)')
         
@@ -623,7 +672,7 @@ class MpcDebugInterface(QWidget):
         
     def update_linear_velocity_plot(self, state_predict, state_ref):
         self.ax_linear_velocity.clear()
-        self.ax_linear_velocity.set_title('Linear Velocity')
+        self.ax_linear_velocity.set_title('Linear Velocity (body frame)')
         self.ax_linear_velocity.set_xlabel('Time (s)')
         self.ax_linear_velocity.set_ylabel('Velocity (m/s)')
         
@@ -648,7 +697,7 @@ class MpcDebugInterface(QWidget):
         
     def update_angular_velocity_plot(self, state_predict, state_ref):
         self.ax_angular_velocity.clear()
-        self.ax_angular_velocity.set_title('Angular Velocity')
+        self.ax_angular_velocity.set_title('Angular Velocity (body frame)')
         self.ax_angular_velocity.set_xlabel('Time (s)')
         self.ax_angular_velocity.set_ylabel('Velocity (rad/s)')
         
@@ -712,6 +761,93 @@ class MpcDebugInterface(QWidget):
         self.canvas.draw()
     
     #endregion
+    
+    def set_to_reference_button_clicked(self):
+        
+        time_index = int(self.mpc_ref_time / self.dt_traj_opt)
+        time_index = min(time_index, len(self.state_ref) - 1)
+        ref_state = self.state_ref[time_index]
+        # Update state
+        self.state = np.copy(ref_state)
+        
+        # Update all sliders and labels to match reference state
+        # Position
+        for i, axis in enumerate(['X', 'Y', 'Z']):
+            self.state_sliders[axis].blockSignals(True)
+            self.state_sliders[axis].setValue(int(ref_state[i] * 100))
+            self.state_labels[axis].setText(f'{ref_state[i]:.2f}')
+            self.state_sliders[axis].blockSignals(False)
+            
+        # Orientation (convert quaternion to euler angles)
+        euler = R.from_quat(ref_state[3:7]).as_euler('xyz', degrees=True)
+        for i, axis in enumerate(['roll', 'pitch', 'yaw']):
+            self.state_sliders[axis].blockSignals(True)
+            self.state_sliders[axis].setValue(int(euler[i]))
+            self.state_labels[axis].setText(f'{euler[i]:.2f}')
+            self.state_sliders[axis].blockSignals(False)
+            
+        # Linear velocity
+        for i, axis in enumerate(['vx', 'vy', 'vz']):
+            self.state_sliders[axis].blockSignals(True)
+            self.state_sliders[axis].setValue(int(ref_state[i + 7] * 100))
+            self.state_labels[axis].setText(f'{ref_state[i + 7]:.2f}')
+            self.state_sliders[axis].blockSignals(False)
+            
+        # Angular velocity (convert to degrees)
+        for i, axis in enumerate(['wx', 'wy', 'wz']):
+            ang_vel_deg = np.degrees(ref_state[i + 10])
+            self.state_sliders[axis].blockSignals(True)
+            self.state_sliders[axis].setValue(int(ang_vel_deg))
+            self.state_labels[axis].setText(f'{ang_vel_deg:.2f}')
+            self.state_sliders[axis].blockSignals(False)
+
+    def set_to_reference(self):
+        selected = self.ref_selector.currentText()
+        
+        if selected == 'Initial State':
+            ref_state = self.state_ref[0]
+        elif selected == 'Final State':
+            ref_state = self.state_ref[-1]
+        elif selected == 'Current State':
+            ref_state = self.state
+        elif selected == 'Current Reference':  # Current Reference
+            time_index = int(self.mpc_ref_time / self.dt_traj_opt)
+            time_index = min(time_index, len(self.state_ref) - 1)
+            ref_state = self.state_ref[time_index]
+            
+        # Update state
+        self.state = np.copy(ref_state)
+        
+        # Update all sliders and labels to match reference state
+        # Position
+        for i, axis in enumerate(['X', 'Y', 'Z']):
+            self.state_sliders[axis].blockSignals(True)
+            self.state_sliders[axis].setValue(int(ref_state[i] * 100))
+            self.state_labels[axis].setText(f'{ref_state[i]:.2f}')
+            self.state_sliders[axis].blockSignals(False)
+            
+        # Orientation (convert quaternion to euler angles)
+        euler = R.from_quat(ref_state[3:7]).as_euler('xyz', degrees=True)
+        for i, axis in enumerate(['roll', 'pitch', 'yaw']):
+            self.state_sliders[axis].blockSignals(True)
+            self.state_sliders[axis].setValue(int(euler[i]))
+            self.state_labels[axis].setText(f'{euler[i]:.2f}')
+            self.state_sliders[axis].blockSignals(False)
+            
+        # Linear velocity
+        for i, axis in enumerate(['vx', 'vy', 'vz']):
+            self.state_sliders[axis].blockSignals(True)
+            self.state_sliders[axis].setValue(int(ref_state[i + 7] * 100))
+            self.state_labels[axis].setText(f'{ref_state[i + 7]:.2f}')
+            self.state_sliders[axis].blockSignals(False)
+            
+        # Angular velocity (convert to degrees)
+        for i, axis in enumerate(['wx', 'wy', 'wz']):
+            ang_vel_deg = np.degrees(ref_state[i + 10])
+            self.state_sliders[axis].blockSignals(True)
+            self.state_sliders[axis].setValue(int(ang_vel_deg))
+            self.state_labels[axis].setText(f'{ang_vel_deg:.2f}')
+            self.state_sliders[axis].blockSignals(False)
 
 
 if __name__ == '__main__':
@@ -724,7 +860,7 @@ if __name__ == '__main__':
     
     robot_name = 'iris'
     trajectory_name = 'hover'
-    dt_traj_opt = 20  # ms
+    dt_traj_opt = 10  # ms
     useSquash = True
     
     if using_ros:
