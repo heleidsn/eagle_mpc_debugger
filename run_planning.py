@@ -1,15 +1,22 @@
+'''
+Author: Lei He
+Date: 2025-02-24 10:31:39
+LastEditTime: 2025-02-24 19:09:30
+Description: Run planning to generate planning results and save them to file
+Github: https://github.com/heleidsn
+'''
 import numpy as np
 import matplotlib.pyplot as plt
-from mpc_l1_control.config import SimulationConfig
-from utils.traj_opt import get_opt_traj
+from utils.create_problem import get_opt_traj, create_mpc_controller
 from utils.u_convert import thrustToForceTorqueAll_array
-import argparse
+from tf.transformations import quaternion_matrix
 from pathlib import Path
-import yaml
-from mpc_l1_control.controllers import create_mpc_from_yaml
+# import yaml
 from scipy.spatial.transform import Rotation as R
+import os
+from pathlib import Path
 
-def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_opt, save_dir=None):
+def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_opt, state_array,  save_dir=None):
     """Plot optimized trajectory results.
     
     Args:
@@ -39,8 +46,10 @@ def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_op
     
     # state_array = np.array(traj_state_ref)
     
+    control_num = control_force_torque.shape[1]
+    
     # Plot controls
-    for i in range(9):
+    for i in range(control_num):
         ax = plt.subplot(3, 3, i + 1)
         control_data = [u[i] for u in control_force_torque[:n_points]]
         ax.plot(time, control_data, 'g-', label='Control')
@@ -56,10 +65,22 @@ def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_op
     fig_states.suptitle('State Trajectory', fontsize=16)
     
     # Plot states
-    for i in range(9):
+    state_ref_world_frame = state_array.copy()
+    # get vel_body and quat from traj_state_ref
+    for i in range(len(state_array)):
+        vel_body = state_array[i, 7:10]  # [vx, vy, vz]
+        quat = state_array[i, 3:7]  # [qx, qy, qz, qw]
+
+        # Convert body velocities to world frame
+        R = quaternion_matrix([quat[0], quat[1], quat[2], quat[3]])[:3, :3]
+        vel_world = R @ vel_body
+        state_ref_world_frame[i, 6:9] = vel_world
+    
+    for i in range(control_num):
         ax = plt.subplot(3, 3, i + 1)
         state_data = [s[i] for s in traj_state_ref[:n_points]]
-        vel_data = [s[i+9] for s in traj_state_ref[:n_points]]
+        vel_data = [s[i+control_num] for s in traj_state_ref[:n_points]]
+        vel_world_data = [s[i+control_num] for s in state_ref_world_frame[:n_points]]
         
         # Convert roll, pitch, yaw from radians to degrees
         if i in [3, 4, 5]:  # Indices for roll, pitch, yaw
@@ -70,7 +91,11 @@ def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_op
             vel_data = np.degrees(vel_data)      # Convert joint velocities to degrees
         
         ax.plot(time, state_data, 'b-', label='Position')
-        ax.plot(time, vel_data, 'r--', label='Velocity')
+        ax.plot(time, vel_data, 'r--', label='Velocity (body)')
+        
+        if i in [0, 1, 2]:
+            ax.plot(time, vel_world_data, 'g--', label='Velocity (world)')
+        
         ax.set_xlabel('Time (s)')
         ax.set_ylabel(state_labels[i])
         ax.grid(True)
@@ -94,36 +119,42 @@ def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_op
     plt.show()
 
 def main():
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Run trajectory optimization and visualization')
-    parser.add_argument('--config', type=str, help='Path to configuration file')
-    parser.add_argument('--save-dir', type=str, help='Directory to save results')
-    args = parser.parse_args()
     
-    # Load configuration
-    config = SimulationConfig(args.config)
+    # Settings
+    mpc_name = 'rail'
+    mpc_yaml_path = '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml'
     
-    print(f"Running trajectory optimization for task: {config.task_name}")
+    robot_name = 'iris'
+    trajectory_name = 'displacement_big'
+    dt_traj_opt = 10  # ms
+    useSquash = True
+    
+    save_file = True
+    save_dir = None
+    
+    task_name = robot_name + '_' + trajectory_name
+    print(f"Running trajectory optimization for task: {task_name}")
     print(f"Parameters:")
-    print(f"  dt_traj_opt: {config.dt_traj_opt} ms")
-    print(f"  using_simple_model: {config.using_simple_model}")
-    print(f"  using_angle_setpoint: {config.using_angle_setpoint}")
+    print(f"  dt_traj_opt: {dt_traj_opt} ms")
+    print(f"  useSquash: {useSquash}")
     
     # Run trajectory optimization
     trajectory, traj_state_ref, _, trajectory_obj = get_opt_traj(
-        config.task_name,
-        config.dt_traj_opt,
-        config.using_simple_model,
-        config.using_angle_setpoint
+        robot_name,
+        trajectory_name, 
+        dt_traj_opt, 
+        useSquash,
+        mpc_yaml_path
     )
     
-    # create mpc controller to get tau_f    
-    mpc_controller = create_mpc_from_yaml(
-        config.mpc_type,
+    # create mpc controller to get tau_f
+    mpc_yaml = '{}/mpc/{}_mpc.yaml'.format(mpc_yaml_path, robot_name)    
+    mpc_controller = create_mpc_controller(
+        mpc_name,
         trajectory_obj,
         traj_state_ref,
-        config.dt_traj_opt,
-        config.mpc_yaml_path
+        dt_traj_opt,
+        mpc_yaml
     )
     
     # Get tau_f from MPC yaml file
@@ -139,6 +170,22 @@ def main():
     # Transfer traj_state_ref to state_array
     state_array = np.array(traj_state_ref)
     
+    # get task name from config
+    if save_file:
+        # save state_array to file
+        file_path = Path(__file__).resolve()
+        dir_path = file_path.parent
+        
+        save_dir = str(dir_path) + '/results/' + task_name + '/'
+        # create save_dir if not exist
+        os.makedirs(save_dir, exist_ok=True)
+        
+        np.save(save_dir + 'state_array.npy', state_array)
+        
+        # save control plan and control force torque to file
+        np.save(save_dir + 'control_plan.npy', control_plan_rotor)
+        np.save(save_dir + 'control_force_torque.npy', control_force_torque)
+    
     # transfer quaternion to euler angle
     # state_array[:, 3:7] = quaternion_to_euler(state_array[:, 3:7])
     quat = state_array[:, 3:7]
@@ -152,8 +199,9 @@ def main():
         trajectory,
         state_array_new,
         control_force_torque,
-        config.dt_traj_opt,
-        args.save_dir
+        dt_traj_opt,
+        state_array,
+        save_dir
     )
 
 if __name__ == '__main__':
