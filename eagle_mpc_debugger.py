@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-19 11:40:31
-LastEditTime: 2025-02-26 14:44:10
+LastEditTime: 2025-02-26 16:12:10
 Description: MPC Debug Interface, useful for debugging your MPC controller before deploying it to the real robot
 Github: https://github.com/heleidsn
 '''
@@ -57,7 +57,7 @@ class MpcDebugInterface(QWidget):
         # Reference state selection
         ref_layout = QHBoxLayout()
         self.ref_selector = QtWidgets.QComboBox()
-        self.ref_selector.addItems(['Current State', 'Initial State', 'Final State', 'Current Reference'])
+        self.ref_selector.addItems(['Current Reference', 'Current offset', 'Initial State', 'Final State'])
         self.ref_selector.setStyleSheet("""
             QComboBox {
                 padding: 5px;
@@ -114,7 +114,7 @@ class MpcDebugInterface(QWidget):
             # Position control (x, y, z)
             ('X', -2, 2),
             ('Y', -2, 2),
-            ('Z', 0, 4),
+            ('Z', -2, 2),
             # Attitude Euler angles control (roll, pitch, yaw)
             ('roll', -90, 90),
             ('pitch', -90, 90),
@@ -277,7 +277,19 @@ class MpcDebugInterface(QWidget):
             self.mpc_timer = QtCore.QTimer()
             self.mpc_timer.timeout.connect(self.mpc_running_callback)
             self.mpc_timer.start(int(1000/self.mpc_rate))
-            
+        
+        # 在类的__init__方法中添加一个字典来存储偏移量的基准值
+        # 初始化偏移量为零数组
+        self.state_offset = np.zeros_like(self.state)
+        
+        # 创建一个映射字典，用于快速查找状态量的索引
+        self.state_indices = {
+            'X': 0, 'Y': 1, 'Z': 2,                    # 位置
+            'roll': 3, 'pitch': 4, 'yaw': 5,          # 姿态(用于临时存储欧拉角)
+            'vx': 7, 'vy': 8, 'vz': 9,                # 线速度
+            'wx': 10, 'wy': 11, 'wz': 12              # 角速度
+        }
+        
     #region --------------Ros interface--------------------------------
     def mpc_timer_callback_ros(self, event):
         
@@ -481,13 +493,43 @@ class MpcDebugInterface(QWidget):
     def slider_value_changed(self, name, value):
         """处理滑块值变化"""
         actual_value = value / 100.0
-        # 更新输入框，但不触发输入框的信号
+        
+        # 获取当前时间对应的参考状态
+        time_index = int(self.mpc_ref_time / self.dt_traj_opt)
+        time_index = min(time_index, len(self.state_ref) - 1)
+        ref_state = self.state_ref[time_index]
+        
+        # 更新偏移量和状态
+        if name in ['X', 'Y', 'Z']:
+            idx = self.state_indices[name]
+            self.state_offset[idx] = actual_value
+            self.state[idx] = ref_state[idx] + actual_value
+            
+        elif name in ['roll', 'pitch', 'yaw']:
+            idx = self.state_indices[name]
+            # 存储欧拉角偏移量
+            self.state_offset[idx] = actual_value
+            # 计算新的姿态
+            euler_ref = R.from_quat(ref_state[3:7]).as_euler('xyz', degrees=True)
+            euler_new = euler_ref.copy()
+            euler_new[idx-3] = euler_ref[idx-3] + actual_value
+            self.state[3:7] = R.from_euler('xyz', euler_new, degrees=True).as_quat()
+            
+        elif name in ['vx', 'vy', 'vz']:
+            idx = self.state_indices[name]
+            self.state_offset[idx] = actual_value
+            self.state[idx] = ref_state[idx] + actual_value
+            
+        elif name in ['wx', 'wy', 'wz']:
+            idx = self.state_indices[name]
+            self.state_offset[idx] = np.radians(actual_value)
+            self.state[idx] = ref_state[idx] + np.radians(actual_value)
+        
+        # 更新显示值
         self.state_labels[name].blockSignals(True)
         self.state_labels[name].setText(f'{actual_value:.2f}')
         self.state_labels[name].blockSignals(False)
-        # 更新状态
-        self.state_changed(name, actual_value)
-        
+
     def value_input_changed(self, name):
         """处理输入框值变化"""
         try:
@@ -499,13 +541,13 @@ class MpcDebugInterface(QWidget):
             self.state_sliders[name].setValue(int(value * 100))
             self.state_sliders[name].blockSignals(False)
             # 更新状态
-            self.state_changed(name, value)
+            self.state_changed_input(name, value)
         except ValueError:
             # 如果输入无效，恢复到滑块的值
             slider_value = self.state_sliders[name].value() / 100.0
             self.state_labels[name].setText(f'{slider_value:.2f}')
 
-    def state_changed(self, axis, value):
+    def state_changed_input(self, axis, value, is_offset=False):
         print("state changed: ", axis, value)
         
         # 获取当前四元数
@@ -513,59 +555,82 @@ class MpcDebugInterface(QWidget):
         # 转换为欧拉角
         euler = R.from_quat(current_quat).as_euler('xyz', degrees=True)
         
-        if 'X' in axis:
-            self.state[0] = value
-        elif 'Y' in axis:
-            self.state[1] = value
-        elif 'Z' in axis:
-            self.state[2] = value
-        elif 'roll' in axis:
-            euler[0] = value  # value已经是度数
-            quat = R.from_euler('xyz', euler, degrees=True).as_quat()
-            self.state[3:7] = quat
-        elif 'pitch' in axis:
-            euler[1] = value  # value已经是度数
-            quat = R.from_euler('xyz', euler, degrees=True).as_quat()
-            self.state[3:7] = quat
-        elif 'yaw' in axis:
-            euler[2] = value  # value已经是度数
-            quat = R.from_euler('xyz', euler, degrees=True).as_quat()
-            self.state[3:7] = quat
-        elif 'vx' in axis:
-            self.state[7] = value
-        elif 'vy' in axis:
-            self.state[8] = value
-        elif 'vz' in axis:
-            self.state[9] = value
-        elif 'wx' in axis:
-            self.state[10] = np.radians(value)  # 转换为弧度
-        elif 'wy' in axis:
-            self.state[11] = np.radians(value)  # 转换为弧度
-        elif 'wz' in axis:
-            self.state[12] = np.radians(value)  # 转换为弧度
+        if is_offset:
+            # 使用偏移量更新状态
+            if 'X' in axis:
+                self.state[0] += value
+            elif 'Y' in axis:
+                self.state[1] += value
+            elif 'Z' in axis:
+                self.state[2] += value
+            elif 'roll' in axis:
+                euler[0] += value
+                quat = R.from_euler('xyz', euler, degrees=True).as_quat()
+                self.state[3:7] = quat
+            elif 'pitch' in axis:
+                euler[1] += value
+                quat = R.from_euler('xyz', euler, degrees=True).as_quat()
+                self.state[3:7] = quat
+            elif 'yaw' in axis:
+                euler[2] += value
+                quat = R.from_euler('xyz', euler, degrees=True).as_quat()
+                self.state[3:7] = quat
+            elif 'vx' in axis:
+                self.state[7] += value
+            elif 'vy' in axis:
+                self.state[8] += value
+            elif 'vz' in axis:
+                self.state[9] += value
+            elif 'wx' in axis:
+                self.state[10] += np.radians(value)
+            elif 'wy' in axis:
+                self.state[11] += np.radians(value)
+            elif 'wz' in axis:
+                self.state[12] += np.radians(value)
+        else:
+            # 原来的绝对值更新逻辑
+            if 'X' in axis:
+                self.state[0] = value
+            elif 'Y' in axis:
+                self.state[1] = value
+            elif 'Z' in axis:
+                self.state[2] = value
+            elif 'roll' in axis:
+                euler[0] = value  # value已经是度数
+                quat = R.from_euler('xyz', euler, degrees=True).as_quat()
+                self.state[3:7] = quat
+            elif 'pitch' in axis:
+                euler[1] = value  # value已经是度数
+                quat = R.from_euler('xyz', euler, degrees=True).as_quat()
+                self.state[3:7] = quat
+            elif 'yaw' in axis:
+                euler[2] = value  # value已经是度数
+                quat = R.from_euler('xyz', euler, degrees=True).as_quat()
+                self.state[3:7] = quat
+            elif 'vx' in axis:
+                self.state[7] = value
+            elif 'vy' in axis:
+                self.state[8] = value
+            elif 'vz' in axis:
+                self.state[9] = value
+            elif 'wx' in axis:
+                self.state[10] = np.radians(value)  # 转换为弧度
+            elif 'wy' in axis:
+                self.state[11] = np.radians(value)  # 转换为弧度
+            elif 'wz' in axis:
+                self.state[12] = np.radians(value)  # 转换为弧度
         
     def time_changed(self, value):
-        # 发布新的时间戳
-        
         if self.using_ros:
             self.time_pub.publish(Float64(value))
         
         self.time_label.setText(f'{value} ms')
         self.mpc_ref_time = int(value)   # 单位为ms
         
-        # 发布新的参考轨迹
+        # 重置所有滑块到零位置，这样偏移量会重置
+        # self.reset_sliders()
         self.set_to_reference()
-        
-        # self.mpc_ref_index = int(value / self.dt_traj_opt)
-        
-        # # contstrain the time to be within the range of the trajectory
-        # print(self.mpc_ref_index, len(self.state_ref))
-        
-        # if self.mpc_ref_index < 0:
-        #     self.mpc_ref_index = 0
-        # elif self.mpc_ref_index > len(self.state_ref):
-        #     self.mpc_ref_index = len(self.state_ref)
-            
+
     def mpc_running_callback(self):
         # calculate the mpc output
         self.mpc_controller.problem.x0 = self.state
@@ -771,36 +836,38 @@ class MpcDebugInterface(QWidget):
         self.state = np.copy(ref_state)
         
         # Update all sliders and labels to match reference state
-        # Position
-        for i, axis in enumerate(['X', 'Y', 'Z']):
-            self.state_sliders[axis].blockSignals(True)
-            self.state_sliders[axis].setValue(int(ref_state[i] * 100))
-            self.state_labels[axis].setText(f'{ref_state[i]:.2f}')
-            self.state_sliders[axis].blockSignals(False)
+        # # Position
+        # for i, axis in enumerate(['X', 'Y', 'Z']):
+        #     self.state_sliders[axis].blockSignals(True)
+        #     self.state_sliders[axis].setValue(int(ref_state[i] * 100))
+        #     self.state_labels[axis].setText(f'{ref_state[i]:.2f}')
+        #     self.state_sliders[axis].blockSignals(False)
             
-        # Orientation (convert quaternion to euler angles)
-        euler = R.from_quat(ref_state[3:7]).as_euler('xyz', degrees=True)
-        for i, axis in enumerate(['roll', 'pitch', 'yaw']):
-            self.state_sliders[axis].blockSignals(True)
-            self.state_sliders[axis].setValue(int(euler[i]))
-            self.state_labels[axis].setText(f'{euler[i]:.2f}')
-            self.state_sliders[axis].blockSignals(False)
+        # # Orientation (convert quaternion to euler angles)
+        # euler = R.from_quat(ref_state[3:7]).as_euler('xyz', degrees=True)
+        # for i, axis in enumerate(['roll', 'pitch', 'yaw']):
+        #     self.state_sliders[axis].blockSignals(True)
+        #     self.state_sliders[axis].setValue(int(euler[i]))
+        #     self.state_labels[axis].setText(f'{euler[i]:.2f}')
+        #     self.state_sliders[axis].blockSignals(False)
             
-        # Linear velocity
-        for i, axis in enumerate(['vx', 'vy', 'vz']):
-            self.state_sliders[axis].blockSignals(True)
-            self.state_sliders[axis].setValue(int(ref_state[i + 7] * 100))
-            self.state_labels[axis].setText(f'{ref_state[i + 7]:.2f}')
-            self.state_sliders[axis].blockSignals(False)
+        # # Linear velocity
+        # for i, axis in enumerate(['vx', 'vy', 'vz']):
+        #     self.state_sliders[axis].blockSignals(True)
+        #     self.state_sliders[axis].setValue(int(ref_state[i + 7] * 100))
+        #     self.state_labels[axis].setText(f'{ref_state[i + 7]:.2f}')
+        #     self.state_sliders[axis].blockSignals(False)
             
-        # Angular velocity (convert to degrees)
-        for i, axis in enumerate(['wx', 'wy', 'wz']):
-            ang_vel_deg = np.degrees(ref_state[i + 10])
-            self.state_sliders[axis].blockSignals(True)
-            self.state_sliders[axis].setValue(int(ang_vel_deg))
-            self.state_labels[axis].setText(f'{ang_vel_deg:.2f}')
-            self.state_sliders[axis].blockSignals(False)
-
+        # # Angular velocity (convert to degrees)
+        # for i, axis in enumerate(['wx', 'wy', 'wz']):
+        #     ang_vel_deg = np.degrees(ref_state[i + 10])
+        #     self.state_sliders[axis].blockSignals(True)
+        #     self.state_sliders[axis].setValue(int(ang_vel_deg))
+        #     self.state_labels[axis].setText(f'{ang_vel_deg:.2f}')
+        #     self.state_sliders[axis].blockSignals(False)
+        
+        self.reset_sliders()
+        
     def set_to_reference(self):
         selected = self.ref_selector.currentText()
         
@@ -808,45 +875,44 @@ class MpcDebugInterface(QWidget):
             ref_state = self.state_ref[0]
         elif selected == 'Final State':
             ref_state = self.state_ref[-1]
-        elif selected == 'Current State':
-            ref_state = self.state
-        elif selected == 'Current Reference':  # Current Reference
+        elif selected == 'Current offset':
+            # 获取当前参考状态
             time_index = int(self.mpc_ref_time / self.dt_traj_opt)
             time_index = min(time_index, len(self.state_ref) - 1)
             ref_state = self.state_ref[time_index]
             
-        # Update state
-        self.state = np.copy(ref_state)
+            # 应用偏移量
+            new_state = ref_state.copy()
+            # 位置和速度直接相加
+            for i in [0,1,2,7,8,9,10,11,12]:
+                new_state[i] = ref_state[i] + self.state_offset[i]
+            # 姿态需要特殊处理
+            euler_ref = R.from_quat(ref_state[3:7]).as_euler('xyz', degrees=True)
+            euler_new = euler_ref + self.state_offset[3:6]  # 3:6存储的是欧拉角偏移量
+            new_state[3:7] = R.from_euler('xyz', euler_new, degrees=True).as_quat()
+            
+            ref_state = new_state
+            
+        elif selected == 'Current Reference':
+            time_index = int(self.mpc_ref_time / self.dt_traj_opt)
+            time_index = min(time_index, len(self.state_ref) - 1)
+            ref_state = self.state_ref[time_index]
+            
+            self.reset_sliders()
         
-        # Update all sliders and labels to match reference state
-        # Position
-        for i, axis in enumerate(['X', 'Y', 'Z']):
+        # 更新状态
+        self.state = np.copy(ref_state)
+
+    def reset_sliders(self):
+        """重置所有滑块和偏移量到零位置"""
+        # 重置偏移量数组
+        self.state_offset = np.zeros_like(self.state)
+        
+        # 重置所有滑块到零位置
+        for axis in self.state_sliders:
             self.state_sliders[axis].blockSignals(True)
-            self.state_sliders[axis].setValue(int(ref_state[i] * 100))
-            self.state_labels[axis].setText(f'{ref_state[i]:.2f}')
-            self.state_sliders[axis].blockSignals(False)
-            
-        # Orientation (convert quaternion to euler angles)
-        euler = R.from_quat(ref_state[3:7]).as_euler('xyz', degrees=True)
-        for i, axis in enumerate(['roll', 'pitch', 'yaw']):
-            self.state_sliders[axis].blockSignals(True)
-            self.state_sliders[axis].setValue(int(euler[i]))
-            self.state_labels[axis].setText(f'{euler[i]:.2f}')
-            self.state_sliders[axis].blockSignals(False)
-            
-        # Linear velocity
-        for i, axis in enumerate(['vx', 'vy', 'vz']):
-            self.state_sliders[axis].blockSignals(True)
-            self.state_sliders[axis].setValue(int(ref_state[i + 7] * 100))
-            self.state_labels[axis].setText(f'{ref_state[i + 7]:.2f}')
-            self.state_sliders[axis].blockSignals(False)
-            
-        # Angular velocity (convert to degrees)
-        for i, axis in enumerate(['wx', 'wy', 'wz']):
-            ang_vel_deg = np.degrees(ref_state[i + 10])
-            self.state_sliders[axis].blockSignals(True)
-            self.state_sliders[axis].setValue(int(ang_vel_deg))
-            self.state_labels[axis].setText(f'{ang_vel_deg:.2f}')
+            self.state_sliders[axis].setValue(0)
+            self.state_labels[axis].setText('0.00')
             self.state_sliders[axis].blockSignals(False)
 
 
