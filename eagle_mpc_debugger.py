@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-19 11:40:31
-LastEditTime: 2025-02-26 16:12:10
+LastEditTime: 2025-03-04 18:46:46
 Description: MPC Debug Interface, useful for debugging your MPC controller before deploying it to the real robot
 Github: https://github.com/heleidsn
 '''
@@ -26,6 +26,8 @@ from utils.create_problem import get_opt_traj, create_mpc_controller
 from mavros_msgs.msg import AttitudeTarget
 from geometry_msgs.msg import Vector3
 from scipy.spatial.transform import Rotation as R
+from utils.u_convert import thrustToForceTorqueAll_array
+
 
 class MpcDebugInterface(QWidget):
     def __init__(self, using_ros=False, mpc_name='rail', mpc_yaml_path=None, robot_name='iris', trajectory_name='hover', dt_traj_opt=20, useSquash=True):
@@ -39,6 +41,9 @@ class MpcDebugInterface(QWidget):
         self.trajectory_name = trajectory_name
         self.useSquash = useSquash
         self.dt_traj_opt = dt_traj_opt  # ms
+        
+        # setting
+        self.plot_thrust_torque = False
         
         # Create layout
         self.layout = QVBoxLayout()
@@ -95,6 +100,70 @@ class MpcDebugInterface(QWidget):
 
         # Add to main layout after time_layout
         self.layout.addLayout(ref_layout)
+        
+        # Mass modification layout
+        mass_layout = QHBoxLayout()
+        
+        # Create mass input field
+        self.mass_input = QtWidgets.QLineEdit()
+        self.mass_input.setPlaceholderText("Enter new mass (kg)")
+        self.mass_input.setFixedWidth(150)
+        self.mass_input.setStyleSheet("""
+            QLineEdit {
+                padding: 5px;
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                background: white;
+            }
+            QLineEdit:focus {
+                border: 1px solid #4a90e2;
+            }
+        """)
+        
+        # Add validator for mass input (only positive numbers)
+        validator = QtGui.QDoubleValidator(0.0, 100.0, 3)  # min, max, decimals
+        validator.setNotation(QtGui.QDoubleValidator.StandardNotation)
+        self.mass_input.setValidator(validator)
+        
+        # Create set mass button
+        self.set_mass_button = QPushButton('Set Mass')
+        self.set_mass_button.clicked.connect(self.update_mass)
+        self.set_mass_button.setStyleSheet("""
+            QPushButton {
+                padding: 5px 15px;
+                background-color: #4a90e2;
+                color: white;
+                border: none;
+                border-radius: 3px;
+            }
+            QPushButton:hover {
+                background-color: #357abd;
+            }
+            QPushButton:pressed {
+                background-color: #2a5d8c;
+            }
+        """)
+        
+        # Current mass display
+        self.current_mass_label = QLabel("Current Mass: 1.5 kg")  # 默认质量
+        self.current_mass_label.setStyleSheet("""
+            QLabel {
+                font-size: 14px;
+                font-weight: bold;
+                color: #2c3e50;
+                padding: 5px;
+            }
+        """)
+        
+        # Add widgets to mass layout
+        mass_layout.addWidget(QLabel("New Mass:"))
+        mass_layout.addWidget(self.mass_input)
+        mass_layout.addWidget(self.set_mass_button)
+        mass_layout.addWidget(self.current_mass_label)
+        mass_layout.addStretch()
+        
+        # Add mass layout to main layout after time layout
+        self.layout.addLayout(mass_layout)
         
         # State modification
         state_layout = QHBoxLayout()
@@ -175,7 +244,7 @@ class MpcDebugInterface(QWidget):
         state_layout.setContentsMargins(10, 10, 10, 10)
         
         # Plot display: position, attitude, linear velocity, angular velocity
-        self.figure = Figure(figsize=(20, 10))
+        self.figure = Figure(figsize=(20, 30), dpi=100)  # 添加dpi参数
         # Set spacing between subplots
         self.figure.subplots_adjust(
             left=0.08,    # Left margin
@@ -183,10 +252,16 @@ class MpcDebugInterface(QWidget):
             bottom=0.08,  # Bottom margin
             top=0.95,     # Top margin
             wspace=0.25,  # Horizontal spacing between subplots
-            hspace=0.35   # Vertical spacing between subplots
+            hspace=0.35   # Vertical spacing between subplots，增加垂直间距
         )
         self.canvas = FigureCanvas(self.figure)
-        plot_row_num = 3
+        self.canvas.setMinimumHeight(1000)  # 设置最小高度
+        self.canvas.setMinimumWidth(1000)   # 设置最小宽度
+        
+        if self.plot_thrust_torque:
+            plot_row_num = 4
+        else:
+            plot_row_num = 3
         plot_col_num = 2
         self.ax_state = self.figure.add_subplot(plot_row_num, plot_col_num, 1)  # State
         self.ax_attitude = self.figure.add_subplot(plot_row_num, plot_col_num, 2)  # Attitude
@@ -196,10 +271,14 @@ class MpcDebugInterface(QWidget):
         self.ax_control = self.figure.add_subplot(plot_row_num, plot_col_num, 5)  # Control
         self.ax_time = self.figure.add_subplot(plot_row_num, plot_col_num, 6)   # Solving time
         
+        if self.plot_thrust_torque: 
+            self.ax_thrust = self.figure.add_subplot(plot_row_num, plot_col_num, 7)  # Thrust
+            self.ax_torque = self.figure.add_subplot(plot_row_num, plot_col_num, 8)  # Torque
+        
         # Add to main layout
-        self.layout.addLayout(time_layout)
-        self.layout.addLayout(state_layout)
-        self.layout.addWidget(self.canvas)
+        self.layout.addLayout(time_layout, stretch=1)
+        self.layout.addLayout(state_layout, stretch=2)
+        self.layout.addWidget(self.canvas, stretch=8)  # 给canvas更大的比例
         self.setLayout(self.layout)
       
         # Data storage
@@ -289,6 +368,9 @@ class MpcDebugInterface(QWidget):
             'vx': 7, 'vy': 8, 'vz': 9,                # 线速度
             'wx': 10, 'wy': 11, 'wz': 12              # 角速度
         }
+        
+        # 在__init__方法的最后
+        self.setMinimumSize(1200, 1500)  # 设置窗口最小大小
         
     #region --------------Ros interface--------------------------------
     def mpc_timer_callback_ros(self, event):
@@ -653,6 +735,11 @@ class MpcDebugInterface(QWidget):
         
         print("solving time: {:.2f} ms".format(self.solving_time * 1000))
         print("state: ", self.state)
+        
+        state_predict = np.array(self.mpc_controller.solver.xs)   # 50, 13
+        print('body rate current0: ', state_predict[0][10:13])
+        print('body rate command1: ', state_predict[1][10:13])
+        print('body rate command2: ', state_predict[2][10:13])
 
     #endregion
 
@@ -671,6 +758,9 @@ class MpcDebugInterface(QWidget):
         control_ref = np.array(self.traj_solver.us_squash)
         self.update_control_plot(control_predict, control_ref)
         
+        if self.plot_thrust_torque:
+            self.update_thrust_torque_plot(control_predict, control_ref)
+        
         # update solving time plot
         self.update_solving_time_plot()
         
@@ -688,113 +778,100 @@ class MpcDebugInterface(QWidget):
         predict_start_time = self.mpc_ref_time / 1000.0
         predict_time = predict_start_time + np.arange(len(state_predict)) * self.dt_mpc / 1000.0
         
-        self.ax_state.plot(predict_time,
-                         state_predict[:, 0], label='X', color='red')
-        self.ax_state.plot(predict_time,
-                         state_predict[:, 1], label='Y', color='green')
-        self.ax_state.plot(predict_time,
-                         state_predict[:, 2], label='Z', color='blue')
+        # 预测状态线条更粗 (linewidth=2)
+        self.ax_state.plot(predict_time, state_predict[:, 0], label='X', color='red', linewidth=2)
+        self.ax_state.plot(predict_time, state_predict[:, 1], label='Y', color='green', linewidth=2)
+        self.ax_state.plot(predict_time, state_predict[:, 2], label='Z', color='blue', linewidth=2)
         
-        self.ax_state.plot(ref_time, state_ref[:, 0], label='X_ref', linestyle='--', color='red')
-        self.ax_state.plot(ref_time, state_ref[:, 1], label='Y_ref', linestyle='--', color='green')
-        self.ax_state.plot(ref_time, state_ref[:, 2], label='Z_ref', linestyle='--', color='blue')
+        # 参考状态线条较细 (linewidth=1)
+        self.ax_state.plot(ref_time, state_ref[:, 0], label='X_ref', linestyle='--', color='red', linewidth=1)
+        self.ax_state.plot(ref_time, state_ref[:, 1], label='Y_ref', linestyle='--', color='green', linewidth=1)
+        self.ax_state.plot(ref_time, state_ref[:, 2], label='Z_ref', linestyle='--', color='blue', linewidth=1)
         
         self.ax_state.legend()
 
     def update_attitude_plot(self, state_predict, state_ref):
-        # 更新姿态图
         self.ax_attitude.clear()
         self.ax_attitude.set_title('Attitude')
         self.ax_attitude.set_xlabel('Time (s)')
         self.ax_attitude.set_ylabel('Angle (deg)')
         
-        # 将预测状态和参考状态的四元数转换为欧拉角
         euler_predict = np.array([R.from_quat(q).as_euler('xyz', degrees=True) 
                                  for q in state_predict[:, 3:7]])
         euler_ref = np.array([R.from_quat(q).as_euler('xyz', degrees=True) 
                              for q in state_ref[:, 3:7]])
         
-        # 计算参考轨迹时间轴 (使用轨迹优化的dt)
         ref_time = np.arange(len(state_ref)) * self.dt_traj_opt / 1000.0
-        
-        # 计算预测轨迹时间轴 (使用MPC的dt)
         predict_start_time = self.mpc_ref_time / 1000.0
         predict_time = predict_start_time + np.arange(len(state_predict)) * self.dt_mpc / 1000.0
         
-        # 绘制欧拉角
-        self.ax_attitude.plot(predict_time,
-                            euler_predict[:, 0], label='Roll', color='red')
-        self.ax_attitude.plot(predict_time,
-                            euler_predict[:, 1], label='Pitch', color='green')
-        self.ax_attitude.plot(predict_time,
-                            euler_predict[:, 2], label='Yaw', color='blue')
+        # 预测状态线条更粗
+        self.ax_attitude.plot(predict_time, euler_predict[:, 0], label='Roll', color='red', linewidth=2)
+        self.ax_attitude.plot(predict_time, euler_predict[:, 1], label='Pitch', color='green', linewidth=2)
+        self.ax_attitude.plot(predict_time, euler_predict[:, 2], label='Yaw', color='blue', linewidth=2)
         
-        self.ax_attitude.plot(ref_time, euler_ref[:, 0], label='Roll SP', linestyle='--', color='red')
-        self.ax_attitude.plot(ref_time, euler_ref[:, 1], label='Pitch SP', linestyle='--', color='green')
-        self.ax_attitude.plot(ref_time, euler_ref[:, 2], label='Yaw SP', linestyle='--', color='blue')
+        # 参考状态线条较细
+        self.ax_attitude.plot(ref_time, euler_ref[:, 0], label='Roll SP', linestyle='--', color='red', linewidth=1)
+        self.ax_attitude.plot(ref_time, euler_ref[:, 1], label='Pitch SP', linestyle='--', color='green', linewidth=1)
+        self.ax_attitude.plot(ref_time, euler_ref[:, 2], label='Yaw SP', linestyle='--', color='blue', linewidth=1)
         
         self.ax_attitude.legend()
-        
+
     def update_linear_velocity_plot(self, state_predict, state_ref):
         self.ax_linear_velocity.clear()
         self.ax_linear_velocity.set_title('Linear Velocity (body frame)')
         self.ax_linear_velocity.set_xlabel('Time (s)')
         self.ax_linear_velocity.set_ylabel('Velocity (m/s)')
         
-        # 计算参考轨迹时间轴 (使用轨迹优化的dt)
         ref_time = np.arange(len(state_ref)) * self.dt_traj_opt / 1000.0
-        
-        # 计算预测轨迹时间轴 (使用MPC的dt)
         predict_start_time = self.mpc_ref_time / 1000.0
         predict_time = predict_start_time + np.arange(len(state_predict)) * self.dt_mpc / 1000.0
         
         index_plot = 7
         
-        self.ax_linear_velocity.plot(predict_time, state_predict[:, index_plot], label='X', color='red')
-        self.ax_linear_velocity.plot(predict_time, state_predict[:, index_plot+1], label='Y', color='green')
-        self.ax_linear_velocity.plot(predict_time, state_predict[:, index_plot+2], label='Z', color='blue')
+        # 预测状态线条更粗
+        self.ax_linear_velocity.plot(predict_time, state_predict[:, index_plot], label='X', color='red', linewidth=2)
+        self.ax_linear_velocity.plot(predict_time, state_predict[:, index_plot+1], label='Y', color='green', linewidth=2)
+        self.ax_linear_velocity.plot(predict_time, state_predict[:, index_plot+2], label='Z', color='blue', linewidth=2)
         
-        self.ax_linear_velocity.plot(ref_time, state_ref[:, index_plot], label='X_ref', linestyle='--', color='red')
-        self.ax_linear_velocity.plot(ref_time, state_ref[:, index_plot+1], label='Y_ref', linestyle='--', color='green')
-        self.ax_linear_velocity.plot(ref_time, state_ref[:, index_plot+2], label='Z_ref', linestyle='--', color='blue')
+        # 参考状态线条较细
+        self.ax_linear_velocity.plot(ref_time, state_ref[:, index_plot], label='X_ref', linestyle='--', color='red', linewidth=1)
+        self.ax_linear_velocity.plot(ref_time, state_ref[:, index_plot+1], label='Y_ref', linestyle='--', color='green', linewidth=1)
+        self.ax_linear_velocity.plot(ref_time, state_ref[:, index_plot+2], label='Z_ref', linestyle='--', color='blue', linewidth=1)
         
         self.ax_linear_velocity.legend()
-        
+
     def update_angular_velocity_plot(self, state_predict, state_ref):
         self.ax_angular_velocity.clear()
         self.ax_angular_velocity.set_title('Angular Velocity (body frame)')
         self.ax_angular_velocity.set_xlabel('Time (s)')
         self.ax_angular_velocity.set_ylabel('Velocity (rad/s)')
         
-        # 计算参考轨迹时间轴 (使用轨迹优化的dt)
         ref_time = np.arange(len(state_ref)) * self.dt_traj_opt / 1000.0
-        
-        # 计算预测轨迹时间轴 (使用MPC的dt)
         predict_start_time = self.mpc_ref_time / 1000.0
         predict_time = predict_start_time + np.arange(len(state_predict)) * self.dt_mpc / 1000.0
         
         index_plot = 10
         
-        self.ax_angular_velocity.plot(predict_time, state_predict[:, index_plot], label='X', color='red')
-        self.ax_angular_velocity.plot(predict_time, state_predict[:, index_plot+1], label='Y', color='green')
-        self.ax_angular_velocity.plot(predict_time, state_predict[:, index_plot+2], label='Z', color='blue')
+        # 预测状态线条更粗
+        self.ax_angular_velocity.plot(predict_time, state_predict[:, index_plot], label='X', color='red', linewidth=2)
+        self.ax_angular_velocity.plot(predict_time, state_predict[:, index_plot+1], label='Y', color='green', linewidth=2)
+        self.ax_angular_velocity.plot(predict_time, state_predict[:, index_plot+2], label='Z', color='blue', linewidth=2)
         
-        self.ax_angular_velocity.plot(ref_time, state_ref[:, index_plot], label='X_ref', linestyle='--', color='red')
-        self.ax_angular_velocity.plot(ref_time, state_ref[:, index_plot+1], label='Y_ref', linestyle='--', color='green')
-        self.ax_angular_velocity.plot(ref_time, state_ref[:, index_plot+2], label='Z_ref', linestyle='--', color='blue')
+        # 参考状态线条较细
+        self.ax_angular_velocity.plot(ref_time, state_ref[:, index_plot], label='X_ref', linestyle='--', color='red', linewidth=1)
+        self.ax_angular_velocity.plot(ref_time, state_ref[:, index_plot+1], label='Y_ref', linestyle='--', color='green', linewidth=1)
+        self.ax_angular_velocity.plot(ref_time, state_ref[:, index_plot+2], label='Z_ref', linestyle='--', color='blue', linewidth=1)
         
         self.ax_angular_velocity.legend()
-        
+
     def update_control_plot(self, control_predict, control_ref):
         self.ax_control.clear()
         self.ax_control.set_title('Control')
         self.ax_control.set_xlabel('Time (s)')
         self.ax_control.set_ylabel('Control')
         
-        # 计算参考轨迹时间轴 (使用轨迹优化的dt)
         ref_time = np.arange(len(control_ref)) * self.dt_traj_opt / 1000.0
-        
-        # 计算预测轨迹时间轴 (使用MPC的dt)
         predict_start_time = self.mpc_ref_time / 1000.0
         predict_time = predict_start_time + np.arange(len(control_predict)) * self.dt_mpc / 1000.0
         
@@ -802,10 +879,13 @@ class MpcDebugInterface(QWidget):
         
         control_num = control_predict.shape[1]
         for i in range(control_num):
-            self.ax_control.plot(predict_time,
-                                 control_predict[:, i], label='Control_{}'.format(i), color=colors[i])
+            # 预测控制线条更粗
+            self.ax_control.plot(predict_time, control_predict[:, i], 
+                               label='Control_{}'.format(i), color=colors[i], linewidth=2)
+            # 参考控制线条较细
             self.ax_control.plot(ref_time, control_ref[:, i],
-                                 label='Control_ref_{}'.format(i), linestyle='--', color=colors[i])
+                               label='Control_ref_{}'.format(i), linestyle='--', 
+                               color=colors[i], linewidth=1)
         
         self.ax_control.legend()
         
@@ -824,6 +904,51 @@ class MpcDebugInterface(QWidget):
         # 自动调整子图布局
         self.figure.tight_layout()
         self.canvas.draw()
+        
+    def update_thrust_torque_plot(self, control_predict, control_ref):
+        self.ax_thrust.clear()
+        self.ax_thrust.set_title('Thrust')
+        self.ax_thrust.set_xlabel('Time (s)')
+        self.ax_thrust.set_ylabel('Thrust (N)')
+        
+        self.ax_torque.clear()
+        self.ax_torque.set_title('Torque')
+        self.ax_torque.set_xlabel('Time (s)')
+        self.ax_torque.set_ylabel('Torque (Nm)')
+        
+        # 计算参考轨迹时间轴 (使用轨迹优化的dt)
+        ref_time = np.arange(len(control_ref)) * self.dt_traj_opt / 1000.0
+        
+        # 计算预测轨迹时间轴 (使用MPC的dt)
+        predict_start_time = self.mpc_ref_time / 1000.0
+        predict_time = predict_start_time + np.arange(len(control_predict)) * self.dt_mpc / 1000.0
+        
+        # get tau_f
+        tau_f = self.mpc_controller.platform_params.tau_f
+        
+        # 计算predict的总推力
+        total_thrust_torque_predict = thrustToForceTorqueAll_array(control_predict, tau_f)
+        # 计算ref的总推力
+        total_thrust_torque_ref = thrustToForceTorqueAll_array(control_ref, tau_f)
+        
+        # 绘制推力
+        self.ax_thrust.plot(predict_time, total_thrust_torque_predict[:, 2], label='Thrust', color='red')
+        self.ax_thrust.plot(ref_time, total_thrust_torque_ref[:, 2], label='Thrust_ref', linestyle='--', color='red')
+        
+        # 绘制扭矩
+        colors = ['red', 'green', 'blue']
+        for i in range(3):
+            self.ax_torque.plot(predict_time, total_thrust_torque_predict[:, i+3], label='Torque_{}'.format(i), color=colors[i])
+            self.ax_torque.plot(ref_time, total_thrust_torque_ref[:, i+3], label='Torque_ref_{}'.format(i), linestyle='--', color=colors[i])
+        
+        self.ax_thrust.legend()
+        self.ax_torque.legend()
+        
+        
+        
+        
+        # 计算predict的总扭矩
+        
     
     #endregion
     
@@ -915,6 +1040,30 @@ class MpcDebugInterface(QWidget):
             self.state_labels[axis].setText('0.00')
             self.state_sliders[axis].blockSignals(False)
 
+    # 添加更新质量的方法
+    def update_mass(self):
+        """更新baselink的质量"""
+        try:
+            new_mass = float(self.mass_input.text())
+            if new_mass <= 0:
+                QtWidgets.QMessageBox.warning(self, "Invalid Input", "Mass must be positive!")
+                return
+                
+            # 更新MPC控制器中的质量参数
+            self.mpc_controller.platform_params.mass = new_mass
+            
+            # 更新显示的当前质量
+            self.current_mass_label.setText(f"Current Mass: {new_mass:.3f} kg")
+            
+            # 清空输入框
+            self.mass_input.clear()
+            
+            # 可选：显示成功消息
+            QtWidgets.QMessageBox.information(self, "Success", f"Mass updated to {new_mass:.3f} kg")
+            
+        except ValueError:
+            QtWidgets.QMessageBox.warning(self, "Invalid Input", "Please enter a valid number!")
+
 
 if __name__ == '__main__':
     import sys
@@ -926,7 +1075,7 @@ if __name__ == '__main__':
     
     robot_name = 'iris'
     trajectory_name = 'hover'
-    dt_traj_opt = 10  # ms
+    dt_traj_opt = 5  # ms
     useSquash = True
     
     if using_ros:
