@@ -16,9 +16,11 @@ def get_opt_traj(robotName, trajectoryName, dt_traj_opt, useSquash, yaml_file_pa
     else:
         solver = crocoddyl.SolverBoxFDDP(problem)
 
+    # solver.convergence_init = 1e-4
+    
     solver.setCallbacks([crocoddyl.CallbackVerbose()])
     start_time = time.time()
-    solver.solve([], [], maxiter=100)
+    solver.solve([], [], maxiter=400)
     end_time = time.time()
     
     print("Time taken for trajectory optimization: {:.2f} ms".format((end_time - start_time)*1000))
