@@ -18,6 +18,7 @@ from tf.transformations import quaternion_matrix
 from geometry_msgs.msg import Point, Vector3
 from std_msgs.msg import Float32, Header
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
+from eagle_mpc_msgs.msg import SolverPerformance, MpcState, MpcControl
 
 
 class TrajectoryPublisher:
@@ -26,8 +27,8 @@ class TrajectoryPublisher:
         rospy.init_node('trajectory_publisher_mpc', anonymous=True)
 
         # Get parameters
-        self.robot_name = rospy.get_param('~robot_name', 'iris')
-        self.trajectory_name = rospy.get_param('~trajectory_name', 'hover')
+        self.robot_name = rospy.get_param('~robot_name', 's500')
+        self.trajectory_name = rospy.get_param('~trajectory_name', 'displacement')
         self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 5)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
         self.yaml_path = rospy.get_param('~yaml_path', '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml')
@@ -35,7 +36,9 @@ class TrajectoryPublisher:
         
         self.control_mode = rospy.get_param('~control_mode', 'MPC')  # MPC, Geometric, PX4
         
-        self.max_thrust = rospy.get_param('~max_thrust', 7.0664 * 4)
+        self.max_thrust = rospy.get_param('~max_thrust', 10.0664 * 4)
+        
+        self.mpc_iter_num = 0
         
         # Load trajectory
         self.load_trajectory()
@@ -62,6 +65,7 @@ class TrajectoryPublisher:
         self.yaw_pub = rospy.Publisher('/reference/yaw', Float32, queue_size=10)
         
         self.body_rate_thrust_pub = rospy.Publisher('/mavros/setpoint_raw/attitude', AttitudeTarget, queue_size=10)
+        self.mpc_state_pub = rospy.Publisher("/mpc/state", MpcState, queue_size=10)
         
         # --------------------------------------timer--------------------------------------
         # Timer 1: for publishing trajectory
@@ -77,7 +81,7 @@ class TrajectoryPublisher:
     def init_mpc_controller(self):
         # create mpc controller to get tau_f
         mpc_name = "rail"
-        mpc_yaml = '{}/mpc/{}_px4_mpc.yaml'.format(self.yaml_path, self.robot_name)
+        mpc_yaml = '{}/mpc/{}_mpc.yaml'.format(self.yaml_path, self.robot_name)
         self.mpc_controller = create_mpc_controller(
             mpc_name,
             self.trajectory_obj,
@@ -194,7 +198,8 @@ class TrajectoryPublisher:
         elif self.control_mode == 'MPC':
             # using MPC controller
             self.get_mpc_command()
-            self.publish_mavros_rate_command()
+            self.publish_mpc_control_command()
+            self.publish_mpc_debug_data()
         else:
             rospy.logwarn("Invalid control mode")  
           
@@ -204,13 +209,9 @@ class TrajectoryPublisher:
         if self.controller_started:
             self.controller_time = rospy.Time.now() - self.controller_start_time
             self.mpc_ref_index = int(self.controller_time.to_sec() * 1000.0)
-            
-            # if self.mpc_ref_index >= 2000:
-            #     self.mpc_ref_index = 2000
         else:
             self.mpc_ref_index = 0
             
-        
         # update problem
         self.mpc_controller.updateProblem(self.mpc_ref_index)   # update problem using current time in ms
         
@@ -222,8 +223,10 @@ class TrajectoryPublisher:
         )
         time_end = rospy.Time.now()
         self.solving_time = (time_end - time_start).to_sec()
+        # 获取迭代次数
+        self.mpc_iter_num = self.mpc_controller.solver.iter
         
-    def publish_mavros_rate_command(self):
+    def publish_mpc_control_command(self):
         # using mavros setpoint to achieve rate control
         
         self.control_command = self.mpc_controller.solver.us_squash[0]
@@ -302,8 +305,68 @@ class TrajectoryPublisher:
         msg.thrust = thrust
         self.body_rate_thrust_pub.publish(msg)
         
+    def publish_mpc_debug_data(self):
+        '''
+        # 状态向量
+        float64[] state           # 完整状态向量
+        float64[] state_ref      # 参考状态向量
+        float64[] state_error    # 状态误差
+
+        int32 mpc_time_step      # 迭代位置
+        float64 solving_time     # 求解时间
+        
+        # 位置和姿态
+        geometry_msgs/Point position
+        geometry_msgs/Quaternion orientation
+        geometry_msgs/Vector3 velocity
+        geometry_msgs/Vector3 angular_velocity 
+        '''
+        # 发布MPC状态
+        state_msg = MpcState()
+        state_msg.header.stamp = rospy.Time.now()
+        
+        current_state = self.state.tolist()
+        state_ref = self.traj_state_ref[self.traj_ref_index]
+        
+        # transfer quaternion to euler
+        state_euler = np.zeros(len(current_state) - 1)
+        state_euler_ref = np.zeros(len(current_state) - 1)
+        
+        quat = current_state[3:7]
+        euler = euler_from_quaternion(quat)
+        state_array_new = np.hstack((current_state[0:3], euler, current_state[7:]))
+        
+        
+        quat_ref = state_ref[3:7]
+        euler_ref = euler_from_quaternion(quat_ref)
+        state_array_ref_new = np.hstack((state_ref[0:3], euler_ref, state_ref[7:]))
+        
+        
+        state_msg.state = state_array_new
+        state_msg.state_ref = state_array_ref_new
+        state_msg.state_error = state_array_ref_new - state_array_new
+        
+        # 填充求解器信息
+        # state_msg.mpc_time_step = self.mpc_ref_index
+        state_msg.mpc_time_step = self.mpc_iter_num
+        state_msg.solving_time = self.solving_time
+        
+        # 填充位置和姿态信息
+        state_msg.position.x = self.state[0]
+        state_msg.position.y = self.state[1]
+        state_msg.position.z = self.state[2]
+        state_msg.orientation.x = self.state[3]
+        state_msg.orientation.y = self.state[4]
+        state_msg.orientation.z = self.state[5]
+        state_msg.orientation.w = self.state[6]
+        
+        
+        # 发布消息
+        self.mpc_state_pub.publish(state_msg)
         
     def publish_mavros_setpoint_raw(self, pos_world, vel_world, acc_world, yaw, yaw_rate):
+        """Publish setpoint using mavros setpoint raw for PX4 controller"""
+
         setpoint_msg = PositionTarget()
         setpoint_msg.header.stamp = rospy.Time.now()
         setpoint_msg.header.frame_id = "map"

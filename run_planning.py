@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-24 10:31:39
-LastEditTime: 2025-03-12 10:25:51
+LastEditTime: 2025-03-15 13:57:45
 Description: Run planning to generate planning results and save them to file
 Github: https://github.com/heleidsn
 '''
@@ -124,12 +124,12 @@ def main():
     mpc_name = 'rail'
     mpc_yaml_path = '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml'
     
-    robot_name = 'iris'
-    trajectory_name = 'hover'
+    robot_name = 's500'
+    trajectory_name = 'displacement'
     dt_traj_opt = 5  # ms
     useSquash = True
     
-    save_file = True
+    save_file = False
     save_dir = None
     
     task_name = robot_name + '_' + trajectory_name
