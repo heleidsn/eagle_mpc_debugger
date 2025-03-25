@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-24 10:31:39
-LastEditTime: 2025-03-15 13:57:45
+LastEditTime: 2025-03-25 11:00:46
 Description: Run planning to generate planning results and save them to file
 Github: https://github.com/heleidsn
 '''
@@ -16,6 +16,11 @@ from scipy.spatial.transform import Rotation as R
 import os
 from pathlib import Path
 
+import example_robot_data
+import crocoddyl
+import time
+import gepetto
+
 def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_opt, state_array,  save_dir=None):
     """Plot optimized trajectory results.
     
@@ -27,8 +32,11 @@ def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_op
         save_dir: Directory to save plots (optional)
     """
     # Create time vector
-    n_points = min(len(traj_state_ref), len(control_force_torque))
-    time = np.arange(n_points) * dt_traj_opt / 1000  # Convert to seconds
+    n_points_control = len(control_force_torque)
+    n_points_state = len(traj_state_ref)
+    # n_points = min(len(traj_state_ref), len(control_force_torque))
+    time_control = np.arange(n_points_control) * dt_traj_opt / 1000  # Convert to seconds
+    time_state = np.arange(n_points_state) * dt_traj_opt / 1000  # Convert to seconds
     
     # Control labels
     control_labels = ['F_x (N)', 'F_y (N)', 'F_z (N)',
@@ -51,8 +59,8 @@ def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_op
     # Plot controls
     for i in range(control_num):
         ax = plt.subplot(3, 3, i + 1)
-        control_data = [u[i] for u in control_force_torque[:n_points]]
-        ax.plot(time, control_data, 'g-', label='Control')
+        control_data = [u[i] for u in control_force_torque[:n_points_control]]
+        ax.plot(time_control, control_data, 'g-', label='Control')
         ax.set_xlabel('Time (s)')
         ax.set_ylabel(control_labels[i])
         ax.grid(True)
@@ -76,11 +84,11 @@ def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_op
         vel_world = R @ vel_body
         state_ref_world_frame[i, 6:9] = vel_world
     
-    for i in range(control_num):
+    for i in range(control_num): 
         ax = plt.subplot(3, 3, i + 1)
-        state_data = [s[i] for s in traj_state_ref[:n_points]]
-        vel_data = [s[i+control_num] for s in traj_state_ref[:n_points]]
-        vel_world_data = [s[i+control_num] for s in state_ref_world_frame[:n_points]]
+        state_data = [s[i] for s in traj_state_ref[:n_points_state]]
+        vel_data = [s[i+control_num] for s in traj_state_ref[:n_points_state]]
+        vel_world_data = [s[i+control_num] for s in state_ref_world_frame[:n_points_state]]
         
         # Convert roll, pitch, yaw from radians to degrees
         if i in [3, 4, 5]:  # Indices for roll, pitch, yaw
@@ -90,11 +98,11 @@ def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_op
             state_data = np.degrees(state_data)  # Convert joint angles to degrees
             vel_data = np.degrees(vel_data)      # Convert joint velocities to degrees
         
-        ax.plot(time, state_data, 'b-', label='Position')
-        ax.plot(time, vel_data, 'r--', label='Velocity (body)')
+        ax.plot(time_state, state_data, 'b-', label='Position')
+        ax.plot(time_state, vel_data, 'r--', label='Velocity (body)')
         
         if i in [0, 1, 2]:
-            ax.plot(time, vel_world_data, 'g--', label='Velocity (world)')
+            ax.plot(time_state, vel_world_data, 'g--', label='Velocity (world)')
         
         ax.set_xlabel('Time (s)')
         ax.set_ylabel(state_labels[i])
@@ -112,9 +120,11 @@ def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_op
         fig_states.savefig(save_dir / 'state_trajectory.png', dpi=300, bbox_inches='tight')
         
         # Save trajectory data
-        np.save(save_dir / 'traj_state_ref.npy', traj_state_ref[:n_points])
-        np.save(save_dir / 'control_force_torque.npy', control_force_torque[:n_points])
-        np.save(save_dir / 'time.npy', time)
+        np.save(save_dir / 'traj_state_ref.npy', traj_state_ref[:n_points_state])
+        np.save(save_dir / 'control_force_torque.npy', control_force_torque[:n_points_control])
+        np.save(save_dir / 'time_control.npy', time_control)
+        np.save(save_dir / 'time_state.npy', time_state)
+        # np.save(save_dir / 'time.npy', time)
     
     plt.show()
 
@@ -124,10 +134,12 @@ def main():
     mpc_name = 'rail'
     mpc_yaml_path = '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml'
     
-    robot_name = 's500'
-    trajectory_name = 'displacement'
-    dt_traj_opt = 5  # ms
+    robot_name = 's500_uam'   # s500, s500_uam, hexacopter370_flying_arm_3
+    trajectory_name = 'catch'
+    dt_traj_opt = 30  # ms
     useSquash = True
+    
+    gepetto_vis = False
     
     save_file = False
     save_dir = None
@@ -203,6 +215,25 @@ def main():
         state_array,
         save_dir
     )
+    
+    if gepetto_vis:
+      robot = example_robot_data.load(trajectory_obj.robot_model.name)
+
+      rate = -1
+      freq = 1
+      cameraTF = [-0.03, 4.4, 2.3, 0, 0.7071, 0, 0.7071]
+      
+      gepetto.corbaserver.Client()
+
+      display = crocoddyl.GepettoDisplay(
+          robot, rate, freq, cameraTF, floor=False)
+      
+      # display robot with initial state
+    #   display.display(np.array([0, 0, 0, 0, 0, 0, 1, 0, 0]))
+
+      while True:
+          display.displayFromSolver(trajectory)
+          time.sleep(1.0)
 
 if __name__ == '__main__':
     main() 
