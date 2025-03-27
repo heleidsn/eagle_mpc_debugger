@@ -7,11 +7,14 @@ Description: Trajectory publisher for geometric controller, using MPC trajectory
 
 import rospy
 import numpy as np
+import time
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped
 from geometry_msgs.msg import TwistStamped
 from eagle_mpc_msgs.msg import MpcState
 from utils.create_problem import get_opt_traj, create_mpc_controller
+from utils.u_convert import thrustToForceTorqueAll
+
 from controller_msgs.msg import FlatTarget
 from mavros_msgs.msg import State, PositionTarget, AttitudeTarget
 from tf.transformations import quaternion_matrix
@@ -19,12 +22,17 @@ from geometry_msgs.msg import Point, Vector3
 from std_msgs.msg import Float32, Header
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from eagle_mpc_msgs.msg import SolverPerformance, MpcState, MpcControl
+from l1_control.L1AdaptiveController_v2 import L1AdaptiveControllerAll
+from typing import Dict, Any, Tuple
+
+import crocoddyl
+import pinocchio as pin
 
 
 class TrajectoryPublisher:
     def __init__(self):
         # Initialize ROS node
-        rospy.init_node('trajectory_publisher_mpc', anonymous=True)
+        rospy.init_node('trajectory_publisher_mpc', anonymous=True, log_level=rospy.WARN)
 
         # Get parameters
         self.robot_name = rospy.get_param('~robot_name', 's500')
@@ -32,18 +40,31 @@ class TrajectoryPublisher:
         self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 5)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
         self.yaml_path = rospy.get_param('~yaml_path', '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml')
-        self.publish_rate = rospy.get_param('~publish_rate', 100.0)  # Hz
+        self.control_rate = rospy.get_param('~control_rate', 100.0)  # Hz
         
-        self.control_mode = rospy.get_param('~control_mode', 'MPC')  # MPC, Geometric, PX4
+        self.control_mode = rospy.get_param('~control_mode', 'MPC_L1')  # MPC, Geometric, PX4, MPC_L1
         
         self.max_thrust = rospy.get_param('~max_thrust', 10.0664 * 4)
         
         self.mpc_iter_num = 0
         
+        self.mpc_controller = None
+        self.l1_controller = None
+        
+        self.using_position_error_feedback = False
+        
+        # set numpy print precision
+        # np.set_printoptions(precision=2, suppress=True)
+        np.set_printoptions(formatter={'float': lambda x: f"{x:>4.2f}"})  # 固定 6 位小数
+        
         # Load trajectory
         self.load_trajectory()
         if self.control_mode == 'MPC':
             self.init_mpc_controller()
+        
+        if self.control_mode == 'MPC_L1':
+            self.init_mpc_controller()
+            self._init_l1_controller()
         
         # Subscriber
         self.mav_state_sub = rospy.Subscriber('/mavros/state', State, self.mav_state_callback)
@@ -51,7 +72,7 @@ class TrajectoryPublisher:
         rospy.wait_for_message("/mavros/state", State, timeout=5)
         print("MAVROS state received")
         
-        if self.control_mode == 'MPC':
+        if self.control_mode == 'MPC' or self.control_mode == 'MPC_L1':
             self.odom_sub = rospy.Subscriber("/mavros/local_position/odom", Odometry, self.callback_model_local_position)
             print("Waiting for MAVROS local position...")
             rospy.wait_for_message("/mavros/local_position/odom", Odometry, timeout=5)
@@ -71,7 +92,7 @@ class TrajectoryPublisher:
         # Timer 1: for publishing trajectory
         self.controller_started = False
         self.traj_finished = False
-        self.timer = rospy.Timer(rospy.Duration(1.0/self.publish_rate), self.timer_callback)
+        self.timer = rospy.Timer(rospy.Duration(1.0/self.control_rate), self.controller_callback)
         
         # timer 2: 1 Hz state check to start MPC controller
         self.mpc_status_timer = rospy.Timer(rospy.Duration(1), self.mpc_status_time_callback)
@@ -95,6 +116,17 @@ class TrajectoryPublisher:
         self.thrust_command = np.zeros(self.mpc_controller.platform_params.n_rotors)
         self.speed_command = np.zeros(self.mpc_controller.platform_params.n_rotors)
         self.total_thrust = 0.0
+        
+    def _init_l1_controller(self) -> None:
+        """Initialize L1 adaptive controller."""
+        dt_controller = 1.0/self.control_rate
+        robot_model = self.mpc_controller.robot_model
+
+        self.l1_controller = L1AdaptiveControllerAll(
+            dt=dt_controller,
+            robot_model=robot_model,
+        )
+        self.l1_controller.init_controller()
 
     def load_trajectory(self):
         """Load and initialize trajectory"""
@@ -145,7 +177,7 @@ class TrajectoryPublisher:
             rospy.logerr(f"Failed to load trajectory: {str(e)}")
             raise
 
-    def timer_callback(self, event):
+    def controller_callback(self, event):
         """Timer callback to publish trajectory setpoints"""
         
         # Three conditions: not_started, started, finished       
@@ -200,6 +232,21 @@ class TrajectoryPublisher:
             self.get_mpc_command()
             self.publish_mpc_control_command()
             self.publish_mpc_debug_data()
+        elif self.control_mode == 'MPC_L1':
+            # using MPC controller
+            self.get_mpc_command()
+            self.l1_control_command = self.get_l1_control(self.state, self.mpc_ref_index)
+            print('---------------------------------{}--------------------------------'.format(self.mpc_ref_index))
+            print('mpc_control', self.l1_controller.u_mpc)
+            print("l1 _control", self.l1_controller.u_ad)
+            
+            print('z_real     ', self.l1_controller.z_real)
+            print('z_hat      ', self.l1_controller.z_hat)
+            print('z_ref      ', self.l1_controller.z_ref)
+            print('z_tilde    ', self.l1_controller.z_tilde)
+            print('sig_hat    ', self.l1_controller.sig_hat)
+            
+            # print('MPC_l1 is still in development')
         else:
             rospy.logwarn("Invalid control mode")  
           
@@ -225,6 +272,53 @@ class TrajectoryPublisher:
         self.solving_time = (time_end - time_start).to_sec()
         # 获取迭代次数
         self.mpc_iter_num = self.mpc_controller.solver.iter
+      
+    def get_l1_control(self, current_state: np.ndarray, time_step: int) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """Get control command from L1 controller."""
+        
+        # Get the baseline control from mpc_controller_l1
+        baseline_control = np.copy(self.mpc_controller.solver.us_squash[0])
+        
+        # Convert to force/torque if needed
+        baseline_control_ft = thrustToForceTorqueAll(
+                baseline_control,
+                self.mpc_controller.platform_params.tau_f
+            )
+        # baseline_control_ft = baseline_control
+        
+        index_plan = self.traj_ref_index
+            
+        # Update current state and reference
+        self.l1_controller.current_state = current_state.copy()
+        self.l1_controller.z_ref_all = self.traj_state_ref[index_plan].copy()
+        
+        # transfer z_ref and z_measure to anglself.control_command
+        
+        self.l1_controller.u_mpc = baseline_control_ft.copy()
+            
+        # Get L1 control based on type
+        
+        control_l1 = self._get_l1_all_v2_control()
+        
+        return control_l1
+    
+    def _get_l1_all_v2_control(self) -> np.ndarray:
+        """Get control for L1 all_v2 type."""
+        
+        self.l1_controller.update_z_tilde()
+        
+        self.l1_controller.update_z_hat()
+        
+        self.l1_controller.update_sig_hat_all_v2()
+        
+        if self.using_position_error_feedback:
+            error_p = np.array([0, 0, 0, 0, 0, 0, 20, 3, 0.5]) # 位置反馈的权重  error_p = np.array([0, 0, 0, 0, 0, 0, 1.8, 3, 0.03]) # 位置反馈的权重
+            error_v = np.array([0, 0, 0, 0, 0, 0, 1.0, 0.1, 0.01])  # 速度反馈的权重
+            self.l1_controller.u_tracking =  self.l1_controller.tracking_error_angle * error_p * 1 + self.l1_controller.tracking_error_velocity * error_v * 0
+
+            return self.l1_controller.get_u_l1_all_v2() + self.l1_controller.u_mpc.copy() + self.l1_controller.u_tracking.copy()
+        else:
+            return self.l1_controller.get_u_l1_all_v2() + self.l1_controller.u_mpc.copy()
         
     def publish_mpc_control_command(self):
         # using mavros setpoint to achieve rate control

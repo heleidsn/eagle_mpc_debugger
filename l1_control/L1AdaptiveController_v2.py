@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2024-09-07 17:26:46
-LastEditTime: 2025-03-26 21:38:25
+LastEditTime: 2025-03-26 22:13:09
 Description: L1 adaptive controller with 9 state variables
 Version 3: Used for full actuation
 0916： fixed the bug in adaptive_law_new, change tau_body=u_b + u_ad_all + self.sig_hat_b
@@ -31,6 +31,7 @@ class L1AdaptiveControllerAll:
         self.filter_time_coef = 0.005  # 0.005s
         
         self.using_vel_disturbance = False
+        self.using_full_state = False         # choose whether to use full state or not
         
         self.robot_model = robot_model
         self.robot_model_data = self.robot_model.createData()
@@ -97,7 +98,7 @@ class L1AdaptiveControllerAll:
         self.tracking_error_angle =  (self.get_state_angle_single_rad(self.z_ref_all) - self.get_state_angle_single_rad(self.current_state))[:9] 
         self.tracking_error_velocity = self.z_ref_all[10:] - self.current_state[10:]
     
-    def update_z_hat(self):
+    def update_z_hat_all(self):
         '''
         description: update z_hat using pinocchio model
                      different from L1AdaptiveControllerNew, the z_hat is calculated using pinocchio model, similar to the dynamic model
@@ -252,13 +253,72 @@ class L1AdaptiveControllerAll:
 
         return q_next, v_next 
     
+    def update_z_hat(self):
+        '''
+        description: 
+        return {*}
+        ''' 
+        if self.using_full_state:
+            self.update_z_hat_all()
+        else:
+            self.update_z_hat_vel()   # update z_hat only for velocity estimation
+            
+    def update_sig_hat(self):
+        '''
+        description: 更新对于扰动的估计
+        return {*}
+        '''
+        if self.using_full_state:
+            self.update_sig_hat_all_v2()
+        else:
+            self.update_sig_hat_all_v2()
+    
+    def update_sig_hat_vel(self):
+        '''
+        description: 更新对于扰动的估计，只使用速度进行估计
+        return {*}
+        '''
+        # 1. get inertia matrix        
+        q = self.current_state[:self.model.nq]
+        model = self.robot_model
+        data = self.robot_model_data
+        M = pin.crba(model, data, q)  # get inertia matrix
+        
+        # 2. get rotation matrix to transform the disturbance to body frame
+        
+        # 3. calculate sigma_hat (body frame)
+        B_bar_inv = M.copy()
+        PHI = np.matmul(LA.inv(self.A_s), (self.expm_A_s_dt - np.identity(self.state_dim_euler)))
+        PHI_inv = LA.inv(PHI)
+        mu  = np.matmul(self.expm_A_s_dt, self.z_tilde)
+        PHI_inv_mul_mu = np.matmul(PHI_inv, mu)
+        sigma_hat  = -np.matmul(B_bar_inv, PHI_inv_mul_mu)  # 奇怪，为什么z_hat - z 要乘以B_bar，最后两列才是扰动呀
+        
+        self.sig_hat = sigma_hat.copy()
+            
+    def update_z_hat_vel(self):
+        # update predictor
+        tau_body = self.u_mpc + self.u_ad + self.sig_hat[self.control_dim:] + self.u_tracking   # 假设只用u_b进行控制
+        
+        model = self.robot_model
+        data = self.robot_model_data
+        q = self.current_state[:self.robot_model.nq]    # state
+        v = self.current_state[self.robot_model.nq:]    # velocity
+        u = self.u_mpc + self.u_ad + self.sig_hat[self.control_dim:]  # 假设只用u_b进行控制
+        dt = self.dt
+        
+        if self.flag_using_z_ref:
+            z_hat_dot_vel = pin.aba(model, data, q, v, u) + (self.A_s @ self.z_tilde_ref)[self.control_dim:]
+        else:
+            z_hat_dot_vel = pin.aba(model, data, q, v, u) + (self.A_s @ self.z_tilde)[self.control_dim:]
+        
+        self.z_hat[self.control_dim:] = self.z_hat[self.control_dim:] + z_hat_dot_vel * dt    # in body frame
+    
     def update_sig_hat_all_v2(self):
         '''
         description: 更新对于扰动的估计，由于对矩阵进行了增广，
         return {*}
         '''
-        debug_sig_hat = False
-        
         # 1. get inertia matrix        
         q = self.current_state[:self.robot_model.nq]
         M = pin.crba(self.robot_model, self.robot_model_data, q)  # get inertia matrix according to the current state
@@ -274,33 +334,13 @@ class L1AdaptiveControllerAll:
         #! 将以下计算改为18维
         PHI = np.matmul(LA.inv(self.A_s), (self.expm_A_s_dt - np.identity(self.state_dim_euler)))
         PHI_inv = LA.inv(PHI)
-        # if self.flag_using_z_ref:
-        #     mu = np.matmul(self.expm_A_s_dt, self.z_tilde_ref)
-        # else:
-        #     mu  = np.matmul(self.expm_A_s_dt, self.z_tilde)    #! z_tself.A_s @ self.z_tilde[9:]ilde = z_hat - z in rad 之前应该是角度
         
         mu  = np.matmul(self.expm_A_s_dt, self.z_tilde)
         PHI_inv_mul_mu = np.matmul(PHI_inv, mu)
 
         sigma_hat_disturb  = -np.matmul(B_bar_inv, PHI_inv_mul_mu)
-        
-        #! 加入对于tracking error的反馈
-        sigma_hat_tracking = np.zeros(self.state_dim_euler)
-        # sigma_hat_tracking[11] = -pos_tracking_error[2] * 100
-        # sigma_hat_tracking[-3:] = pos_tracking_error[-3:] * np.array([20, 0, 0])
-        
-        if debug_sig_hat:
-            #! for z_ref testing
-            print('========================sig_hat========================')
-            print('z_real:       ', self.get_state_angle_single_rad(self.current_state))
-            print('z_hat:        ', self.z_hat)
-            print('z_tilde_pose: ', self.z_tilde[:9])
-            print('z_tilde_velo: ', self.z_tilde[9:])
-            print('sig_hat_pose: ', sigma_hat_disturb[:9])
-            print('sig_hat_velo: ', sigma_hat_disturb[9:])
-            print('======================================================')
 
-        self.sig_hat = sigma_hat_disturb.copy() + sigma_hat_tracking.copy()
+        self.sig_hat = sigma_hat_disturb.copy()
     
     def get_u_l1_all_v2(self):
         '''
