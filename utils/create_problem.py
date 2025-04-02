@@ -27,7 +27,7 @@ def get_opt_traj(robotName, trajectoryName, dt_traj_opt, useSquash, yaml_file_pa
     
     traj_state_ref = solver.xs
     
-    return solver, traj_state_ref, problem, trajectory 
+    return solver, traj_state_ref, problem, trajectory
 
 def create_mpc_controller(mpc_name, trajectory, traj_state_ref, dt_traj_opt, mpc_yaml_path):
     '''

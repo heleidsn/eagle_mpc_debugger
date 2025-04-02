@@ -24,6 +24,8 @@ from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from eagle_mpc_msgs.msg import SolverPerformance, MpcState, MpcControl
 from l1_control.L1AdaptiveController_v2 import L1AdaptiveControllerAll
 from typing import Dict, Any, Tuple
+from sensor_msgs.msg import JointState
+from std_srvs.srv import Trigger, TriggerResponse
 
 import crocoddyl
 import pinocchio as pin
@@ -32,17 +34,19 @@ import pinocchio as pin
 class TrajectoryPublisher:
     def __init__(self):
         # Initialize ROS node
-        rospy.init_node('trajectory_publisher_mpc', anonymous=True, log_level=rospy.WARN)
+        rospy.init_node('trajectory_publisher_mpc', anonymous=False, log_level=rospy.DEBUG)
 
         # Get parameters
-        self.robot_name = rospy.get_param('~robot_name', 's500')
-        self.trajectory_name = rospy.get_param('~trajectory_name', 'displacement')
-        self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 5)  # ms
+        self.robot_name = rospy.get_param('~robot_name', 's500_uam')
+        self.trajectory_name = rospy.get_param('~trajectory_name', 'arm_test')
+        self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 50)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
         self.yaml_path = rospy.get_param('~yaml_path', '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml')
         self.control_rate = rospy.get_param('~control_rate', 100.0)  # Hz
         
-        self.control_mode = rospy.get_param('~control_mode', 'MPC_L1')  # MPC, Geometric, PX4, MPC_L1
+        self.control_mode = rospy.get_param('~control_mode', 'MPC')  # MPC, Geometric, PX4, MPC_L1
+        self.arm_enabled = rospy.get_param('~arm_enabled', True)
+        self.arm_control_mode = rospy.get_param('~arm_control_mode', 'effort')  # position, position_velocity, position_velocity_effort, effort
         
         self.max_thrust = rospy.get_param('~max_thrust', 10.0664 * 4)
         
@@ -67,26 +71,35 @@ class TrajectoryPublisher:
             self._init_l1_controller()
         
         # Subscriber
+        self.current_state = State()
+        self.arm_state = JointState()
         self.mav_state_sub = rospy.Subscriber('/mavros/state', State, self.mav_state_callback)
-        print("Waiting for MAVROS state...")
-        rospy.wait_for_message("/mavros/state", State, timeout=5)
-        print("MAVROS state received")
+        self.arm_state_sub = rospy.Subscriber('/joint_states', JointState, self.arm_state_callback)
+        
+        # print("Waiting for MAVROS state...")
+        # rospy.wait_for_message("/mavros/state", State, timeout=5)
+        # print("MAVROS state received")
         
         if self.control_mode == 'MPC' or self.control_mode == 'MPC_L1':
             self.odom_sub = rospy.Subscriber("/mavros/local_position/odom", Odometry, self.callback_model_local_position)
-            print("Waiting for MAVROS local position...")
-            rospy.wait_for_message("/mavros/local_position/odom", Odometry, timeout=5)
-            print("MAVROS local position received")
+            # print("Waiting for MAVROS local position...")
+            # rospy.wait_for_message("/mavros/local_position/odom", Odometry, timeout=5)
+            # print("MAVROS local position received")
         
         # Publishers
         self.pose_pub = rospy.Publisher('/reference/pose', PoseStamped, queue_size=10)
         self.flat_target_pub = rospy.Publisher('/reference/flatsetpoint', FlatTarget, queue_size=10)
         self.mavros_setpoint_raw_pub = rospy.Publisher('/mavros/setpoint_raw/local', PositionTarget, queue_size=10)
-        
         self.yaw_pub = rospy.Publisher('/reference/yaw', Float32, queue_size=10)
-        
         self.body_rate_thrust_pub = rospy.Publisher('/mavros/setpoint_raw/attitude', AttitudeTarget, queue_size=10)
         self.mpc_state_pub = rospy.Publisher("/mpc/state", MpcState, queue_size=10)
+        self.arm_control_pub = rospy.Publisher('/desired_joint_states', JointState, queue_size=10)
+        
+        
+        # Services  
+        # !Note: the service is only used for arm test, do not use it in real flight
+        self.start_service = rospy.Service('start_trajectory', Trigger, self.start_trajectory)
+        self.init_service = rospy.Service('initialize_trajectory', Trigger, self.initialize_trajectory)
         
         # --------------------------------------timer--------------------------------------
         # Timer 1: for publishing trajectory
@@ -231,11 +244,22 @@ class TrajectoryPublisher:
             # using MPC controller
             self.get_mpc_command()
             self.publish_mpc_control_command()
-            self.publish_mpc_debug_data()
+            if self.arm_enabled:
+                self.publish_arm_control_command()
+            # self.publish_mpc_debug_data()
         elif self.control_mode == 'MPC_L1':
             # using MPC controller
             self.get_mpc_command()
-            self.l1_control_command = self.get_l1_control(self.state, self.mpc_ref_index)
+            if self.mpc_ref_index == 0:
+                self.publish_mpc_control_command()
+                self.l1_controller.init_controller()
+                self.publish_mpc_debug_data()
+            else:
+                self.get_l1_control(self.state, self.mpc_ref_index)
+                self.publish_l1_control_command(self.l1_controller.u_mpc, self.l1_controller.u_ad)
+                self.publish_mpc_debug_data()
+            
+            # self.l1_control_command = self.get_l1_control(self.state, self.mpc_ref_index)
             print('---------------------------------{}--------------------------------'.format(self.mpc_ref_index))
             print('mpc_control', self.l1_controller.u_mpc)
             print("l1 _control", self.l1_controller.u_ad)
@@ -269,9 +293,30 @@ class TrajectoryPublisher:
             self.mpc_controller.iters
         )
         time_end = rospy.Time.now()
-        self.solving_time = (time_end - time_start).to_sec()
-        # 获取迭代次数
+        
+        # get MPC debug info
         self.mpc_iter_num = self.mpc_controller.solver.iter
+        self.solving_time = (time_end - time_start).to_sec()
+        rospy.logdebug("MPC index: {} Solving time: {}".format(self.mpc_ref_index, self.solving_time))
+         
+        # get mpc control command
+        self.control_command = self.mpc_controller.solver.us_squash[0]
+        self.thrust_command = self.control_command[:len(self.thrust_command)]
+        
+        rospy.logdebug('MPC state          : {}'.format(self.state[7:]))
+        rospy.logdebug('MPC reference state: {}'.format(self.traj_state_ref[self.traj_ref_index][7:]))
+        rospy.logdebug('MPC control command: {}'.format(self.control_command))
+        
+        # get planned state
+        self.state_ref = self.mpc_controller.solver.xs[1]
+        
+        # get body rate command from planned next state
+        self.roll_rate_ref = self.state_ref[self.mpc_controller.robot_model.nq + 3]
+        self.pitch_rate_ref = self.state_ref[self.mpc_controller.robot_model.nq + 4]
+        self.yaw_rate_ref = self.state_ref[self.mpc_controller.robot_model.nq + 5]
+        
+        # get thrust command
+        self.total_thrust = np.sum(self.thrust_command)
       
     def get_l1_control(self, current_state: np.ndarray, time_step: int) -> Tuple[np.ndarray, Dict[str, Any]]:
         """Get control command from L1 controller."""
@@ -284,7 +329,6 @@ class TrajectoryPublisher:
                 baseline_control,
                 self.mpc_controller.platform_params.tau_f
             )
-        # baseline_control_ft = baseline_control
         
         index_plan = self.traj_ref_index
             
@@ -293,49 +337,35 @@ class TrajectoryPublisher:
         self.l1_controller.z_ref_all = self.traj_state_ref[index_plan].copy()
         
         # transfer z_ref and z_measure to anglself.control_command
-        
         self.l1_controller.u_mpc = baseline_control_ft.copy()
             
         # Get L1 control based on type
-        
-        control_l1 = self._get_l1_all_v2_control()
-        
-        return control_l1
-    
-    def _get_l1_all_v2_control(self) -> np.ndarray:
-        """Get control for L1 all_v2 type."""
-        
         self.l1_controller.update_z_tilde()
         
         self.l1_controller.update_z_hat()
         
         self.l1_controller.update_sig_hat_all_v2()
         
-        if self.using_position_error_feedback:
-            error_p = np.array([0, 0, 0, 0, 0, 0, 20, 3, 0.5]) # 位置反馈的权重  error_p = np.array([0, 0, 0, 0, 0, 0, 1.8, 3, 0.03]) # 位置反馈的权重
-            error_v = np.array([0, 0, 0, 0, 0, 0, 1.0, 0.1, 0.01])  # 速度反馈的权重
-            self.l1_controller.u_tracking =  self.l1_controller.tracking_error_angle * error_p * 1 + self.l1_controller.tracking_error_velocity * error_v * 0
+        # if self.using_position_error_feedback:
+        #     error_p = np.array([0, 0, 0, 0, 0, 0, 20, 3, 0.5]) # 位置反馈的权重  error_p = np.array([0, 0, 0, 0, 0, 0, 1.8, 3, 0.03]) # 位置反馈的权重
+        #     error_v = np.array([0, 0, 0, 0, 0, 0, 1.0, 0.1, 0.01])  # 速度反馈的权重
+        #     self.l1_controller.u_tracking =  self.l1_controller.tracking_error_angle * error_p * 1 + self.l1_controller.tracking_error_velocity * error_v * 0
 
-            return self.l1_controller.get_u_l1_all_v2() + self.l1_controller.u_mpc.copy() + self.l1_controller.u_tracking.copy()
-        else:
-            return self.l1_controller.get_u_l1_all_v2() + self.l1_controller.u_mpc.copy()
+        #     control_l1 = self.l1_controller.get_u_l1_all_v2() + self.l1_controller.u_mpc.copy() + self.l1_controller.u_tracking.copy()
+        # else:
+        #     control_l1 =  self.l1_controller.get_u_l1_all_v2() + self.l1_controller.u_mpc.copy()
+        self.l1_controller.update_u_ad()
         
+        control_l1 = self.l1_controller.u_mpc.copy() + self.l1_controller.u_ad.copy()
+        
+        return control_l1
+              
     def publish_mpc_control_command(self):
-        # using mavros setpoint to achieve rate control
-        
-        self.control_command = self.mpc_controller.solver.us_squash[0]
-        self.thrust_command = self.control_command[:len(self.thrust_command)]
-        
-        # get planned state
-        self.state_ref = self.mpc_controller.solver.xs[1]
-        
-        # get body rate command
-        self.roll_rate_ref = self.state_ref[self.mpc_controller.robot_model.nq + 3]
-        self.pitch_rate_ref = self.state_ref[self.mpc_controller.robot_model.nq + 4]
-        self.yaw_rate_ref = self.state_ref[self.mpc_controller.robot_model.nq + 5]
-        
-        # get thrust command
-        self.total_thrust = np.sum(self.thrust_command)
+        '''
+        发布 MPC 控制指令
+            self.control_command: 优化求解器得到的控制指令，包括推力和机械臂控制
+            self.thrust_command: 优化求解器得到的推力指令
+        '''
         
         att_msg = AttitudeTarget()
         att_msg.header.stamp = rospy.Time.now()
@@ -345,6 +375,104 @@ class TrajectoryPublisher:
         
         # 机体系角速度 (rad/s)
         att_msg.body_rate = Vector3(self.roll_rate_ref, self.pitch_rate_ref, self.yaw_rate_ref)  # 仅绕 Z 轴旋转 0.1 rad/s
+        
+        # 推力值 (范围 0 ~ 1)
+        att_msg.thrust = self.total_thrust / self.max_thrust  # 60% 油门
+        
+        # 对推力进行限幅
+        att_msg.thrust = np.clip(att_msg.thrust, 0, 1)
+
+        self.body_rate_thrust_pub.publish(att_msg)
+    
+    def publish_arm_control_command(self):
+        '''
+        description: publish arm control command
+        return {*}
+        '''        
+        joint_msg = JointState()
+        joint_msg.header.stamp = rospy.Time.now()
+        joint_msg.name = ['joint_1', 'joint_2']
+        
+        # get reference state
+        ref_state = self.traj_state_ref[self.traj_ref_index]
+        ref_control = self.traj_solver.us[min(self.traj_ref_index, len(self.traj_solver.us)-1)]
+        # print(ref_control)
+        
+        if self.arm_control_mode == 'position':
+            joint_msg.position = ref_state[7:9]
+            joint_msg.velocity = [0.0, 0.0]
+            joint_msg.effort = [0.0, 0.0]
+        elif self.arm_control_mode == 'position_velocity':
+            joint_msg.position = ref_state[7:9]
+            joint_msg.velocity = ref_state[-2:]
+            joint_msg.effort = [0.0, 0.0]
+        elif self.arm_control_mode == 'position_velocity_effort':  # this mode is not working, effort is not used
+            joint_msg.position = ref_state[7:9]
+            joint_msg.velocity = ref_state[-2:]
+            joint_msg.effort = ref_control[-2:]*1000
+        elif self.arm_control_mode == 'effort':
+            joint_msg.position = [0.0, 0.0]
+            joint_msg.velocity = [0.0, 0.0]
+            joint_msg.effort = [self.control_command[-2], self.control_command[-1]]
+            # joint_msg.effort = [0.1, 0.05]
+            
+        # add constrain to joint position
+        joint_msg.position[0] = np.clip(joint_msg.position[0], -1.57, 1.57)
+        joint_msg.position[1] = np.clip(joint_msg.position[1], -1.57, 1.57)
+        
+        joint_msg.velocity[0] = np.clip(joint_msg.velocity[0], -1.0, 1.0)
+        joint_msg.velocity[1] = np.clip(joint_msg.velocity[1], -1.0, 1.0)
+        
+        joint_msg.effort[0] = np.clip(joint_msg.effort[0], -0.3, 0.3)
+        joint_msg.effort[1] = np.clip(joint_msg.effort[1], -0.3, 0.3)
+        
+        self.arm_control_pub.publish(joint_msg)
+        
+    def publish_l1_control_command(self, u_mpc, u_ad):
+        '''
+        发布L1的控制指令
+            u_ad: L1控制器得到的控制指令，包括推力、力矩和机械臂控制力矩， 如何转换成 PX4 控制指令 推力+角速度？
+            如何得到角速度？
+            可以用当前的控制量在名义模型上进行仿真，得到下一时刻的角速度，设置为期望角速度
+        '''
+        
+        self.control_command = self.mpc_controller.solver.us_squash[0]
+        self.thrust_command = self.control_command[:len(self.thrust_command)]
+        
+        # get planned state
+        self.state_ref = self.mpc_controller.solver.xs[1]
+        
+        # get body rate command from MPC
+        self.roll_rate_ref_old = self.state_ref[self.mpc_controller.robot_model.nq + 3]
+        self.pitch_rate_ref_old = self.state_ref[self.mpc_controller.robot_model.nq + 4]
+        self.yaw_rate_ref_old = self.state_ref[self.mpc_controller.robot_model.nq + 5]
+        
+        # get additional body rate control command
+        model = self.mpc_controller.robot_model
+        data = model.createData()
+        q = self.state[:model.nq]    # state
+        v = self.state[model.nq:]    # velocity
+        u = u_mpc + u_ad                      # using l1 control command
+        dt = 1 / self.control_rate
+        v_hat = pin.aba(model, data, q, v, u)   # get a using the current state
+        v_new = v + v_hat * dt
+        
+        self.roll_rate_ref = v_new[3]
+        self.pitch_rate_ref = v_new[4]
+        self.yaw_rate_ref = v_new[5]
+        
+        # get thrust command
+        self.total_thrust = np.sum(self.thrust_command) + u_ad[2]  # add u_ad[2] to total thrust
+        # self.total_thrust = np.sum(self.thrust_command)
+        
+        att_msg = AttitudeTarget()
+        att_msg.header.stamp = rospy.Time.now()
+        
+        # 设置 type_mask，忽略姿态，仅使用角速度 + 推力
+        att_msg.type_mask = AttitudeTarget.IGNORE_ATTITUDE 
+        
+        # 机体系角速度 (rad/s)
+        att_msg.body_rate = Vector3(self.roll_rate_ref_old, self.pitch_rate_ref_old, self.yaw_rate_ref_old)  # 仅绕 Z 轴旋转 0.1 rad/s
         
         # 推力值 (范围 0 ~ 1)
         att_msg.thrust = self.total_thrust / self.max_thrust  # 60% 油门
@@ -522,6 +650,13 @@ class TrajectoryPublisher:
     def mav_state_callback(self, msg):
         self.current_state = msg
         
+    def arm_state_callback(self, msg):
+        self.arm_state = msg
+        
+        # update self.state
+        self.state[7:9] = [msg.position[1], msg.position[0]] # TODO: don't know why it is reversed
+        self.state[-2:] = [msg.velocity[1], msg.velocity[0]]
+        
     def callback_model_local_position(self, msg):
         """处理来自MAVROS的本地位置信息"""
         pose = msg.pose.pose
@@ -551,10 +686,26 @@ class TrajectoryPublisher:
         
         self.state = state_new
         
+    def start_trajectory(self, req):
+        # self.controller_started = True
+        self.current_state.mode = "OFFBOARD"
+        self.current_state.armed = True
+        
+        return TriggerResponse(success=True, message="Trajectory started.")
+    
+    def initialize_trajectory(self, req):
+        # 初始化轨迹数据
+        self.controller_started = False
+        self.current_state.mode = "POSCTL"
+        self.current_state.armed = False
+        self.traj_finished = False
+        
+        return TriggerResponse(success=True, message="Trajectory initialized.")
+
 
 if __name__ == '__main__':
     try:
         trajectory_publisher = TrajectoryPublisher()
         rospy.spin()
     except rospy.ROSInterruptException:
-        pass
+        rospy.loginfo("Node terminated.")
