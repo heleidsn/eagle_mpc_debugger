@@ -7,7 +7,7 @@
 # GLOBAL OPERATION PARAMETERS
 loop_rate: 100                    # desired rate for joint state updates. actual rate may be less depending on number
                                   # of dynamixels connected and port baud rate.
-control_mode: effort            # control mode, either 'position', 'velocity', or 'effort'
+control_mode: position            # control mode, either 'position', 'velocity', or 'effort'
 disable_torque_on_shutdown: true  # with this enabled the motors will switch off when the controller closes
 ignore_input_velocity: false      # ignore input velocity commands in position mode (no profile velocity)
 diagnostics_rate: 1               # rate to publish diagnostic information
@@ -42,7 +42,7 @@ ports:
         #
         # The below arguments are all optional and override the global values:
         #
-        max_vel: 1.0           # maximum joint speed (rad/s) (in position or velocity control)
+        max_vel: 1.2           # maximum joint speed (rad/s) (in position or velocity control)
         torque_limit: 1.0      # maximum motor torque for all modes, given as a fraction of rated max (0-1)
 
       - id: 1
@@ -51,7 +51,7 @@ ports:
         min_pos: 1024
         max_pos: 3072
 
-        max_vel: 1.0           # maximum joint speed (rad/s) (in position or velocity control)
+        max_vel: 1.2          # maximum joint speed (rad/s) (in position or velocity control)
         torque_limit: 1.0      # maximum motor torque for all modes, given as a fraction of rated max (0-1)
         #
         # This servo doesn't have any optional values defined, the global defaults will be used

@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-04-02 09:55:01
-LastEditTime: 2025-04-02 16:41:57
+LastEditTime: 2025-04-03 10:16:35
 Description: publish arm test cmd using dynamixel_interface
 Github: https://github.com/heleidsn
 '''
@@ -19,15 +19,15 @@ import crocoddyl
 class TrajectoryPublisher:
     def __init__(self):
         # 初始化节点
-        rospy.init_node('trajectory_publisher_node')
+        rospy.init_node('trajectory_publisher_node', anonymous=False, log_level=rospy.DEBUG)
 
         # 获取参数
         self.robot_name = rospy.get_param('~robot_name', 's500_uam')
         self.trajectory_pub = rospy.Publisher('/{}/trajectory'.format(self.robot_name), Float64MultiArray, queue_size=10)
         self.position_control_pub = rospy.Publisher('/desired_joint_states', JointState, queue_size=10)
         
-        self.trajectory_name = rospy.get_param('~trajectory_name', 'arm_test')
-        self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 50)  # ms
+        self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon')
+        self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 10)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
         self.yaml_path = rospy.get_param('~yaml_path', '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml')
 
@@ -40,6 +40,7 @@ class TrajectoryPublisher:
         self.is_trajectory_initialized = False
         
         self.get_trajectory()
+        
         # self.initialize_trajectory()
         
     def get_opt_traj(self, robotName, trajectoryName, dt_traj_opt, useSquash, yaml_file_path):
@@ -99,11 +100,13 @@ class TrajectoryPublisher:
         msg.name = ['joint_1', 'joint_2']
         
         # 从优化轨迹中获取初始关节位置
-        initial_state = self.traj_state_ref[0]
+        # initial_state = self.traj_state_ref[0]
+        self.init_state = self.trajectory_obj.initial_state
         # 假设前6个状态是关节角度
-        msg.position = initial_state[7:9].tolist()
-        # msg.velocity = [0.0, 0.0]
-        # msg.effort = [0.0, 0.0]
+        print("self.init_state: ", self.init_state[7:9])
+        msg.position = [self.init_state[7], self.init_state[8]]
+        msg.velocity = [1.0, 1.0]
+        msg.effort = [0.3, 0.1]
         
         # 发布初始关节状态
         self.position_control_pub.publish(msg)
@@ -130,7 +133,8 @@ class TrajectoryPublisher:
             msg.header.stamp = rospy.Time.now()
             msg.name = ['joint_1', 'joint_2']
             msg.position = position
-            msg.velocity = velocity
+            msg.velocity = [0.5, 1.2]
+            msg.effort = [0.0, 0.0]
             
             self.position_control_pub.publish(msg)
             
