@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-04-02 09:55:01
-LastEditTime: 2025-04-03 10:16:35
+LastEditTime: 2025-04-03 10:44:35
 Description: publish arm test cmd using dynamixel_interface
 Github: https://github.com/heleidsn
 '''
@@ -27,7 +27,7 @@ class TrajectoryPublisher:
         self.position_control_pub = rospy.Publisher('/desired_joint_states', JointState, queue_size=10)
         
         self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon')
-        self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 10)  # ms
+        self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 30)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
         self.yaml_path = rospy.get_param('~yaml_path', '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml')
 
@@ -133,7 +133,9 @@ class TrajectoryPublisher:
             msg.header.stamp = rospy.Time.now()
             msg.name = ['joint_1', 'joint_2']
             msg.position = position
-            msg.velocity = [0.5, 1.2]
+            # msg.velocity = [1.2, 1.2]
+            # msg.velocity = [0.0, 0.0]
+            msg.velocity = velocity
             msg.effort = [0.0, 0.0]
             
             self.position_control_pub.publish(msg)

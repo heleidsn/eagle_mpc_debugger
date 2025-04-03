@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-24 10:31:39
-LastEditTime: 2025-04-03 09:05:20
+LastEditTime: 2025-04-03 10:28:45
 Description: Run planning to generate planning results and save them to file
 Github: https://github.com/heleidsn
 '''
@@ -140,7 +140,7 @@ def main():
     
     robot_name = 's500_uam'   # s500, s500_uam, hexacopter370_flying_arm_3
     trajectory_name = 'catch_vicon'
-    dt_traj_opt = 10  # ms
+    dt_traj_opt = 30  # ms
     useSquash = True
     
     gepetto_vis = True

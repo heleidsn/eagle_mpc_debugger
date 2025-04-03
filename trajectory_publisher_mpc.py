@@ -38,7 +38,7 @@ class TrajectoryPublisher:
 
         # Get parameters
         self.robot_name = rospy.get_param('~robot_name', 's500_uam')
-        self.trajectory_name = rospy.get_param('~trajectory_name', 'arm_test')
+        self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon')
         self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 50)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
         self.yaml_path = rospy.get_param('~yaml_path', '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml')
@@ -46,7 +46,7 @@ class TrajectoryPublisher:
         
         self.control_mode = rospy.get_param('~control_mode', 'MPC')  # MPC, Geometric, PX4, MPC_L1
         self.arm_enabled = rospy.get_param('~arm_enabled', True)
-        self.arm_control_mode = rospy.get_param('~arm_control_mode', 'effort')  # position, position_velocity, position_velocity_effort, effort
+        self.arm_control_mode = rospy.get_param('~arm_control_mode', 'position_velocity')  # position, position_velocity, position_velocity_effort, effort
         
         self.max_thrust = rospy.get_param('~max_thrust', 10.0664 * 4)
         
