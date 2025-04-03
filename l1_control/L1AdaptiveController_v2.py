@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2024-09-07 17:26:46
-LastEditTime: 2025-03-26 22:13:09
+LastEditTime: 2025-03-27 18:58:10
 Description: L1 adaptive controller with 9 state variables
 Version 3: Used for full actuation
 0916： fixed the bug in adaptive_law_new, change tau_body=u_b + u_ad_all + self.sig_hat_b
@@ -27,8 +27,8 @@ class L1AdaptiveControllerAll:
     def __init__(self, dt, robot_model, debug=False, flag_using_z_ref=False):
         self.dt = dt
         
-        self.as_matrix_coef   = -0.1  # Hurwitz matrix
-        self.filter_time_coef = 0.005  # 0.005s
+        self.as_matrix_coef   = 10  # Hurwitz matrix
+        self.filter_time_coef = 0.01  # 0.005s
         
         self.using_vel_disturbance = False
         self.using_full_state = False         # choose whether to use full state or not
@@ -300,6 +300,8 @@ class L1AdaptiveControllerAll:
         # update predictor
         tau_body = self.u_mpc + self.u_ad + self.sig_hat[self.control_dim:] + self.u_tracking   # 假设只用u_b进行控制
         
+        z_hat_prev = self.z_hat.copy()
+        
         model = self.robot_model
         data = self.robot_model_data
         q = self.current_state[:self.robot_model.nq]    # state
@@ -307,12 +309,19 @@ class L1AdaptiveControllerAll:
         u = self.u_mpc + self.u_ad + self.sig_hat[self.control_dim:]  # 假设只用u_b进行控制
         dt = self.dt
         
-        if self.flag_using_z_ref:
-            z_hat_dot_vel = pin.aba(model, data, q, v, u) + (self.A_s @ self.z_tilde_ref)[self.control_dim:]
-        else:
-            z_hat_dot_vel = pin.aba(model, data, q, v, u) + (self.A_s @ self.z_tilde)[self.control_dim:]
+        # if self.flag_using_z_ref:
+        #     z_hat_dot_vel = pin.aba(model, data, q, v, u) + (self.A_s @ self.z_tilde_ref)[self.control_dim:]
+        # else:
+        #     z_hat_dot_vel = pin.aba(model, data, q, v, u) + (self.A_s @ self.z_tilde)[self.control_dim:]
+        z_hat_dot_without_disturb = pin.aba(model, data, q, v, u)   # get a using the current state
+        z_hat_dot_disturb = self.A_s @ self.z_tilde
+        z_hat_dot_vel = z_hat_dot_without_disturb + z_hat_dot_disturb[self.control_dim:]
         
-        self.z_hat[self.control_dim:] = self.z_hat[self.control_dim:] + z_hat_dot_vel * dt    # in body frame
+        # update z_hat
+        z_hat_new = z_hat_prev.copy()
+        z_hat_new[self.control_dim:] = z_hat_prev[self.control_dim:] + z_hat_dot_vel * dt
+        
+        self.z_hat = z_hat_new.copy()    # in body frame
     
     def update_sig_hat_all_v2(self):
         '''
@@ -338,11 +347,11 @@ class L1AdaptiveControllerAll:
         mu  = np.matmul(self.expm_A_s_dt, self.z_tilde)
         PHI_inv_mul_mu = np.matmul(PHI_inv, mu)
 
-        sigma_hat_disturb  = -np.matmul(B_bar_inv, PHI_inv_mul_mu)
+        sigma_hat_disturb  = -np.matmul(B_bar_inv, PHI_inv_mul_mu)  # sigma_hat is related to z_tilde
 
         self.sig_hat = sigma_hat_disturb.copy()
     
-    def get_u_l1_all_v2(self):
+    def update_u_ad(self):
         '''
         description: u_ad = -sig_hat_filtered
         return {*}
@@ -370,9 +379,9 @@ class L1AdaptiveControllerAll:
         self.u_ad = -sig_hat_filtered
         
         # limitation
-        flag_using_limit = False
+        flag_using_limit = True
         if flag_using_limit:
-            min_values = np.array([0, 0, -50, -5, -5, -5, -5, -5, -1])
+            min_values = np.array([0, 0, -10, -1, -1, -1])
             max_values = -min_values
             
             clipped_array = np.where(self.u_ad < min_values, min_values, self.u_ad)
