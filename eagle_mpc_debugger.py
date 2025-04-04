@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-19 11:40:31
-LastEditTime: 2025-03-11 10:37:39
+LastEditTime: 2025-04-02 22:01:50
 Description: MPC Debug Interface, useful for debugging your MPC controller before deploying it to the real robot
 Github: https://github.com/heleidsn
 '''
@@ -20,6 +20,10 @@ matplotlib.use('Qt5Agg')
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from std_msgs.msg import Float64
+from mavros_msgs.msg import State, PositionTarget, AttitudeTarget
+from sensor_msgs.msg import JointState
+from tf.transformations import quaternion_matrix
+
 
 from utils.create_problem import get_opt_traj, create_mpc_controller
 
@@ -39,11 +43,16 @@ class MpcDebugInterface(QWidget):
         self.mpc_yaml_path = mpc_yaml_path
         self.robot_name = robot_name
         self.trajectory_name = trajectory_name
-        self.useSquash = useSquash
+        self.use_squash = useSquash
         self.dt_traj_opt = dt_traj_opt  # ms
+        self.yaml_path = rospy.get_param('~yaml_path', '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml')
+        self.arm_enabled = rospy.get_param('~arm_enabled', True)
+        
+        # numpy print options
+        np.set_printoptions(formatter={'float': lambda x: f"{x:>4.2f}"})  # 固定 6 位小数
         
         # setting
-        self.plot_thrust_torque = False
+        self.plot_thrust_torque = True
         
         # Create layout
         self.layout = QVBoxLayout()
@@ -244,7 +253,7 @@ class MpcDebugInterface(QWidget):
         state_layout.setContentsMargins(10, 10, 10, 10)
         
         # Plot display: position, attitude, linear velocity, angular velocity
-        self.figure = Figure(figsize=(20, 30), dpi=100)  # 添加dpi参数
+        self.figure = Figure(figsize=(15, 20), dpi=100)  # 添加dpi参数
         # Set spacing between subplots
         self.figure.subplots_adjust(
             left=0.08,    # Left margin
@@ -262,18 +271,43 @@ class MpcDebugInterface(QWidget):
             plot_row_num = 4
         else:
             plot_row_num = 3
-        plot_col_num = 2
-        self.ax_state = self.figure.add_subplot(plot_row_num, plot_col_num, 1)  # State
-        self.ax_attitude = self.figure.add_subplot(plot_row_num, plot_col_num, 2)  # Attitude
-        self.ax_linear_velocity = self.figure.add_subplot(plot_row_num, plot_col_num, 3)  # Linear velocity
-        self.ax_angular_velocity = self.figure.add_subplot(plot_row_num, plot_col_num, 4)  # Angular velocity
+            
+        if self.arm_enabled:
+            plot_col_num = 3
+            self.ax_state = self.figure.add_subplot(plot_row_num, plot_col_num, 1)  # State
+            self.ax_attitude = self.figure.add_subplot(plot_row_num, plot_col_num, 2)  # Attitude
+            
+            self.ax_linear_velocity = self.figure.add_subplot(plot_row_num, plot_col_num, 4)  # Linear velocity
+            self.ax_angular_velocity = self.figure.add_subplot(plot_row_num, plot_col_num, 5)  # Angular velocity
+            
+            self.ax_control = self.figure.add_subplot(plot_row_num, plot_col_num, 7)  # Control
+            self.ax_time = self.figure.add_subplot(plot_row_num, plot_col_num, 8)   # Solving time
+            
+            if self.plot_thrust_torque: 
+                self.ax_thrust = self.figure.add_subplot(plot_row_num, plot_col_num, 10)  # Thrust
+                self.ax_torque = self.figure.add_subplot(plot_row_num, plot_col_num, 11)  # Torque
+            
+            # for joint 
+            self.ax_joint_position = self.figure.add_subplot(plot_row_num, plot_col_num, 3)  # Joint position
+            self.ax_joint_velocity = self.figure.add_subplot(plot_row_num, plot_col_num, 6)  # Joint velocity
+            self.ax_joint_effort = self.figure.add_subplot(plot_row_num, plot_col_num, 9)  # Joint effort
+            self.ax_joint_control = self.figure.add_subplot(plot_row_num, plot_col_num, 12)  # Joint control
+        else:
+            plot_col_num = 2
+            self.ax_state = self.figure.add_subplot(plot_row_num, plot_col_num, 1)  # State
+            self.ax_attitude = self.figure.add_subplot(plot_row_num, plot_col_num, 2)  # Attitude
+            
+            self.ax_linear_velocity = self.figure.add_subplot(plot_row_num, plot_col_num, 3)  # Linear velocity
+            self.ax_angular_velocity = self.figure.add_subplot(plot_row_num, plot_col_num, 4)  # Angular velocity
+            
+            self.ax_control = self.figure.add_subplot(plot_row_num, plot_col_num, 5)  # Control
+            self.ax_time = self.figure.add_subplot(plot_row_num, plot_col_num, 6)   # Solving time
+            
+            if self.plot_thrust_torque: 
+                self.ax_thrust = self.figure.add_subplot(plot_row_num, plot_col_num, 7)  # Thrust
+                self.ax_torque = self.figure.add_subplot(plot_row_num, plot_col_num, 8)  # Torque
         
-        self.ax_control = self.figure.add_subplot(plot_row_num, plot_col_num, 5)  # Control
-        self.ax_time = self.figure.add_subplot(plot_row_num, plot_col_num, 6)   # Solving time
         
-        if self.plot_thrust_torque: 
-            self.ax_thrust = self.figure.add_subplot(plot_row_num, plot_col_num, 7)  # Thrust
-            self.ax_torque = self.figure.add_subplot(plot_row_num, plot_col_num, 8)  # Torque
         
         # Add to main layout
         self.layout.addLayout(time_layout, stretch=1)
@@ -286,40 +320,26 @@ class MpcDebugInterface(QWidget):
         self.control_history = []
         self.mpc_solve_time_history = []  # Store solving time history
         
+        self.joint_position_buffer = []
+        self.joint_velocity_buffer = []
+        self.joint_effort_buffer = []
+        self.joint_control_buffer = []
+        
         # Timer for updating plots
-        self.timer = QtCore.QTimer()
-        self.timer.timeout.connect(self.update_plot)
-        self.timer.start(100)  # 10Hz update
+        self.timer_plot = QtCore.QTimer()
+        self.timer_plot.timeout.connect(self.update_plot)
+        self.timer_plot.start(1)  # 10Hz update
         
-        # Initialize MPC
-        traj_solver, traj_state_ref, traj_problem, trajectory_obj = get_opt_traj(
-            self.robot_name, 
-            self.trajectory_name, 
-            self.dt_traj_opt, 
-            self.useSquash,
-            self.mpc_yaml_path)
-        
-        self.traj_solver = traj_solver
-        
-        # Create MPC controller to get tau_f
-        mpc_name = self.mpc_name
-        mpc_yaml = '{}/mpc/{}_mpc.yaml'.format(self.mpc_yaml_path, self.robot_name)
-        self.mpc_controller = create_mpc_controller(
-            mpc_name,
-            trajectory_obj,
-            traj_state_ref,
-            self.dt_traj_opt,
-            mpc_yaml
-        )
-        
-        self.mpc_controller.solver.setCallbacks([])  # Disable callback outputs
+        # Load trajectory and initialize MPC controller
+        self.load_trajectory()
+        self.init_mpc_controller()
         
         self.state = self.mpc_controller.state.zero()
         self.state_ref = np.copy(self.mpc_controller.state_ref)
         self.mpc_ref_time = 0
         self.solving_time = 0.0
         
-                # Set time slider maximum based on trajectory length
+        # Set time slider maximum based on trajectory length
         traj_duration_ms = (len(self.state_ref) - 1) * self.dt_traj_opt
         self.time_slider.setMaximum(traj_duration_ms+2000)
         
@@ -333,7 +353,13 @@ class MpcDebugInterface(QWidget):
             
             # ROS subscribers and publishers
             self.pose_pub = rospy.Publisher('/debug/pose', PoseStamped, queue_size=1)
-            self.time_pub = rospy.Publisher('/debug/time', Float64, queue_size=1)
+            # self.time_pub = rospy.Publisher('/debug/time', Float64, queue_size=1)
+            
+            # Subscriber
+            self.current_state = State()
+            self.arm_state = JointState()
+            self.mav_state_sub = rospy.Subscriber('/mavros/state', State, self.mav_state_callback)
+            self.arm_state_sub = rospy.Subscriber('/joint_states', JointState, self.arm_state_callback)
             
             self.state_sub = rospy.Subscriber('/debug/mpc_state', MpcState, self.state_callback)
             self.control_sub = rospy.Subscriber('/debug/mpc_control', MpcControl, self.control_callback)
@@ -346,13 +372,14 @@ class MpcDebugInterface(QWidget):
             self.attitude_pub = rospy.Publisher('/mavros/setpoint_raw/attitude', AttitudeTarget, queue_size=10)
             
             # Start MPC controller and wait for it to start
-            self.mpc_rate = 10.0  # Hz
+            self.mpc_rate = 100.0  # Hz
+            self.mpc_ref_index = 0
             self.mpc_timer = rospy.Timer(rospy.Duration(1.0/self.mpc_rate), self.mpc_timer_callback_ros)
             
             rospy.loginfo(f"MPC started at {self.mpc_rate}Hz")
         
         else:
-            self.mpc_rate = 10.0  # Hz
+            self.mpc_rate = 100.0  # Hz
             self.mpc_timer = QtCore.QTimer()
             self.mpc_timer.timeout.connect(self.mpc_running_callback)
             self.mpc_timer.start(int(1000/self.mpc_rate))
@@ -370,14 +397,84 @@ class MpcDebugInterface(QWidget):
         }
         
         # 在__init__方法的最后
-        self.setMinimumSize(1200, 1500)  # 设置窗口最小大小
+        # self.setMinimumSize(1200, 1500)  # 设置窗口最小大小
+    
+    #region --------------MPC related-------------------------------    
+    def load_trajectory(self):
+        """Load and initialize trajectory"""
+        try:
+            # Get trajectory from eagle_mpc
+            self.traj_solver, self.traj_state_ref, traj_problem, self.trajectory_obj = get_opt_traj(
+                self.robot_name,
+                self.trajectory_name,
+                self.dt_traj_opt,
+                self.use_squash,
+                self.yaml_path
+            )
+            
+            self.trajectory_duration = self.trajectory_obj.duration  # ms
+            rospy.loginfo(f"Loaded trajectory with duration: {self.trajectory_duration}ms")
+            
+            # Pre-calculate accelerations using finite differences
+            self.accelerations = []
+            dt = self.dt_traj_opt / 1000.0  # Convert to seconds
+            
+            for i in range(len(self.traj_state_ref)):
+                # Get current velocities in body frame
+                vel_body = self.traj_state_ref[i][7:10]  # [vx, vy, vz]
+                quat = self.traj_state_ref[i][3:7]  # [qx, qy, qz, qw]
+                
+                # Convert body velocities to world frame
+                R = quaternion_matrix([quat[0], quat[1], quat[2], quat[3]])[:3, :3]
+                vel_world = R @ vel_body
+                
+                # Calculate acceleration using finite differences
+                if i == 0:
+                    # Forward difference for first point
+                    vel_next = R @ self.traj_state_ref[i+1][7:10]
+                    acc = (vel_next - vel_world) / dt
+                elif i == len(self.traj_state_ref) - 1:
+                    # Backward difference for last point
+                    vel_prev = R @ self.traj_state_ref[i-1][7:10]
+                    acc = (vel_world - vel_prev) / dt
+                else:
+                    # Central difference for interior points
+                    vel_next = R @ self.traj_state_ref[i+1][7:10]
+                    vel_prev = R @ self.traj_state_ref[i-1][7:10]
+                    acc = (vel_next - vel_prev) / (2 * dt)
+                
+                self.accelerations.append(acc)
+            
+        except Exception as e:
+            rospy.logerr(f"Failed to load trajectory: {str(e)}")
+            raise
+    
+    def init_mpc_controller(self):
+        # create mpc controller to get tau_f
+        mpc_name = "rail"
+        mpc_yaml = '{}/mpc/{}_mpc.yaml'.format(self.yaml_path, self.robot_name)
+        self.mpc_controller = create_mpc_controller(
+            mpc_name,
+            self.trajectory_obj,
+            self.traj_state_ref,
+            self.dt_traj_opt,
+            mpc_yaml
+        )
         
+        self.state = self.mpc_controller.state.zero()
+        
+        self.thrust_command = np.zeros(self.mpc_controller.platform_params.n_rotors)
+        self.speed_command = np.zeros(self.mpc_controller.platform_params.n_rotors)
+        self.total_thrust = 0.0
+    
+    #endregion
+    
     #region --------------Ros interface--------------------------------
     def mpc_timer_callback_ros(self, event):
         
         self.mpc_controller.problem.x0 = self.state
         
-        print(self.mpc_ref_index)
+        # print(self.mpc_ref_index)
         self.mpc_controller.updateProblem(self.mpc_ref_index)
         
         time_start = rospy.Time.now()
@@ -390,14 +487,28 @@ class MpcDebugInterface(QWidget):
 
         self.solving_time = (time_end - time_start).to_sec()
         
+        # 记录求解时间
+        self.mpc_solve_time_history.append(self.solving_time)
+        if len(self.mpc_solve_time_history) > 100:
+            self.mpc_solve_time_history.pop(0)
+        
+        self.traj_ref_index = int(self.mpc_ref_index / self.dt_traj_opt)
+        self.control_command = self.mpc_controller.solver.us_squash[0]
+        
+        rospy.logdebug('MPC ref index      : {}'.format(self.traj_ref_index))
+        rospy.logdebug('MPC state          : {}'.format(self.state[7:]))
+        rospy.logdebug('MPC reference state: {}'.format(self.traj_state_ref[self.traj_ref_index][7:]))
+        rospy.logdebug('MPC control command: {}'.format(self.control_command))
+        
+        
         # Publish MPC data
-        self.publish_mpc_data()
-        self.publish_mavros_rate_command()
+        # self.publish_mpc_data()
+        # self.publish_mavros_rate_command()
         
     def publish_mavros_rate_command(self):
         # Using MAVROS setpoint to achieve rate control
         
-        self.control_command = self.mpc_controller.solver.us_squash[0]
+        
         
         # Get planned state
         self.state_ref = self.mpc_controller.solver.xs[1]
@@ -495,6 +606,32 @@ class MpcDebugInterface(QWidget):
         # 更新显示的值
         self.state_labels[axis].setText(f'{value:.2f}')
 
+    def mav_state_callback(self, msg):
+        self.current_state = msg
+        
+    def arm_state_callback(self, msg):
+        self.arm_state = msg
+        
+        # update self.state
+        self.state[7:9] = [msg.position[1], msg.position[0]] # TODO: don't know why it is reversed
+        self.state[-2:] = [msg.velocity[1], msg.velocity[0]]
+        
+        max_buffer_size = 100
+        self.joint_position_buffer.append(self.state[7:9])
+        if len(self.joint_position_buffer) > max_buffer_size:
+            self.joint_position_buffer.pop(0)  # 删除最旧的值
+            
+        self.joint_velocity_buffer.append(self.state[-2:])
+        if len(self.joint_velocity_buffer) > max_buffer_size:
+            self.joint_velocity_buffer.pop(0)  # 删除最旧的值
+            
+        self.joint_effort_buffer.append([msg.effort[1], msg.effort[0]])
+        if len(self.joint_effort_buffer) > max_buffer_size:
+            self.joint_effort_buffer.pop(0)  # 删除最旧的值
+            
+        self.joint_control_buffer.append(self.control_command[-2:])
+        if len(self.joint_control_buffer) > max_buffer_size:
+            self.joint_control_buffer.pop(0)
     #endregion
 
     #region --------------QT without ROS--------------------------------
@@ -703,8 +840,6 @@ class MpcDebugInterface(QWidget):
                 self.state[12] = np.radians(value)  # 转换为弧度
         
     def time_changed(self, value):
-        if self.using_ros:
-            self.time_pub.publish(Float64(value))
         
         self.time_label.setText(f'{value} ms')
         self.mpc_ref_time = int(value)   # 单位为ms
@@ -720,11 +855,13 @@ class MpcDebugInterface(QWidget):
         self.mpc_controller.updateProblem(self.mpc_ref_time)
         
         time_start = time.time()
+
         self.mpc_controller.solver.solve(
             self.mpc_controller.solver.xs,
             self.mpc_controller.solver.us,
             self.mpc_controller.iters
         )
+         
         time_end = time.time()
         self.solving_time = time_end - time_start
         
@@ -763,6 +900,52 @@ class MpcDebugInterface(QWidget):
         
         # update solving time plot
         self.update_solving_time_plot()
+        
+        # update arm plot
+        self.update_arm_plot(state_predict, state_ref, control_predict, control_ref)
+        
+    def update_arm_plot(self, state_predict, state_ref, control_predict=None, control_ref=None):
+        if self.arm_enabled:
+            joint_position = np.array(self.joint_position_buffer)
+            joint_velocity = np.array(self.joint_velocity_buffer)
+            joint_effort = np.array(self.joint_effort_buffer)
+            joint_control = np.array(self.joint_control_buffer)
+            
+            self.update_joint_history_plot(self.ax_joint_position, 'Joint Position', joint_position, 1.5, 'Position (rad)', state_predict[:, 7:9], state_ref[:, 7:9])
+            self.update_joint_history_plot(self.ax_joint_velocity, 'Joint Velocity', joint_velocity, 4.0, 'Velocity (rad/s)', state_predict[:, -2:], state_ref[:, -2: ])
+            self.update_joint_history_plot(self.ax_joint_effort,   'Joint Effort',   joint_effort,   2.0, 'Effort (Nm)')
+            
+            self.update_joint_history_plot(self.ax_joint_control,  'Joint Control',  None,  0.3, 'Control (Nm)', control_predict[:, -2:], control_ref[:, -2:])
+            
+        
+    def update_joint_history_plot(self, ax, title, data, y_lim, y_label, state_predict=None, state_ref=None):
+        ax.clear()
+        ax.set_title(title)
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel(y_label) 
+        
+        if data is not None:
+            freq_state_update = 62 # 62Hz
+            time_history = np.arange(-len(data), 0) / freq_state_update 
+            ax.plot(time_history, data[:,0], label='Joint_1', color='black')
+            ax.plot(time_history, data[:,1], label='Joint_2', color='yellow')
+        
+        # plot predicted joint position
+        if state_predict is not None:
+            predict_start_time = self.mpc_ref_time / 1000.0
+            predict_time = predict_start_time + np.arange(len(state_predict)) * self.dt_mpc / 1000.0
+            ax.plot(predict_time, state_predict[:, 0], label='Joint_1_predict', color='red', linewidth=2)
+            ax.plot(predict_time, state_predict[:, 1], label='Joint_2_predict', color='green', linewidth=2)
+        
+        # plot reference joint position
+        if state_ref is not None:
+            ref_time = np.arange(len(state_ref)) * self.dt_traj_opt / 1000.0
+            ax.plot(ref_time, state_ref[:, 0], label='Joint_1_ref', linestyle='--', color='red', linewidth=1)
+            ax.plot(ref_time, state_ref[:, 1], label='Joint_2_ref', linestyle='--', color='green', linewidth=1)
+        
+        
+        ax.legend()
+        ax.set_ylim(-y_lim, y_lim)
         
     def update_state_plot(self, state_predict, state_ref):
         self.ax_state.clear()
@@ -877,7 +1060,7 @@ class MpcDebugInterface(QWidget):
         
         colors = ['red', 'green', 'blue', 'purple', 'orange', 'brown', 'pink', 'gray']
         
-        control_num = control_predict.shape[1]
+        control_num = 4
         for i in range(control_num):
             # 预测控制线条更粗
             self.ax_control.plot(predict_time, control_predict[:, i], 
@@ -1073,13 +1256,13 @@ if __name__ == '__main__':
     mpc_name = 'rail'
     mpc_yaml_path = '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml'
     
-    robot_name = 's500'
-    trajectory_name = 'hover'
-    dt_traj_opt = 10  # ms
+    robot_name = 's500_uam'
+    trajectory_name = 'arm_test'
+    dt_traj_opt = 50  # ms
     useSquash = True
     
     if using_ros:
-        rospy.init_node('mpc_debug_interface')
+        rospy.init_node('mpc_debug_interface', anonymous=False, log_level=rospy.DEBUG)
     
     app = QtWidgets.QApplication(sys.argv)
     window = MpcDebugInterface(using_ros=using_ros, mpc_name=mpc_name, mpc_yaml_path=mpc_yaml_path, robot_name=robot_name, trajectory_name=trajectory_name, dt_traj_opt=dt_traj_opt, useSquash=useSquash)

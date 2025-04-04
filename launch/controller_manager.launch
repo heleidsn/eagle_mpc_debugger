@@ -1,0 +1,11 @@
+<launch>
+    <node name="controller_manager" pkg="controller_manager" type="controller_manager" respawn="false">
+        <param name="update_rate" value="100.0" />
+        <rosparam command="load" file="$(find eagle_mpc_debugger)/config/controller.yaml" />
+    </node>
+
+    <!-- <node name="dynamixel_controller" pkg="dynamixel_controllers" type="dynamixel_controller" output="screen">
+        <param name="port" value="/dev/ttyUSB0" />  <!-- 根据您的设置更改端口 -->
+        <param name="baud_rate" value="57600" />
+    </node> -->
+</launch>

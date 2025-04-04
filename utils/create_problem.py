@@ -27,7 +27,7 @@ def get_opt_traj(robotName, trajectoryName, dt_traj_opt, useSquash, yaml_file_pa
     
     traj_state_ref = solver.xs
     
-    return solver, traj_state_ref, problem, trajectory 
+    return solver, traj_state_ref, problem, trajectory
 
 def create_mpc_controller(mpc_name, trajectory, traj_state_ref, dt_traj_opt, mpc_yaml_path):
     '''
@@ -40,7 +40,7 @@ def create_mpc_controller(mpc_name, trajectory, traj_state_ref, dt_traj_opt, mpc
     elif mpc_name == 'carrot':
         mpcController = eagle_mpc.CarrotMpc(trajectory, traj_state_ref, dt_traj_opt, mpc_yaml_path)
         
-    mpcController.solver.setCallbacks([crocoddyl.CallbackVerbose()])  # 设置回调函数 
+    # mpcController.solver.setCallbacks([crocoddyl.CallbackVerbose()])  # 设置回调函数 
     mpcController.updateProblem(0)
     mpcController.solver.convergence_init = 1e-3
     
