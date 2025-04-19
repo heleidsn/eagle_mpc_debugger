@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2024-09-07 17:26:46
-LastEditTime: 2025-03-27 18:58:10
+LastEditTime: 2025-04-19 17:55:36
 Description: L1 adaptive controller with 9 state variables
 Version 3: Used for full actuation
 0916： fixed the bug in adaptive_law_new, change tau_body=u_b + u_ad_all + self.sig_hat_b
@@ -27,8 +27,8 @@ class L1AdaptiveControllerAll:
     def __init__(self, dt, robot_model, debug=False, flag_using_z_ref=False):
         self.dt = dt
         
-        self.as_matrix_coef   = 10  # Hurwitz matrix
-        self.filter_time_coef = 0.01  # 0.005s
+        self.as_matrix_coef   = -0.5  # Hurwitz matrix
+        self.filter_time_coef = 0.3  # 0.005s
         
         self.using_vel_disturbance = False
         self.using_full_state = False         # choose whether to use full state or not

@@ -35,11 +35,14 @@ class TrajectoryPublisher:
     def __init__(self):
         # Initialize ROS node
         rospy.init_node('trajectory_publisher_mpc', anonymous=False, log_level=rospy.DEBUG)
+        
+        # Dynamic reconfigure server
+        self.enable_l1_control = False
 
         # Get parameters
-        self.robot_name = rospy.get_param('~robot_name', 's500_uam')
-        self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon')
-        self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 50)  # ms
+        self.robot_name = rospy.get_param('~robot_name', 's500')
+        self.trajectory_name = rospy.get_param('~trajectory_name', 'displacement')
+        self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 10)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
         self.yaml_path = rospy.get_param('~yaml_path', '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml')
         self.control_rate = rospy.get_param('~control_rate', 100.0)  # Hz
@@ -64,9 +67,6 @@ class TrajectoryPublisher:
         # Load trajectory
         self.load_trajectory()
         if self.control_mode == 'MPC':
-            self.init_mpc_controller()
-        
-        if self.control_mode == 'MPC_L1':
             self.init_mpc_controller()
             self._init_l1_controller()
         
@@ -100,6 +100,9 @@ class TrajectoryPublisher:
         # !Note: the service is only used for arm test, do not use it in real flight
         self.start_service = rospy.Service('start_trajectory', Trigger, self.start_trajectory)
         self.init_service = rospy.Service('initialize_trajectory', Trigger, self.initialize_trajectory)
+        
+        self.start_l1_control_service = rospy.Service('start_l1_control', Trigger, self.start_l1_control)
+        self.stop_l1_control_service = rospy.Service('stop_l1_control', Trigger, self.stop_l1_control)
         
         # --------------------------------------timer--------------------------------------
         # Timer 1: for publishing trajectory
@@ -243,36 +246,21 @@ class TrajectoryPublisher:
         elif self.control_mode == 'MPC':
             # using MPC controller
             self.get_mpc_command()
-            self.publish_mpc_control_command()
-            if self.arm_enabled:
-                self.publish_arm_control_command()
-            # self.publish_mpc_debug_data()
-        elif self.control_mode == 'MPC_L1':
-            # using MPC controller
-            self.get_mpc_command()
-            if self.mpc_ref_index == 0:
-                self.publish_mpc_control_command()
-                self.l1_controller.init_controller()
-                self.publish_mpc_debug_data()
-            else:
+            
+            if self.enable_l1_control:
+                # using L1 controller
                 self.get_l1_control(self.state, self.mpc_ref_index)
                 self.publish_l1_control_command(self.l1_controller.u_mpc, self.l1_controller.u_ad)
-                self.publish_mpc_debug_data()
-            
-            # self.l1_control_command = self.get_l1_control(self.state, self.mpc_ref_index)
-            print('---------------------------------{}--------------------------------'.format(self.mpc_ref_index))
-            print('mpc_control', self.l1_controller.u_mpc)
-            print("l1 _control", self.l1_controller.u_ad)
-            
-            print('z_real     ', self.l1_controller.z_real)
-            print('z_hat      ', self.l1_controller.z_hat)
-            print('z_ref      ', self.l1_controller.z_ref)
-            print('z_tilde    ', self.l1_controller.z_tilde)
-            print('sig_hat    ', self.l1_controller.sig_hat)
-            
-            # print('MPC_l1 is still in development')
+            else:
+                # using MPC controller
+                # self.publish_mavros_setpoint_raw(ref_state[0:3], vel_world, acc_world, yaw, 0)
+                self.publish_mpc_control_command()
+            if self.arm_enabled:
+                self.publish_arm_control_command()
+            self.publish_mpc_debug_data()
         else:
-            rospy.logwarn("Invalid control mode")  
+            rospy.logwarn("Invalid control mode")
+
           
     def get_mpc_command(self):
         self.mpc_controller.problem.x0 = self.state
@@ -701,6 +689,15 @@ class TrajectoryPublisher:
         self.traj_finished = False
         
         return TriggerResponse(success=True, message="Trajectory initialized.")
+    
+    def start_l1_control(self, req):
+        self.l1_controller.init_controller()
+        self.enable_l1_control = True
+        return TriggerResponse(success=True, message="L1 control started.")
+    
+    def stop_l1_control(self, req):
+        self.enable_l1_control = False
+        return TriggerResponse(success=True, message="L1 control stopped.")
 
 
 if __name__ == '__main__':
