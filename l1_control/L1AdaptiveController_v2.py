@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2024-09-07 17:26:46
-LastEditTime: 2025-04-19 17:55:36
+LastEditTime: 2025-04-24 14:57:13
 Description: L1 adaptive controller with 9 state variables
 Version 3: Used for full actuation
 0916： fixed the bug in adaptive_law_new, change tau_body=u_b + u_ad_all + self.sig_hat_b
@@ -24,21 +24,19 @@ class L1AdaptiveControllerAll:
     param {*} self
     return {*}
     '''    
-    def __init__(self, dt, robot_model, debug=False, flag_using_z_ref=False):
+    def __init__(self, dt, robot_model, As_coef, filter_time_constant):
         self.dt = dt
         
-        self.as_matrix_coef   = -0.5  # Hurwitz matrix
-        self.filter_time_coef = 0.3  # 0.005s
+        self.as_matrix_coef   = As_coef  # Hurwitz matrix
+        self.filter_time_coef = filter_time_constant  # 0.005s
         
         self.using_vel_disturbance = False
         self.using_full_state = False         # choose whether to use full state or not
+        self.flag_using_z_ref = False
         
         self.robot_model = robot_model
         self.robot_model_data = self.robot_model.createData()
         
-        self.debug = debug
-        self.flag_using_z_ref = flag_using_z_ref
-
         self.state_dim = self.robot_model.nq + self.robot_model.nv  # number of state using quaternion
         self.state_dim_euler = self.state_dim - 1                   # number of state using euler angle
         self.control_dim = self.robot_model.nv                      # number of control input
@@ -53,7 +51,6 @@ class L1AdaptiveControllerAll:
         
         # tunning parameters
         self.a_s = np.ones(self.state_dim_euler) * self.as_matrix_coef #! Hurwitz matrix
-        # self.filter_time_const = np.array([0.001, 0.001, 0.001])  # 注意这里的单位为s， dt = 0.005s
         self.filter_time_const = np.ones(self.filter_num) * self.filter_time_coef  # 注意这里的单位为s， dt = 0.005s  tc = 0.001 alpha = 0.833  tc = 0.005 alpha = 0.5 
         
     def init_controller(self):
@@ -87,12 +84,14 @@ class L1AdaptiveControllerAll:
               
     def update_z_tilde(self):
         '''
-        description: 更新z_tilde, 以角度形式，需要18个变量
+        description: update z_tilde for all 18 states
         return {*}
-        '''       
-        self.z_tilde_ref      = self.z_hat.copy()     - self.z_ref.copy()
-        self.z_tilde          = self.z_hat.copy()     - self.z_real.copy()
-        # self.z_tilde_tracking = self.z_real.copy() - self.z_ref.copy()
+        '''
+        self.z_tilde          = self.z_hat.copy() - self.z_real.copy()  # default z_tilde
+        if not self.using_full_state:
+            self.z_tilde[:self.control_dim] = np.zeros(self.control_dim)  # 只使用速度进行估计       
+        self.z_tilde_ref      = self.z_hat.copy() - self.z_ref.copy()
+        self.z_tilde_tracking = self.z_real.copy() - self.z_ref.copy()
         
         # update tracking error
         self.tracking_error_angle =  (self.get_state_angle_single_rad(self.z_ref_all) - self.get_state_angle_single_rad(self.current_state))[:9] 
@@ -271,7 +270,7 @@ class L1AdaptiveControllerAll:
         if self.using_full_state:
             self.update_sig_hat_all_v2()
         else:
-            self.update_sig_hat_all_v2()
+            self.update_sig_hat_vel()
     
     def update_sig_hat_vel(self):
         '''
@@ -292,13 +291,21 @@ class L1AdaptiveControllerAll:
         PHI_inv = LA.inv(PHI)
         mu  = np.matmul(self.expm_A_s_dt, self.z_tilde)
         PHI_inv_mul_mu = np.matmul(PHI_inv, mu)
-        sigma_hat  = -np.matmul(B_bar_inv, PHI_inv_mul_mu)  # 奇怪，为什么z_hat - z 要乘以B_bar，最后两列才是扰动呀
+        # sigma_hat  = -np.matmul(B_bar_inv, PHI_inv_mul_mu)  # 奇怪，为什么z_hat - z 要乘以B_bar，最后两列才是扰动呀
+        
+        sigma_hat = -0.0 * self.z_tilde
         
         self.sig_hat = sigma_hat.copy()
             
     def update_z_hat_vel(self):
+        '''
+        description: Only update z_hat for velocity, used for non-full state L1
+        return {*}
+        '''        
         # update predictor
-        tau_body = self.u_mpc + self.u_ad + self.sig_hat[self.control_dim:] + self.u_tracking   # 假设只用u_b进行控制
+        # tau_body = self.u_mpc + self.u_ad + self.sig_hat[self.control_dim:] + self.u_tracking   # 假设只用u_b进行控制
+        
+        tau_body = self.u_mpc + self.u_ad + self.sig_hat[self.control_dim:]
         
         z_hat_prev = self.z_hat.copy()
         
@@ -306,22 +313,23 @@ class L1AdaptiveControllerAll:
         data = self.robot_model_data
         q = self.current_state[:self.robot_model.nq]    # state
         v = self.current_state[self.robot_model.nq:]    # velocity
-        u = self.u_mpc + self.u_ad + self.sig_hat[self.control_dim:]  # 假设只用u_b进行控制
         dt = self.dt
         
         # if self.flag_using_z_ref:
         #     z_hat_dot_vel = pin.aba(model, data, q, v, u) + (self.A_s @ self.z_tilde_ref)[self.control_dim:]
         # else:
         #     z_hat_dot_vel = pin.aba(model, data, q, v, u) + (self.A_s @ self.z_tilde)[self.control_dim:]
-        z_hat_dot_without_disturb = pin.aba(model, data, q, v, u)   # get a using the current state
-        z_hat_dot_disturb = self.A_s @ self.z_tilde
-        z_hat_dot_vel = z_hat_dot_without_disturb + z_hat_dot_disturb[self.control_dim:]
+        z_hat_dot_without_disturb = pin.aba(model, data, q, v, tau_body)   # get a using the current state
+        z_hat_dot_disturb = self.A_s[self.control_dim:, self.control_dim:] @ self.z_tilde[self.control_dim:]  # get a using the current state
+        z_hat_dot_vel = z_hat_dot_without_disturb + z_hat_dot_disturb
         
         # update z_hat
-        z_hat_new = z_hat_prev.copy()
-        z_hat_new[self.control_dim:] = z_hat_prev[self.control_dim:] + z_hat_dot_vel * dt
+        # z_hat_new = z_hat_prev.copy()
+        # z_hat_new[self.control_dim:] = z_hat_prev[self.control_dim:] + z_hat_dot_vel * dt  # only update the velocity part
+        # z_hat_new[self.control_dim:] = self.z_real[self.control_dim:] + z_hat_dot_vel * dt  # only update the velocity part
         
-        self.z_hat = z_hat_new.copy()    # in body frame
+        # self.z_hat = z_hat_new.copy()    # in body frame
+        self.z_hat[self.control_dim:] = self.z_hat[self.control_dim:] + self.dt * z_hat_dot_vel.copy()  # in body frame
     
     def update_sig_hat_all_v2(self):
         '''
@@ -349,7 +357,9 @@ class L1AdaptiveControllerAll:
 
         sigma_hat_disturb  = -np.matmul(B_bar_inv, PHI_inv_mul_mu)  # sigma_hat is related to z_tilde
 
-        self.sig_hat = sigma_hat_disturb.copy()
+        # self.sig_hat = sigma_hat_disturb.copy()
+        weight = np.array([0, 0, 0, 0, 0, 0, 100, 100, 50, 1, 1, 1])
+        self.sig_hat = -1 * weight * self.z_tilde.copy()  # 这里的sigma_hat是一个增广矩阵，包含了速度和位置的扰动
     
     def update_u_ad(self):
         '''
