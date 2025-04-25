@@ -1,0 +1,76 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- MAVROS posix SITL environment launch script -->
+    <!-- launches MAVROS, PX4 SITL, Gazebo environment, and spawns vehicle -->
+    <!-- vehicle pose -->
+    <arg name="x" default="0"/>
+    <arg name="y" default="0"/>
+    <arg name="z" default="0"/>
+    <arg name="R" default="0"/>
+    <arg name="P" default="0"/>
+    <arg name="Y" default="0"/>
+    <!-- vehicle model and world -->
+    <arg name="est" default="ekf2"/>
+    <arg name="vehicle" default="s500_uam"/>
+    <arg name="world" default="$(find mavlink_sitl_gazebo)/worlds/empty.world"/>
+    <arg name="sdf" default="$(find mavlink_sitl_gazebo)/models/$(arg vehicle)/$(arg vehicle).sdf"/>
+
+    <!-- gazebo configs -->
+    <arg name="gui" default="true"/>
+    <arg name="debug" default="false"/>
+    <arg name="verbose" default="false"/>
+    <arg name="paused" default="false"/>
+    <arg name="respawn_gazebo" default="false"/>
+    <!-- MAVROS configs -->
+    <arg name="fcu_url" default="udp://:14540@localhost:14557"/>
+    <arg name="respawn_mavros" default="false"/>
+    <!-- PX4 configs -->
+    <arg name="interactive" default="true"/>
+    <!-- PX4 SITL and Gazebo -->
+    <include file="$(find px4)/launch/posix_sitl.launch">
+        <arg name="x" value="$(arg x)"/>
+        <arg name="y" value="$(arg y)"/>
+        <arg name="z" value="$(arg z)"/>
+        <arg name="R" value="$(arg R)"/>
+        <arg name="P" value="$(arg P)"/>
+        <arg name="Y" value="$(arg Y)"/>
+        <arg name="world" value="$(arg world)"/>
+        <arg name="vehicle" value="$(arg vehicle)"/>
+        <arg name="sdf" value="$(arg sdf)"/>
+        <arg name="gui" value="$(arg gui)"/>
+        <arg name="interactive" value="$(arg interactive)"/>
+        <arg name="debug" value="$(arg debug)"/>
+        <arg name="verbose" value="$(arg verbose)"/>
+        <arg name="paused" value="$(arg paused)"/>
+        <arg name="respawn_gazebo" value="$(arg respawn_gazebo)"/>
+    </include>
+    <!-- MAVROS -->
+    <include file="$(find mavros)/launch/px4.launch">
+        <!-- GCS link is provided by SITL -->
+        <arg name="gcs_url" value=""/>
+        <arg name="fcu_url" value="$(arg fcu_url)"/>
+        <arg name="respawn_mavros" value="$(arg respawn_mavros)"/>
+    </include>
+
+    <!-- 加载 SDF 模型 但是无法直接从sdf中进行加载，需要urdf -->
+    <!-- <param name="robot_description" command="$(find xacro)/xacro /home/helei/PX4_1_16/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models/s500_uam/s500_uam.urdf"/> -->
+    <param name="robot_description" textfile="/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml/s500_robot/s500_uam/urdf/s500_uam.urdf"/>
+
+    <!-- 运行 robot_state_publisher（虽然 SDF 不直接使用 TF，但可以发布状态） -->
+    <!-- <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher"/> -->
+
+    <!-- 加载控制器配置 -->
+    <!-- <param name="controller_config" textfile="/home/helei/PX4_1_16/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models/s500_uam/config/joint_controllers.yaml"/> -->
+
+    <rosparam command="load" file="/home/helei/PX4_1_16/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models/s500_uam/config/joint_controllers.yaml"/>
+
+    <!-- 启动控制器管理器 -->
+    <!-- <node name="controller_manager" pkg="controller_manager" type="spawner" args="joint_1_position_controller"/> -->
+    <!-- <node name="controller_manager" pkg="controller_manager" type="controller_manager" output="screen"/> -->
+
+    <node name="controller_spawner" pkg="controller_manager" type="spawner" respawn="false"
+        output="screen" args="joint_1_position_controller joint_state_controller">
+        <param name="respawn_delay" value="5.0"/>
+    </node>
+
+</launch>

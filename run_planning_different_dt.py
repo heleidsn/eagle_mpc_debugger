@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-24 10:31:39
-LastEditTime: 2025-04-03 10:28:45
+LastEditTime: 2025-04-19 15:13:30
 Description: Run planning to generate planning results and save them to file
 Github: https://github.com/heleidsn
 '''
@@ -19,7 +19,7 @@ from pathlib import Path
 import example_robot_data
 import crocoddyl
 import time
-# import gepetto
+import gepetto
 
 def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_opt, state_array,  save_dir=None):
     """Plot optimized trajectory results.
@@ -132,15 +132,73 @@ def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_op
     
     plt.show()
 
-def main():
+def plot_multiple_trajectories(trajectories, dt_values, save_dir=None):
+    """Plot multiple trajectories for comparison.
     
+    Args:
+        trajectories: List of trajectory objects containing optimized data
+        dt_values: List of time steps for trajectory optimization
+        save_dir: Directory to save plots (optional)
+    """
+    # Create figure for states
+    fig_states = plt.figure(figsize=(16, 10), dpi=150)
+    fig_states.suptitle('State Trajectories Comparison', fontsize=16)
+    
+    # State labels (convert radians to degrees for roll, pitch, yaw)
+    state_labels = ['x (m)', 'y (m)', 'z (m)', 
+                   'roll (deg)', 'pitch (deg)', 'yaw (deg)',
+                   'joint1 (deg)', 'joint2 (deg)', 'joint3 (deg)']
+    
+    # Define key positions and times
+    key_positions = [(-1.5, 0, 1.5), (0, 0, 1.2), (1.5, 0, 1.5)]
+    key_times = [0, 2, 4]  # seconds
+    
+    for idx, (trajectory, dt) in enumerate(zip(trajectories, dt_values)):
+        traj_state_ref = trajectory[1]
+        state_array = np.array(traj_state_ref)
+        state_num = trajectory[0].robot_model.nv
+        time_state = np.arange(len(traj_state_ref)) * dt / 1000  # Convert to seconds
+        
+        for i in range(state_num): 
+            ax = plt.subplot(3, 3, i + 1)
+            state_data = [s[i] for s in traj_state_ref]
+            
+            # Convert roll, pitch, yaw from radians to degrees
+            if i in [3, 4, 5]:  # Indices for roll, pitch, yaw
+                state_data = np.degrees(state_data)
+            elif i in [6, 7, 8]:  # Indices for joint1, joint2, joint3
+                state_data = np.degrees(state_data)  # Convert joint angles to degrees
+            
+            ax.plot(time_state, state_data, label=f'dt={dt} ms')
+            ax.set_xlabel('Time (s)')
+            ax.set_ylabel(state_labels[i])
+            ax.grid(True)
+            ax.legend(fontsize='small')
+            ax.set_title(state_labels[i])
+            
+            # Plot key positions as points
+            if i in [0, 1, 2]:  # x, y, z positions
+                for (pos, t) in zip(key_positions, key_times):
+                    ax.plot(t, pos[i], 'o')
+    
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    
+    # Save plots if directory is specified
+    if save_dir:
+        save_dir = Path(save_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        fig_states.savefig(save_dir / 'state_trajectories_comparison.png', dpi=300, bbox_inches='tight')
+    
+    plt.show()
+
+def main():
     # Settings
     mpc_name = 'rail'
-    mpc_yaml_path = '/home/jetson/catkin_ams/src/eagle_mpc_ros/eagle_mpc_yaml'
+    mpc_yaml_path = '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml'
     
     robot_name = 's500'   # s500, s500_uam, hexacopter370_flying_arm_3
-    trajectory_name = 'hover'
-    dt_traj_opt = 10  # ms
+    trajectory_name = 'takeoff'
+    dt_values = [5, 10, 20, 30]  # Different dt values to compare
     useSquash = True
     
     gepetto_vis = False
@@ -158,74 +216,54 @@ def main():
     task_name = robot_name + '_' + trajectory_name
     print(f"Running trajectory optimization for task: {task_name}")
     print(f"Parameters:")
-    print(f"  dt_traj_opt: {dt_traj_opt} ms")
     print(f"  useSquash: {useSquash}")
     
-    # Run trajectory optimization
-    trajectory, traj_state_ref, _, trajectory_obj = get_opt_traj(
-        robot_name,
-        trajectory_name, 
-        dt_traj_opt, 
-        useSquash,
-        mpc_yaml_path
-    )
-    
-    # create mpc controller to get tau_f
-    mpc_yaml = '{}/mpc/{}_mpc.yaml'.format(mpc_yaml_path, robot_name)    
-    mpc_controller = create_mpc_controller(
-        mpc_name,
-        trajectory_obj,
-        traj_state_ref,
-        dt_traj_opt,
-        mpc_yaml
-    )
-    
-    # Get tau_f from MPC yaml file
-    tau_f = mpc_controller.platform_params.tau_f
-    
-    # Convert control plan to force/torque
-    control_plan_rotor = np.array(trajectory.us_squash)
-    control_force_torque = thrustToForceTorqueAll_array(
-        control_plan_rotor, 
-        tau_f
-    )
-    
-    # Transfer traj_state_ref to state_array
-    state_array = np.array(traj_state_ref)
-    
-    # get task name from config
-    if save_file:
-        # save state_array to file
-        file_path = Path(__file__).resolve()
-        dir_path = file_path.parent
+    trajectories = []
+    for dt_traj_opt in dt_values:
+        print(f"  dt_traj_opt: {dt_traj_opt} ms")
+        # Run trajectory optimization
+        trajectory, traj_state_ref, _, trajectory_obj = get_opt_traj(
+            robot_name,
+            trajectory_name, 
+            dt_traj_opt, 
+            useSquash,
+            mpc_yaml_path
+        )
         
-        save_dir = str(dir_path) + '/results/' + task_name + '/'
-        # create save_dir if not exist
-        os.makedirs(save_dir, exist_ok=True)
+        # create mpc controller to get tau_f
+        mpc_yaml = '{}/mpc/{}_mpc.yaml'.format(mpc_yaml_path, robot_name)    
+        mpc_controller = create_mpc_controller(
+            mpc_name,
+            trajectory_obj,
+            traj_state_ref,
+            dt_traj_opt,
+            mpc_yaml
+        )
         
-        np.save(save_dir + 'state_array.npy', state_array)
+        # Get tau_f from MPC yaml file
+        tau_f = mpc_controller.platform_params.tau_f
         
-        # save control plan and control force torque to file
-        np.save(save_dir + 'control_plan.npy', control_plan_rotor)
-        np.save(save_dir + 'control_force_torque.npy', control_force_torque)
-    
-    # transfer quaternion to euler angle
-    # state_array[:, 3:7] = quaternion_to_euler(state_array[:, 3:7])
-    quat = state_array[:, 3:7]
-    rotation = R.from_quat(quat)  # 创建旋转对象，注意传入四元数的顺序为 [x, y, z, w]
-    euler_angles = rotation.as_euler('xyz', degrees=False)  # 将四元数转换为欧拉角
-    
-    state_array_new = np.hstack((state_array[:,:3], euler_angles, state_array[:,7:]))
-    
+        # Convert control plan to force/torque
+        control_plan_rotor = np.array(trajectory.us_squash)
+        control_force_torque = thrustToForceTorqueAll_array(
+            control_plan_rotor, 
+            tau_f
+        )
+        
+        # Transfer traj_state_ref to state_array
+        state_array = np.array(traj_state_ref)
+        
+        # transfer quaternion to euler angle
+        quat = state_array[:, 3:7]
+        rotation = R.from_quat(quat)  # 创建旋转对象，注意传入四元数的顺序为 [x, y, z, w]
+        euler_angles = rotation.as_euler('xyz', degrees=False)  # 将四元数转换为欧拉角
+        
+        state_array_new = np.hstack((state_array[:,:3], euler_angles, state_array[:,7:]))
+        
+        trajectories.append((trajectory_obj, state_array_new, control_force_torque, dt_traj_opt, state_array))
+
     # Plot results
-    plot_trajectory(
-        trajectory_obj,
-        state_array_new,
-        control_force_torque,
-        dt_traj_opt,
-        state_array,
-        save_dir
-    )
+    plot_multiple_trajectories(trajectories, dt_values, save_dir)
     
     if gepetto_vis:
       robot = example_robot_data.load(trajectory_obj.robot_model.name)
