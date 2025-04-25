@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-24 10:31:39
-LastEditTime: 2025-04-18 15:46:07
+LastEditTime: 2025-04-19 15:13:30
 Description: Run planning to generate planning results and save them to file
 Github: https://github.com/heleidsn
 '''
@@ -196,8 +196,8 @@ def main():
     mpc_name = 'rail'
     mpc_yaml_path = '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml'
     
-    robot_name = 's500_uam'   # s500, s500_uam, hexacopter370_flying_arm_3
-    trajectory_name = 'catch'
+    robot_name = 's500'   # s500, s500_uam, hexacopter370_flying_arm_3
+    trajectory_name = 'takeoff'
     dt_values = [5, 10, 20, 30]  # Different dt values to compare
     useSquash = True
     

@@ -22,22 +22,28 @@ from geometry_msgs.msg import Point, Vector3
 from std_msgs.msg import Float32, Header
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from eagle_mpc_msgs.msg import SolverPerformance, MpcState, MpcControl
+from l1_control.L1AdaptiveController_v1 import L1AdaptiveControllerNew
 from l1_control.L1AdaptiveController_v2 import L1AdaptiveControllerAll
+from l1_control.L1AdaptiveController_v3 import L1AdaptiveControllerRefactored
 from typing import Dict, Any, Tuple
 from sensor_msgs.msg import JointState
 from std_srvs.srv import Trigger, TriggerResponse
+from gazebo_msgs.msg import ModelStates
 
 import crocoddyl
 import pinocchio as pin
 
 
 class TrajectoryPublisher:
-    def __init__(self):
+    def __init__(self): 
         # Initialize ROS node
-        rospy.init_node('trajectory_publisher_mpc', anonymous=False, log_level=rospy.DEBUG)
+        rospy.init_node('trajectory_publisher_mpc', anonymous=False, log_level=rospy.INFO)
         
         # Dynamic reconfigure server
         self.enable_l1_control = False
+        self.l1_version = 'v2'
+        self.using_controller_v1 = False
+        self.using_controller_v3 = False
 
         # Get parameters
         self.robot_name = rospy.get_param('~robot_name', 's500')
@@ -46,6 +52,8 @@ class TrajectoryPublisher:
         self.use_squash = rospy.get_param('~use_squash', True)
         self.yaml_path = rospy.get_param('~yaml_path', '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml')
         self.control_rate = rospy.get_param('~control_rate', 100.0)  # Hz
+        
+        self.odom_source = rospy.get_param('~odom_source', 'gazebo')  # mavros, gazebo  
         
         self.control_mode = rospy.get_param('~control_mode', 'MPC')  # MPC, Geometric, PX4, MPC_L1
         self.arm_enabled = rospy.get_param('~arm_enabled', True)
@@ -80,8 +88,10 @@ class TrajectoryPublisher:
         # rospy.wait_for_message("/mavros/state", State, timeout=5)
         # print("MAVROS state received")
         
-        if self.control_mode == 'MPC' or self.control_mode == 'MPC_L1':
+        if self.odom_source == 'mavros':
             self.odom_sub = rospy.Subscriber("/mavros/local_position/odom", Odometry, self.callback_model_local_position)
+        else:
+            self.odom_sub = rospy.Subscriber("/gazebo/model_states", ModelStates, self.callback_model_state_gazebo)
             # print("Waiting for MAVROS local position...")
             # rospy.wait_for_message("/mavros/local_position/odom", Odometry, timeout=5)
             # print("MAVROS local position received")
@@ -98,15 +108,18 @@ class TrajectoryPublisher:
         
         # Services  
         # !Note: the service is only used for arm test, do not use it in real flight
-        self.start_service = rospy.Service('start_trajectory', Trigger, self.start_trajectory)
+        self.start_service = rospy.Service('start_arm_test', Trigger, self.start_arm_test)
         self.init_service = rospy.Service('initialize_trajectory', Trigger, self.initialize_trajectory)
         
         self.start_l1_control_service = rospy.Service('start_l1_control', Trigger, self.start_l1_control)
         self.stop_l1_control_service = rospy.Service('stop_l1_control', Trigger, self.stop_l1_control)
         
+        self.start_trajectory_service = rospy.Service('start_trajectory', Trigger, self.start_trajectory)
+        
         # --------------------------------------timer--------------------------------------
         # Timer 1: for publishing trajectory
         self.controller_started = False
+        self.controller_started_last = False
         self.traj_finished = False
         self.timer = rospy.Timer(rospy.Duration(1.0/self.control_rate), self.controller_callback)
         
@@ -138,10 +151,28 @@ class TrajectoryPublisher:
         dt_controller = 1.0/self.control_rate
         robot_model = self.mpc_controller.robot_model
 
-        self.l1_controller = L1AdaptiveControllerAll(
-            dt=dt_controller,
-            robot_model=robot_model,
-        )
+        if self.l1_version == 'v3':
+            self.l1_controller = L1AdaptiveControllerRefactored(
+                dt=dt_controller, 
+                robot_model=robot_model, 
+                As_coef=-10,
+                filter_time_constant=0.5
+            )
+        elif self.l1_version == 'v1':
+            self.l1_controller = L1AdaptiveControllerNew(
+                dt=dt_controller, 
+                robot_model=robot_model, 
+                As_coef=-10,
+                filter_time_constant=0.5
+            )
+        else:
+            self.l1_controller = L1AdaptiveControllerAll(
+                dt=dt_controller, 
+                robot_model=robot_model, 
+                As_coef=-30,
+                filter_time_constant=0.1
+            )
+
         self.l1_controller.init_controller()
 
     def load_trajectory(self):
@@ -201,9 +232,13 @@ class TrajectoryPublisher:
             self.controller_time = rospy.Time.now() - self.controller_start_time
             self.mpc_ref_index = int(self.controller_time.to_sec() * 1000.0)
             self.traj_ref_index = int(self.mpc_ref_index / self.dt_traj_opt)
+            # if self.traj_ref_index == 0:
+            #     self._init_l1_controller()
+            #     print("L1 controller initialized")
             
             if self.traj_ref_index >= len(self.traj_state_ref):
                 self.traj_finished = True
+                self.controller_started_last = False
                 self.traj_ref_index = len(self.traj_state_ref)-1
                 rospy.loginfo("Trajectory finished")
                 
@@ -250,18 +285,20 @@ class TrajectoryPublisher:
             if self.enable_l1_control:
                 # using L1 controller
                 self.get_l1_control(self.state, self.mpc_ref_index)
-                self.publish_l1_control_command(self.l1_controller.u_mpc, self.l1_controller.u_ad)
             else:
                 # using MPC controller
-                # self.publish_mavros_setpoint_raw(ref_state[0:3], vel_world, acc_world, yaw, 0)
-                self.publish_mpc_control_command()
+                self._init_l1_controller()
+                
+            self.publish_l1_control_command(self.l1_controller.u_mpc, self.l1_controller.u_ad)
+            
             if self.arm_enabled:
                 self.publish_arm_control_command()
-            self.publish_mpc_debug_data()
+                
+            # debug info
+            self.publish_mpc_l1_debug_data()
         else:
             rospy.logwarn("Invalid control mode")
 
-          
     def get_mpc_command(self):
         self.mpc_controller.problem.x0 = self.state
             
@@ -312,41 +349,42 @@ class TrajectoryPublisher:
         # Get the baseline control from mpc_controller_l1
         baseline_control = np.copy(self.mpc_controller.solver.us_squash[0])
         
-        # Convert to force/torque if needed
+        # Convert to force/torque
         baseline_control_ft = thrustToForceTorqueAll(
                 baseline_control,
                 self.mpc_controller.platform_params.tau_f
             )
         
         index_plan = self.traj_ref_index
+        
+        if self.l1_version == 'v3':
+            self.l1_controller.compute_control(current_state.copy(), baseline_control_ft)
+        elif self.l1_version == 'v1':
+            self.l1_controller.compute_control(current_state.copy(), baseline_control_ft) 
+        else:
             
-        # Update current state and reference
-        self.l1_controller.current_state = current_state.copy()
-        self.l1_controller.z_ref_all = self.traj_state_ref[index_plan].copy()
-        
-        # transfer z_ref and z_measure to anglself.control_command
-        self.l1_controller.u_mpc = baseline_control_ft.copy()
+            # Update current state and reference
+            self.l1_controller.current_state = current_state.copy()
+            self.l1_controller.z_ref_all = self.traj_state_ref[index_plan].copy()
+            self.l1_controller.z_ref = self.l1_controller.get_state_angle_single_rad(self.l1_controller.z_ref_all)
             
-        # Get L1 control based on type
-        self.l1_controller.update_z_tilde()
-        
-        self.l1_controller.update_z_hat()
-        
-        self.l1_controller.update_sig_hat_all_v2()
-        
-        # if self.using_position_error_feedback:
-        #     error_p = np.array([0, 0, 0, 0, 0, 0, 20, 3, 0.5]) # 位置反馈的权重  error_p = np.array([0, 0, 0, 0, 0, 0, 1.8, 3, 0.03]) # 位置反馈的权重
-        #     error_v = np.array([0, 0, 0, 0, 0, 0, 1.0, 0.1, 0.01])  # 速度反馈的权重
-        #     self.l1_controller.u_tracking =  self.l1_controller.tracking_error_angle * error_p * 1 + self.l1_controller.tracking_error_velocity * error_v * 0
-
-        #     control_l1 = self.l1_controller.get_u_l1_all_v2() + self.l1_controller.u_mpc.copy() + self.l1_controller.u_tracking.copy()
-        # else:
-        #     control_l1 =  self.l1_controller.get_u_l1_all_v2() + self.l1_controller.u_mpc.copy()
-        self.l1_controller.update_u_ad()
-        
-        control_l1 = self.l1_controller.u_mpc.copy() + self.l1_controller.u_ad.copy()
-        
-        return control_l1
+            # update z_real using current state
+            self.l1_controller.z_real = self.l1_controller.get_state_angle_single_rad(self.l1_controller.current_state)
+            
+            # transfer z_ref and z_measure to anglself.control_command
+            self.l1_controller.u_mpc = baseline_control_ft.copy()
+            
+            # 1. Update state predictor
+            self.l1_controller.update_z_hat()
+            
+            # 2. Update state predictor error
+            self.l1_controller.update_z_tilde()
+            
+            # 3. Estimate disturbance
+            self.l1_controller.update_sig_hat_all_v2()
+            
+            # 4. Filter the matched uncertainty estimate
+            self.l1_controller.update_u_ad()
               
     def publish_mpc_control_command(self):
         '''
@@ -422,6 +460,8 @@ class TrajectoryPublisher:
             u_ad: L1控制器得到的控制指令，包括推力、力矩和机械臂控制力矩， 如何转换成 PX4 控制指令 推力+角速度？
             如何得到角速度？
             可以用当前的控制量在名义模型上进行仿真，得到下一时刻的角速度，设置为期望角速度
+            
+            【solved】:将L1得到的力矩作为期望角速度的增量
         '''
         
         self.control_command = self.mpc_controller.solver.us_squash[0]
@@ -442,16 +482,14 @@ class TrajectoryPublisher:
         v = self.state[model.nq:]    # velocity
         u = u_mpc + u_ad                      # using l1 control command
         dt = 1 / self.control_rate
-        v_hat = pin.aba(model, data, q, v, u)   # get a using the current state
-        v_new = v + v_hat * dt
+        v_hat = pin.aba(model, data, q, v, u_ad)   # 使用u_ad来得到角速度的增量
         
-        self.roll_rate_ref = v_new[3]
-        self.pitch_rate_ref = v_new[4]
-        self.yaw_rate_ref = v_new[5]
+        self.roll_rate_ref = self.state_ref[self.mpc_controller.robot_model.nq + 3] + v_hat[3] * dt
+        self.pitch_rate_ref = self.state_ref[self.mpc_controller.robot_model.nq + 4] + v_hat[4] * dt
+        self.yaw_rate_ref = self.state_ref[self.mpc_controller.robot_model.nq + 5] + v_hat[5] * dt
         
         # get thrust command
-        self.total_thrust = np.sum(self.thrust_command) + u_ad[2]  # add u_ad[2] to total thrust
-        # self.total_thrust = np.sum(self.thrust_command)
+        self.total_thrust = np.sum(self.thrust_command) + u_ad[2] # add u_ad[2] to total thrust
         
         att_msg = AttitudeTarget()
         att_msg.header.stamp = rospy.Time.now()
@@ -460,7 +498,7 @@ class TrajectoryPublisher:
         att_msg.type_mask = AttitudeTarget.IGNORE_ATTITUDE 
         
         # 机体系角速度 (rad/s)
-        att_msg.body_rate = Vector3(self.roll_rate_ref_old, self.pitch_rate_ref_old, self.yaw_rate_ref_old)  # 仅绕 Z 轴旋转 0.1 rad/s
+        att_msg.body_rate = Vector3(self.roll_rate_ref, self.pitch_rate_ref, self.yaw_rate_ref)  # 仅绕 Z 轴旋转 0.1 rad/s
         
         # 推力值 (范围 0 ~ 1)
         att_msg.thrust = self.total_thrust / self.max_thrust  # 60% 油门
@@ -491,6 +529,7 @@ class TrajectoryPublisher:
             rospy.loginfo("Model is not armed")
             self.controller_started = False
             
+        # check if all conditions are met
         if not self.controller_started and self.current_state.mode == "OFFBOARD" and self.current_state.armed:
             rospy.loginfo("All conditions met for MPC start")
             self.controller_started = True
@@ -515,7 +554,7 @@ class TrajectoryPublisher:
         msg.thrust = thrust
         self.body_rate_thrust_pub.publish(msg)
         
-    def publish_mpc_debug_data(self):
+    def publish_mpc_l1_debug_data(self):
         '''
         # 状态向量
         float64[] state           # 完整状态向量
@@ -525,23 +564,33 @@ class TrajectoryPublisher:
         int32 mpc_time_step      # 迭代位置
         float64 solving_time     # 求解时间
         
-        # 位置和姿态
-        geometry_msgs/Point position
-        geometry_msgs/Quaternion orientation
-        geometry_msgs/Vector3 velocity
-        geometry_msgs/Vector3 angular_velocity 
+        # MPC控制指令
+        float64[] u_mpc          # MPC控制指令
+        
+        # L1控制器调试信息
+        # L1 debug information
+        float64[] u_ad           # L1控制指令
+
+        float64[] z_ref          # 参考状态
+        float64[] z_hat          # 估计状态
+        float64[] z_real         # 实际状态
+
+        float64[] sig_hat        # 估计扰动
+        float64[] z_tilde        # 状态误差
+        float64[] z_tilde_ref        # 与参考状态的误差
+        float64[] z_tilde_tracking   # for tracking error
+
+        # tracking controller
+        float64[] u_tracking     # 轨迹跟踪控制指令
         '''
         # 发布MPC状态
-        state_msg = MpcState()
-        state_msg.header.stamp = rospy.Time.now()
+        debug_msg = MpcState()
+        debug_msg.header.stamp = rospy.Time.now()
         
         current_state = self.state.tolist()
         state_ref = self.traj_state_ref[self.traj_ref_index]
         
-        # transfer quaternion to euler
-        state_euler = np.zeros(len(current_state) - 1)
-        state_euler_ref = np.zeros(len(current_state) - 1)
-        
+        # transfer quaternion to euler        
         quat = current_state[3:7]
         euler = euler_from_quaternion(quat)
         state_array_new = np.hstack((current_state[0:3], euler, current_state[7:]))
@@ -551,28 +600,40 @@ class TrajectoryPublisher:
         euler_ref = euler_from_quaternion(quat_ref)
         state_array_ref_new = np.hstack((state_ref[0:3], euler_ref, state_ref[7:]))
         
-        
-        state_msg.state = state_array_new
-        state_msg.state_ref = state_array_ref_new
-        state_msg.state_error = state_array_ref_new - state_array_new
+        debug_msg.state = state_array_new
+        debug_msg.state_ref = state_array_ref_new
+        debug_msg.state_error = state_array_ref_new - state_array_new
         
         # 填充求解器信息
-        # state_msg.mpc_time_step = self.mpc_ref_index
-        state_msg.mpc_time_step = self.mpc_iter_num
-        state_msg.solving_time = self.solving_time
+        # debug_msg.mpc_time_step = self.mpc_ref_index
+        debug_msg.mpc_time_step = self.mpc_iter_num
+        debug_msg.solving_time = self.solving_time
         
-        # 填充位置和姿态信息
-        state_msg.position.x = self.state[0]
-        state_msg.position.y = self.state[1]
-        state_msg.position.z = self.state[2]
-        state_msg.orientation.x = self.state[3]
-        state_msg.orientation.y = self.state[4]
-        state_msg.orientation.z = self.state[5]
-        state_msg.orientation.w = self.state[6]
+        # u_mpc need to transform to force/torque
+        u_mpc_motor_thrust = self.control_command[:self.mpc_controller.platform_params.n_rotors]
+        baseline_control_ft = thrustToForceTorqueAll(
+                u_mpc_motor_thrust,
+                self.mpc_controller.platform_params.tau_f
+            )
         
+        debug_msg.u_mpc = baseline_control_ft.tolist()
+        
+        # if self.enable_l1_control:
+        debug_msg.u_ad = self.l1_controller.u_ad.tolist()
+        
+        debug_msg.z_ref = self.l1_controller.z_ref.tolist()
+        debug_msg.z_hat = self.l1_controller.z_hat.tolist()
+        debug_msg.z_real = self.l1_controller.z_real.tolist()
+        
+        debug_msg.sig_hat = self.l1_controller.sig_hat.tolist()
+        
+        debug_msg.z_tilde = self.l1_controller.z_tilde.tolist()
+        debug_msg.z_tilde_ref = self.l1_controller.z_tilde_ref.tolist()
+        debug_msg.z_tilde_tracking = self.l1_controller.z_tilde_tracking.tolist()
+        debug_msg.u_tracking = self.l1_controller.u_tracking.tolist()
         
         # 发布消息
-        self.mpc_state_pub.publish(state_msg)
+        self.mpc_state_pub.publish(debug_msg)
         
     def publish_mavros_setpoint_raw(self, pos_world, vel_world, acc_world, yaw, yaw_rate):
         """Publish setpoint using mavros setpoint raw for PX4 controller"""
@@ -645,6 +706,33 @@ class TrajectoryPublisher:
         self.state[7:9] = [msg.position[1], msg.position[0]] # TODO: don't know why it is reversed
         self.state[-2:] = [msg.velocity[1], msg.velocity[0]]
         
+    def callback_model_state_gazebo(self, msg):
+        model_states = msg
+        # Find the index of the robot model in the model_states
+        try:
+            index = model_states.name.index(self.robot_name)
+            # print("Robot model index in Gazebo model states: ", index)
+            # Get the pose and twist of the robot model
+            pose = model_states.pose[index]
+            twist = model_states.twist[index]
+            # Update the state with the pose and twist
+            self.state[0:3] = [pose.position.x,
+                            pose.position.y,
+                            pose.position.z-0.224]
+            self.state[3:7] = [pose.orientation.x,
+                            pose.orientation.y,
+                            pose.orientation.z,
+                            pose.orientation.w]
+            self.state[7:10] = [twist.linear.x,
+                            twist.linear.y,
+                            twist.linear.z]
+            self.state[10:13] = [twist.angular.x,
+                                twist.angular.y,
+                                twist.angular.z]
+        except ValueError: 
+            rospy.logerr("Robot model not found in Gazebo model states")
+            return    
+    
     def callback_model_local_position(self, msg):
         """处理来自MAVROS的本地位置信息"""
         pose = msg.pose.pose
@@ -674,7 +762,7 @@ class TrajectoryPublisher:
         
         self.state = state_new
         
-    def start_trajectory(self, req):
+    def start_arm_test(self, req):
         # self.controller_started = True
         self.current_state.mode = "OFFBOARD"
         self.current_state.armed = True
@@ -696,8 +784,19 @@ class TrajectoryPublisher:
         return TriggerResponse(success=True, message="L1 control started.")
     
     def stop_l1_control(self, req):
+        self.l1_controller.init_controller()
         self.enable_l1_control = False
         return TriggerResponse(success=True, message="L1 control stopped.")
+    
+    def start_trajectory(self, req):
+        # Start trajectory
+        self.controller_started = True
+        self.traj_finished = False
+        
+        # Set the start time for the trajectory
+        self.controller_start_time = rospy.Time.now()
+        
+        return TriggerResponse(success=True, message="Trajectory started.")
 
 
 if __name__ == '__main__':

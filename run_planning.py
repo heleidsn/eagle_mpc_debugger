@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-24 10:31:39
-LastEditTime: 2025-04-03 10:28:45
+LastEditTime: 2025-04-24 12:50:39
 Description: Run planning to generate planning results and save them to file
 Github: https://github.com/heleidsn
 '''
@@ -49,7 +49,7 @@ def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_op
                    'joint1 (deg)', 'joint2 (deg)', 'joint3 (deg)']
     
     # Create figure for controls
-    fig_controls = plt.figure(figsize=(20, 12))
+    fig_controls = plt.figure(figsize=(16, 10), dpi=150)
     fig_controls.suptitle('Control Inputs', fontsize=16)
     
     # state_array = np.array(traj_state_ref)
@@ -70,7 +70,7 @@ def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_op
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     
     # Create figure for states
-    fig_states = plt.figure(figsize=(20, 12))
+    fig_states = plt.figure(figsize=(16, 10), dpi=150)
     fig_states.suptitle('State Trajectory', fontsize=16)
     
     # Plot states
@@ -138,12 +138,12 @@ def main():
     mpc_name = 'rail'
     mpc_yaml_path = '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml'
     
-    robot_name = 's500_uam'   # s500, s500_uam, hexacopter370_flying_arm_3
-    trajectory_name = 'catch_vicon'
-    dt_traj_opt = 30  # ms
+    robot_name = 's500'   # s500, s500_uam, hexacopter370_flying_arm_3
+    trajectory_name = 'hover'
+    dt_traj_opt = 10  # ms
     useSquash = True
     
-    gepetto_vis = True
+    gepetto_vis = False
     
     save_file = False
     save_dir = None
