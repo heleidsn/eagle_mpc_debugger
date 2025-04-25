@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-19 11:40:31
-LastEditTime: 2025-04-02 22:01:50
+LastEditTime: 2025-04-23 09:50:12
 Description: MPC Debug Interface, useful for debugging your MPC controller before deploying it to the real robot
 Github: https://github.com/heleidsn
 '''
@@ -1256,9 +1256,9 @@ if __name__ == '__main__':
     mpc_name = 'rail'
     mpc_yaml_path = '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml'
     
-    robot_name = 's500_uam'
-    trajectory_name = 'arm_test'
-    dt_traj_opt = 50  # ms
+    robot_name = 's500'
+    trajectory_name = 'displacement'
+    dt_traj_opt = 30  # ms
     useSquash = True
     
     if using_ros:

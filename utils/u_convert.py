@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2024-09-10 16:21:20
-LastEditTime: 2024-11-01 14:25:13
+LastEditTime: 2025-04-21 10:54:13
 Description: 对控制器的输出进行转换
 Github: https://github.com/heleidsn
 '''
@@ -23,12 +23,9 @@ def thrustToForceTorqueAll(control_thrust, tau_f):
     n_rotor = tau_f.shape[1]
     control_ft = tau_f @ control_thrust[:n_rotor].copy()
     
-    # print(np.linalg.inv(tau_f) @ tau_f)  # 由于tau_f不满秩，所以这里只能求伪逆 但是如何从伪逆中得到原矩阵呢？
+    control_ft_with_arm_torque = np.concatenate((control_ft, control_thrust[n_rotor:]))
     
-    control_thrust_new = np.linalg.pinv(tau_f) @ control_ft
-    control_ft_all = np.concatenate((control_ft, control_thrust[n_rotor:]))
-    
-    return control_ft_all
+    return control_ft_with_arm_torque
 
 def thrustToForceTorqueAll_array(control_thrust_array, tau_f):
     # transfer thrust to Fz, Mx, My, Mz according to the thrust matrix(tau_f)
