@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-24 10:31:39
-LastEditTime: 2025-04-03 10:28:45
+LastEditTime: 2025-04-04 17:04:42
 Description: Run planning to generate planning results and save them to file
 Github: https://github.com/heleidsn
 '''
@@ -19,7 +19,7 @@ from pathlib import Path
 import example_robot_data
 import crocoddyl
 import time
-import gepetto
+# import gepetto
 
 def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_opt, state_array,  save_dir=None):
     """Plot optimized trajectory results.
@@ -136,11 +136,11 @@ def main():
     
     # Settings
     mpc_name = 'rail'
-    mpc_yaml_path = '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml'
+    mpc_yaml_path = '/home/jetson/catkin_ams/src/eagle_mpc_ros/eagle_mpc_yaml'
     
     robot_name = 's500_uam'   # s500, s500_uam, hexacopter370_flying_arm_3
     trajectory_name = 'catch_vicon'
-    dt_traj_opt = 30  # ms
+    dt_traj_opt = 50  # ms
     useSquash = True
     
     gepetto_vis = True

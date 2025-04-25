@@ -1,10 +1,3 @@
-'''
-Author: Lei He
-Date: 2025-04-02 09:55:01
-LastEditTime: 2025-04-03 10:44:35
-Description: publish arm test cmd using dynamixel_interface
-Github: https://github.com/heleidsn
-'''
 #!/usr/bin/env python3
 
 import rospy
@@ -29,7 +22,7 @@ class TrajectoryPublisher:
         self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon')
         self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 30)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
-        self.yaml_path = rospy.get_param('~yaml_path', '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml')
+        self.yaml_path = rospy.get_param('~yaml_path', '/home/jetson/catkin_ams/src/eagle_mpc_ros/eagle_mpc_yaml')
 
         # 服务来启动和初始化轨迹
         self.start_service = rospy.Service('start_trajectory', Trigger, self.start_trajectory)

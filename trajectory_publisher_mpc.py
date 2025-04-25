@@ -15,7 +15,7 @@ from eagle_mpc_msgs.msg import MpcState
 from utils.create_problem import get_opt_traj, create_mpc_controller
 from utils.u_convert import thrustToForceTorqueAll
 
-from controller_msgs.msg import FlatTarget
+# from controller_msgs.msg import FlatTarget
 from mavros_msgs.msg import State, PositionTarget, AttitudeTarget
 from tf.transformations import quaternion_matrix
 from geometry_msgs.msg import Point, Vector3
@@ -41,7 +41,7 @@ class TrajectoryPublisher:
         self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon')
         self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 50)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
-        self.yaml_path = rospy.get_param('~yaml_path', '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml')
+        self.yaml_path = rospy.get_param('~yaml_path', '/home/jetson/catkin_ams/src/eagle_mpc_ros/eagle_mpc_yaml')
         self.control_rate = rospy.get_param('~control_rate', 100.0)  # Hz
         
         self.control_mode = rospy.get_param('~control_mode', 'MPC')  # MPC, Geometric, PX4, MPC_L1
@@ -88,7 +88,7 @@ class TrajectoryPublisher:
         
         # Publishers
         self.pose_pub = rospy.Publisher('/reference/pose', PoseStamped, queue_size=10)
-        self.flat_target_pub = rospy.Publisher('/reference/flatsetpoint', FlatTarget, queue_size=10)
+        # self.flat_target_pub = rospy.Publisher('/reference/flatsetpoint', FlatTarget, queue_size=10)
         self.mavros_setpoint_raw_pub = rospy.Publisher('/mavros/setpoint_raw/local', PositionTarget, queue_size=10)
         self.yaw_pub = rospy.Publisher('/reference/yaw', Float32, queue_size=10)
         self.body_rate_thrust_pub = rospy.Publisher('/mavros/setpoint_raw/attitude', AttitudeTarget, queue_size=10)
@@ -100,6 +100,7 @@ class TrajectoryPublisher:
         # !Note: the service is only used for arm test, do not use it in real flight
         self.start_service = rospy.Service('start_trajectory', Trigger, self.start_trajectory)
         self.init_service = rospy.Service('initialize_trajectory', Trigger, self.initialize_trajectory)
+        self.init_arm_service = rospy.Service('init arm', Trigger, self.init_arm_service_callback)
         
         # --------------------------------------timer--------------------------------------
         # Timer 1: for publishing trajectory
@@ -303,8 +304,8 @@ class TrajectoryPublisher:
         self.control_command = self.mpc_controller.solver.us_squash[0]
         self.thrust_command = self.control_command[:len(self.thrust_command)]
         
-        rospy.logdebug('MPC state          : {}'.format(self.state[7:]))
-        rospy.logdebug('MPC reference state: {}'.format(self.traj_state_ref[self.traj_ref_index][7:]))
+        rospy.logdebug('MPC state          : {}'.format(self.state))
+        rospy.logdebug('MPC reference state: {}'.format(self.traj_state_ref[self.traj_ref_index]))
         rospy.logdebug('MPC control command: {}'.format(self.control_command))
         
         # get planned state
@@ -380,7 +381,7 @@ class TrajectoryPublisher:
         att_msg.thrust = self.total_thrust / self.max_thrust  # 60% 油门
         
         # 对推力进行限幅
-        att_msg.thrust = np.clip(att_msg.thrust, 0, 1)
+        att_msg.thrust = np.clip(att_msg.thrust, 0, 0.8)
 
         self.body_rate_thrust_pub.publish(att_msg)
     
@@ -621,31 +622,31 @@ class TrajectoryPublisher:
         yaw_msg.data = yaw
         self.yaw_pub.publish(yaw_msg)
         
-    def publish_flat_target(self, pos_world, vel_world, acc_world):
+    # def publish_flat_target(self, pos_world, vel_world, acc_world):
         
-        # Publish flat reference
-        flat_target_msg = FlatTarget()
-        flat_target_msg.header.stamp = rospy.Time.now()
-        flat_target_msg.header.frame_id = "world"
-        flat_target_msg.type_mask = flat_target_msg.IGNORE_SNAP_JERK  # Don't ignore acceleration
+    #     # Publish flat reference
+    #     flat_target_msg = FlatTarget()
+    #     flat_target_msg.header.stamp = rospy.Time.now()
+    #     flat_target_msg.header.frame_id = "world"
+    #     flat_target_msg.type_mask = flat_target_msg.IGNORE_SNAP_JERK  # Don't ignore acceleration
         
-        # Position
-        flat_target_msg.position.x = pos_world[0]
-        flat_target_msg.position.y = pos_world[1]
-        flat_target_msg.position.z = pos_world[2] + 3
+    #     # Position
+    #     flat_target_msg.position.x = pos_world[0]
+    #     flat_target_msg.position.y = pos_world[1]
+    #     flat_target_msg.position.z = pos_world[2] + 3
         
-        # Velocity (world frame)
-        flat_target_msg.velocity.x = vel_world[0]
-        flat_target_msg.velocity.y = vel_world[1]
-        flat_target_msg.velocity.z = vel_world[2]
+    #     # Velocity (world frame)
+    #     flat_target_msg.velocity.x = vel_world[0]
+    #     flat_target_msg.velocity.y = vel_world[1]
+    #     flat_target_msg.velocity.z = vel_world[2]
         
-        # Acceleration (world frame)
-        flat_target_msg.acceleration.x = acc_world[0]
-        flat_target_msg.acceleration.y = acc_world[1]
-        flat_target_msg.acceleration.z = acc_world[2]
+    #     # Acceleration (world frame)
+    #     flat_target_msg.acceleration.x = acc_world[0]
+    #     flat_target_msg.acceleration.y = acc_world[1]
+    #     flat_target_msg.acceleration.z = acc_world[2]
         
-        # Publish messages
-        self.flat_target_pub.publish(flat_target_msg)
+    #     # Publish messages
+    #     self.flat_target_pub.publish(flat_target_msg)
         
     def mav_state_callback(self, msg):
         self.current_state = msg
@@ -699,6 +700,33 @@ class TrajectoryPublisher:
         self.current_state.mode = "POSCTL"
         self.current_state.armed = False
         self.traj_finished = False
+        
+        return TriggerResponse(success=True, message="Trajectory initialized.")
+    
+    def init_arm_service_callback(self, req):
+        
+        # 初始化轨迹数据
+        msg = JointState()
+        
+        # 设置header
+        msg.header.stamp = rospy.Time.now()
+        msg.header.frame_id = "base_link"
+        
+        # 设置关节名称
+        msg.name = ['joint_1', 'joint_2']
+        
+        # 从优化轨迹中获取初始关节位置
+        # initial_state = self.traj_state_ref[0]
+        self.init_state = self.trajectory_obj.initial_state
+        # 假设前6个状态是关节角度
+        print("self.init_state: ", self.init_state[7:9])
+        msg.position = [self.init_state[7], self.init_state[8]]
+        msg.velocity = [1.0, 1.0]
+        msg.effort = [0.3, 0.1]
+        
+        # 发布初始关节状态
+        self.arm_control_pub.publish(msg)
+        
         
         return TriggerResponse(success=True, message="Trajectory initialized.")
 
