@@ -22,7 +22,7 @@ from geometry_msgs.msg import Point, Vector3
 from std_msgs.msg import Float32, Header
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from eagle_mpc_msgs.msg import SolverPerformance, MpcState, MpcControl
-from l1_control.L1AdaptiveController_v1 import L1AdaptiveControllerNew
+from l1_control.L1AdaptiveController_v1 import L1AdaptiveController_V1
 from l1_control.L1AdaptiveController_v2 import L1AdaptiveControllerAll
 from l1_control.L1AdaptiveController_v3 import L1AdaptiveControllerRefactored
 from typing import Dict, Any, Tuple
@@ -41,7 +41,6 @@ class TrajectoryPublisher:
         
         # Dynamic reconfigure server
         self.enable_l1_control = False
-        self.l1_version = 'v2'
         self.using_controller_v1 = False
         self.using_controller_v3 = False
 
@@ -59,7 +58,12 @@ class TrajectoryPublisher:
         self.arm_enabled = rospy.get_param('~arm_enabled', True)
         self.arm_control_mode = rospy.get_param('~arm_control_mode', 'position_velocity')  # position, position_velocity, position_velocity_effort, effort
         
-        self.max_thrust = rospy.get_param('~max_thrust', 10.0664 * 4)
+        self.max_thrust = rospy.get_param('~max_thrust', 8.0664 * 4)
+        
+        # for L1 controller
+        self.l1_version = rospy.get_param('~l1_version', 'v2')  # v1, v2, v3
+        self.As_coef = rospy.get_param('~As_coef', 10)
+        self.filter_time_constant = rospy.get_param('~filter_time_constant', 0.2)
         
         self.mpc_iter_num = 0
         
@@ -113,7 +117,6 @@ class TrajectoryPublisher:
         
         self.start_l1_control_service = rospy.Service('start_l1_control', Trigger, self.start_l1_control)
         self.stop_l1_control_service = rospy.Service('stop_l1_control', Trigger, self.stop_l1_control)
-        
         self.start_trajectory_service = rospy.Service('start_trajectory', Trigger, self.start_trajectory)
         
         # --------------------------------------timer--------------------------------------
@@ -155,23 +158,26 @@ class TrajectoryPublisher:
             self.l1_controller = L1AdaptiveControllerRefactored(
                 dt=dt_controller, 
                 robot_model=robot_model, 
-                As_coef=-10,
-                filter_time_constant=0.5
+                As_coef=self.As_coef,
+                filter_time_constant=self.filter_time_constant
             )
         elif self.l1_version == 'v1':
-            self.l1_controller = L1AdaptiveControllerNew(
+            self.l1_controller = L1AdaptiveController_V1(
                 dt=dt_controller, 
                 robot_model=robot_model, 
-                As_coef=-10,
-                filter_time_constant=0.5
+                As_coef=self.As_coef,
+                filter_time_constant=self.filter_time_constant
             )
-        else:
+        elif self.l1_version == 'v2':
             self.l1_controller = L1AdaptiveControllerAll(
                 dt=dt_controller, 
                 robot_model=robot_model, 
-                As_coef=-30,
-                filter_time_constant=0.1
+                As_coef=self.As_coef,
+                filter_time_constant=self.filter_time_constant
             )
+        else:
+            rospy.logwarn("Invalid L1 controller version")
+            return
 
         self.l1_controller.init_controller()
 
@@ -289,7 +295,7 @@ class TrajectoryPublisher:
                 # using MPC controller
                 self._init_l1_controller()
                 
-            self.publish_l1_control_command(self.l1_controller.u_mpc, self.l1_controller.u_ad)
+            self.publish_l1_control_command(self.l1_controller.u_mpc, self.l1_controller.u_ad, self.l1_controller.u_tracking)
             
             if self.arm_enabled:
                 self.publish_arm_control_command()
@@ -360,7 +366,28 @@ class TrajectoryPublisher:
         if self.l1_version == 'v3':
             self.l1_controller.compute_control(current_state.copy(), baseline_control_ft)
         elif self.l1_version == 'v1':
-            self.l1_controller.compute_control(current_state.copy(), baseline_control_ft) 
+            # Update current state and reference
+            self.l1_controller.current_state = current_state.copy()
+            self.l1_controller.z_ref_all = self.traj_state_ref[index_plan].copy()
+            self.l1_controller.z_ref = self.l1_controller.get_state_angle_single_rad(self.l1_controller.z_ref_all)[self.l1_controller.state_dim_euler:]
+            
+            # update z_real using current state
+            self.l1_controller.z_real = self.l1_controller.get_state_angle_single_rad(self.l1_controller.current_state)[self.l1_controller.state_dim_euler:]
+            
+            # transfer z_ref and z_measure to anglself.control_command
+            self.l1_controller.u_mpc = baseline_control_ft.copy()
+            
+            # 1. Update state predictor
+            self.l1_controller.update_z_hat()
+            
+            # 2. Update state predictor error
+            self.l1_controller.update_z_tilde()
+            
+            # 3. Estimate disturbance
+            self.l1_controller.update_sig_hat_v1()
+            
+            # 4. Filter the matched uncertainty estimate
+            self.l1_controller.update_u_ad()
         else:
             
             # Update current state and reference
@@ -454,7 +481,7 @@ class TrajectoryPublisher:
         
         self.arm_control_pub.publish(joint_msg)
         
-    def publish_l1_control_command(self, u_mpc, u_ad):
+    def publish_l1_control_command(self, u_mpc, u_ad, u_tracking):
         '''
         发布L1的控制指令
             u_ad: L1控制器得到的控制指令，包括推力、力矩和机械臂控制力矩， 如何转换成 PX4 控制指令 推力+角速度？
@@ -489,7 +516,7 @@ class TrajectoryPublisher:
         self.yaw_rate_ref = self.state_ref[self.mpc_controller.robot_model.nq + 5] + v_hat[5] * dt
         
         # get thrust command
-        self.total_thrust = np.sum(self.thrust_command) + u_ad[2] # add u_ad[2] to total thrust
+        self.total_thrust = np.sum(self.thrust_command) + u_ad[2] + u_tracking[2] # add u_ad[2] to total thrust +10
         
         att_msg = AttitudeTarget()
         att_msg.header.stamp = rospy.Time.now()
@@ -498,7 +525,7 @@ class TrajectoryPublisher:
         att_msg.type_mask = AttitudeTarget.IGNORE_ATTITUDE 
         
         # 机体系角速度 (rad/s)
-        att_msg.body_rate = Vector3(self.roll_rate_ref, self.pitch_rate_ref, self.yaw_rate_ref)  # 仅绕 Z 轴旋转 0.1 rad/s
+        att_msg.body_rate = Vector3(self.roll_rate_ref_old, self.pitch_rate_ref_old, self.yaw_rate_ref_old)  # 仅绕 Z 轴旋转 0.1 rad/s
         
         # 推力值 (范围 0 ~ 1)
         att_msg.thrust = self.total_thrust / self.max_thrust  # 60% 油门
@@ -784,8 +811,8 @@ class TrajectoryPublisher:
         return TriggerResponse(success=True, message="L1 control started.")
     
     def stop_l1_control(self, req):
-        self.l1_controller.init_controller()
         self.enable_l1_control = False
+        # self.l1_controller.init_controller()
         return TriggerResponse(success=True, message="L1 control stopped.")
     
     def start_trajectory(self, req):

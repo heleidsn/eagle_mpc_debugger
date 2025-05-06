@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2024-09-07 17:26:46
-LastEditTime: 2025-04-24 14:57:13
+LastEditTime: 2025-04-30 21:57:44
 Description: L1 adaptive controller with 9 state variables
 Version 3: Used for full actuation
 0916： fixed the bug in adaptive_law_new, change tau_body=u_b + u_ad_all + self.sig_hat_b
@@ -24,7 +24,7 @@ class L1AdaptiveControllerAll:
     param {*} self
     return {*}
     '''    
-    def __init__(self, dt, robot_model, As_coef, filter_time_constant):
+    def __init__(self, dt, robot_model, As_coef, filter_time_constant, using_z_real=False):
         self.dt = dt
         
         self.as_matrix_coef   = As_coef  # Hurwitz matrix
@@ -33,6 +33,8 @@ class L1AdaptiveControllerAll:
         self.using_vel_disturbance = False
         self.using_full_state = False         # choose whether to use full state or not
         self.flag_using_z_ref = False
+        
+        self.using_z_real = using_z_real
         
         self.robot_model = robot_model
         self.robot_model_data = self.robot_model.createData()
@@ -94,8 +96,9 @@ class L1AdaptiveControllerAll:
         self.z_tilde_tracking = self.z_real.copy() - self.z_ref.copy()
         
         # update tracking error
-        self.tracking_error_angle =  (self.get_state_angle_single_rad(self.z_ref_all) - self.get_state_angle_single_rad(self.current_state))[:9] 
-        self.tracking_error_velocity = self.z_ref_all[10:] - self.current_state[10:]
+        self.tracking_error = self.z_ref - self.z_real
+        self.tracking_error_angle =  self.tracking_error[:self.control_dim]  # 角度误差
+        self.tracking_error_velocity = self.tracking_error[self.control_dim:]  # 速度误差
     
     def update_z_hat_all(self):
         '''
@@ -128,8 +131,12 @@ class L1AdaptiveControllerAll:
         # linear_velocity_body = v[:3]  # 机体坐标系下的线速度
         # angular_velocity = v[3:]  # 角速度
         
-        linear_velocity_body_hat = self.z_hat[self.control_dim:self.control_dim+3].copy()  # 机体坐标系下的线速度
-        angular_velocity_hat = self.z_hat[self.control_dim+3:].copy()  # 角速度
+        if self.using_z_real:
+            linear_velocity_body_hat = self.z_real[self.control_dim:self.control_dim+3].copy()  # 机体坐标系下的线速度
+            angular_velocity_hat = self.z_real[self.control_dim+3:].copy()  # 角速度
+        else:
+            linear_velocity_body_hat = self.z_hat[self.control_dim:self.control_dim+3].copy()  # 机体坐标系下的线速度
+            angular_velocity_hat = self.z_hat[self.control_dim+3:].copy()  # 角速度
 
         # 更新线速度和角速度
         linear_velocity_next_body = linear_velocity_body_hat + a[:3] * dt  # 更新机体坐标系下的线速度
@@ -329,7 +336,10 @@ class L1AdaptiveControllerAll:
         # z_hat_new[self.control_dim:] = self.z_real[self.control_dim:] + z_hat_dot_vel * dt  # only update the velocity part
         
         # self.z_hat = z_hat_new.copy()    # in body frame
-        self.z_hat[self.control_dim:] = self.z_hat[self.control_dim:] + self.dt * z_hat_dot_vel.copy()  # in body frame
+        if self.using_z_real:
+            self.z_hat[self.control_dim:] = self.z_real[self.control_dim:] + self.dt * z_hat_dot_vel.copy()
+        else:
+            self.z_hat[self.control_dim:] = self.z_hat[self.control_dim:] + self.dt * z_hat_dot_vel.copy()
     
     def update_sig_hat_all_v2(self):
         '''
@@ -401,8 +411,8 @@ class L1AdaptiveControllerAll:
         
         # 加入对于tracking error的反馈
         if self.flag_using_z_ref:
-            error_p = np.array([0, 0, 0, 0, 0, 0, 20, 3, 0.5]) # 位置反馈的权重  error_p = np.array([0, 0, 0, 0, 0, 0, 1.8, 3, 0.03]) # 位置反馈的权重
-            self.u_tracking = self.tracking_error_angle * error_p * 0.5 + self.tracking_error_velocity * 0
+            error_p = np.array([1, 1, 1, 1, 1, 1]) # 位置反馈的权重  error_p = np.array([0, 0, 0, 0, 0, 0, 1.8, 3, 0.03]) # 位置反馈的权重
+            self.u_tracking = self.tracking_error_angle * error_p * 5 + self.tracking_error_velocity * 0
             
             return self.u_ad + self.u_tracking
         else:
