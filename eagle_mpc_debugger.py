@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-19 11:40:31
-LastEditTime: 2025-04-23 09:50:12
+LastEditTime: 2025-04-29 09:58:32
 Description: MPC Debug Interface, useful for debugging your MPC controller before deploying it to the real robot
 Github: https://github.com/heleidsn
 '''
@@ -45,8 +45,8 @@ class MpcDebugInterface(QWidget):
         self.trajectory_name = trajectory_name
         self.use_squash = useSquash
         self.dt_traj_opt = dt_traj_opt  # ms
-        self.yaml_path = rospy.get_param('~yaml_path', '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml')
-        self.arm_enabled = rospy.get_param('~arm_enabled', True)
+        self.yaml_path = rospy.get_param('~yaml_path', '/home/jetson/catkin_ams/src/eagle_mpc_ros/eagle_mpc_yaml')
+        self.arm_enabled = rospy.get_param('~arm_enabled', False)
         
         # numpy print options
         np.set_printoptions(formatter={'float': lambda x: f"{x:>4.2f}"})  # 固定 6 位小数
@@ -172,7 +172,7 @@ class MpcDebugInterface(QWidget):
         mass_layout.addStretch()
         
         # Add mass layout to main layout after time layout
-        self.layout.addLayout(mass_layout)
+        # self.layout.addLayout(mass_layout)
         
         # State modification
         state_layout = QHBoxLayout()
@@ -253,7 +253,7 @@ class MpcDebugInterface(QWidget):
         state_layout.setContentsMargins(10, 10, 10, 10)
         
         # Plot display: position, attitude, linear velocity, angular velocity
-        self.figure = Figure(figsize=(15, 20), dpi=100)  # 添加dpi参数
+        self.figure = Figure(figsize=(15, 20), dpi=90)  # 添加dpi参数
         # Set spacing between subplots
         self.figure.subplots_adjust(
             left=0.08,    # Left margin
@@ -264,8 +264,8 @@ class MpcDebugInterface(QWidget):
             hspace=0.35   # Vertical spacing between subplots，增加垂直间距
         )
         self.canvas = FigureCanvas(self.figure)
-        self.canvas.setMinimumHeight(1000)  # 设置最小高度
-        self.canvas.setMinimumWidth(1000)   # 设置最小宽度
+        self.canvas.setMinimumHeight(800)  # 设置最小高度
+        # self.canvas.setMinimumWidth(600)   # 设置最小宽度
         
         if self.plot_thrust_torque:
             plot_row_num = 4
@@ -311,8 +311,8 @@ class MpcDebugInterface(QWidget):
         
         # Add to main layout
         self.layout.addLayout(time_layout, stretch=1)
-        self.layout.addLayout(state_layout, stretch=2)
-        self.layout.addWidget(self.canvas, stretch=8)  # 给canvas更大的比例
+        self.layout.addLayout(state_layout, stretch=1)
+        self.layout.addWidget(self.canvas, stretch=20)  # 给canvas更大的比例
         self.setLayout(self.layout)
       
         # Data storage
@@ -658,7 +658,7 @@ class MpcDebugInterface(QWidget):
         slider.setMinimum(int(min_val * 100))
         slider.setMaximum(int(max_val * 100))
         slider.setValue(0)
-        slider.setFixedHeight(150)
+        slider.setFixedHeight(40)
         slider.setFixedWidth(30)
         slider.setStyleSheet("""
             QSlider::groove:vertical {
@@ -1254,11 +1254,11 @@ if __name__ == '__main__':
     # Settings
     using_ros = False
     mpc_name = 'rail'
-    mpc_yaml_path = '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml'
+    mpc_yaml_path = '/home/jetson/catkin_ams/src/eagle_mpc_ros/eagle_mpc_yaml'
     
     robot_name = 's500'
-    trajectory_name = 'displacement'
-    dt_traj_opt = 30  # ms
+    trajectory_name = 'displacement_real'
+    dt_traj_opt = 10  # ms
     useSquash = True
     
     if using_ros:

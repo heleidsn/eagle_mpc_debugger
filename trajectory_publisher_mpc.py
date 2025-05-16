@@ -47,19 +47,19 @@ class TrajectoryPublisher:
 
         # Get parameters
         self.robot_name = rospy.get_param('~robot_name', 's500')
-        self.trajectory_name = rospy.get_param('~trajectory_name', 'displacement')
+        self.trajectory_name = rospy.get_param('~trajectory_name', 'displacement_real')
         self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 10)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
         self.yaml_path = rospy.get_param('~yaml_path', '/home/jetson/catkin_ams/src/eagle_mpc_ros/eagle_mpc_yaml')
         self.control_rate = rospy.get_param('~control_rate', 100.0)  # Hz
         
-        self.odom_source = rospy.get_param('~odom_source', 'gazebo')  # mavros, gazebo  
+        self.odom_source = rospy.get_param('~odom_source', 'mavros')  # mavros, gazebo  
         
         self.control_mode = rospy.get_param('~control_mode', 'MPC')  # MPC, Geometric, PX4, MPC_L1
         self.arm_enabled = rospy.get_param('~arm_enabled', True)
         self.arm_control_mode = rospy.get_param('~arm_control_mode', 'position_velocity')  # position, position_velocity, position_velocity_effort, effort
         
-        self.max_thrust = rospy.get_param('~max_thrust', 10.0664 * 4)
+        self.max_thrust = rospy.get_param('~max_thrust', 8.5664 * 4)
         
         self.mpc_iter_num = 0
         
@@ -124,14 +124,14 @@ class TrajectoryPublisher:
         self.timer = rospy.Timer(rospy.Duration(1.0/self.control_rate), self.controller_callback)
         
         # timer 2: 1 Hz state check to start MPC controller
-        self.mpc_status_timer = rospy.Timer(rospy.Duration(1), self.mpc_status_time_callback)
+        self.mpc_status_timer = rospy.Timer(rospy.Duration(0.01), self.mpc_status_time_callback)
         
         rospy.loginfo("Trajectory publisher initialized")
         
     def init_mpc_controller(self):
         # create mpc controller to get tau_f
         mpc_name = "rail"
-        mpc_yaml = '{}/mpc/{}_mpc.yaml'.format(self.yaml_path, self.robot_name)
+        mpc_yaml = '{}/mpc/{}_mpc_real.yaml'.format(self.yaml_path, self.robot_name)
         self.mpc_controller = create_mpc_controller(
             mpc_name,
             self.trajectory_obj,
@@ -163,14 +163,14 @@ class TrajectoryPublisher:
                 dt=dt_controller, 
                 robot_model=robot_model, 
                 As_coef=-10,
-                filter_time_constant=0.5
+                filter_time_constant=0.3
             )
         else:
             self.l1_controller = L1AdaptiveControllerAll(
                 dt=dt_controller, 
                 robot_model=robot_model, 
-                As_coef=-30,
-                filter_time_constant=0.1
+                As_coef=-1,
+                filter_time_constant=0.5
             )
 
         self.l1_controller.init_controller()
@@ -406,7 +406,7 @@ class TrajectoryPublisher:
         att_msg.thrust = self.total_thrust / self.max_thrust  # 60% 油门
         
         # 对推力进行限幅
-        att_msg.thrust = np.clip(att_msg.thrust, 0, 0.8)
+        att_msg.thrust = np.clip(att_msg.thrust, 0, 1)
 
         self.body_rate_thrust_pub.publish(att_msg)
     
@@ -498,7 +498,7 @@ class TrajectoryPublisher:
         att_msg.type_mask = AttitudeTarget.IGNORE_ATTITUDE 
         
         # 机体系角速度 (rad/s)
-        att_msg.body_rate = Vector3(self.roll_rate_ref, self.pitch_rate_ref, self.yaw_rate_ref)  # 仅绕 Z 轴旋转 0.1 rad/s
+        att_msg.body_rate = Vector3(self.roll_rate_ref_old, self.pitch_rate_ref_old, self.yaw_rate_ref_old)  # 仅绕 Z 轴旋转 0.1 rad/s
         
         # 推力值 (范围 0 ~ 1)
         att_msg.thrust = self.total_thrust / self.max_thrust  # 60% 油门
