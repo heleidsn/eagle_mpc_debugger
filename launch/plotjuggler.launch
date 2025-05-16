@@ -1,0 +1,5 @@
+<launch>
+  <env name="ROS_MASTER_URI" value="http://远程ip:11311"/>
+  <env name="ROS_IP" value="本机ip"/>
+  <node pkg="plotjuggler" type="plotjuggler" name="plotjuggler"/>
+</launch>
