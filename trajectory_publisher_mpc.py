@@ -8,7 +8,7 @@ Description: Trajectory publisher for geometric controller, using MPC trajectory
 import rospy
 import numpy as np
 import time
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import Odometry, Path
 from geometry_msgs.msg import PoseStamped
 from geometry_msgs.msg import TwistStamped
 from eagle_mpc_msgs.msg import MpcState
@@ -32,6 +32,10 @@ from gazebo_msgs.msg import ModelStates
 
 import crocoddyl
 import pinocchio as pin
+
+from eagle_mpc_viz import MpcController
+from eagle_mpc_viz import WholeBodyStatePublisher
+from eagle_mpc_viz import WholeBodyTrajectoryPublisher
 
 
 class TrajectoryPublisher:
@@ -62,10 +66,12 @@ class TrajectoryPublisher:
         
         # for L1 controller
         self.l1_version = rospy.get_param('~l1_version', 'v2')  # v1, v2, v3
-        self.As_coef = rospy.get_param('~As_coef', 10)
+        self.As_coef = rospy.get_param('~As_coef', -1)
         self.filter_time_constant = rospy.get_param('~filter_time_constant', 0.2)
         
         self.mpc_iter_num = 0
+        self.mpc_start_cost = 0.0
+        self.mpc_final_cost = 0.0
         
         self.mpc_controller = None
         self.l1_controller = None
@@ -109,6 +115,25 @@ class TrajectoryPublisher:
         self.mpc_state_pub = rospy.Publisher("/mpc/state", MpcState, queue_size=10)
         self.arm_control_pub = rospy.Publisher('/desired_joint_states', JointState, queue_size=10)
         
+        self.partialTrajectoryPub = WholeBodyTrajectoryPublisher('whole_body_partial_trajectory_current',
+                                                                     self.mpc_controller.robot_model,
+                                                                     self.mpc_controller.platform_params,
+                                                                     frame_id="world")
+        
+        self.statePub_target = WholeBodyStatePublisher('whole_body_state_target',
+                                                self.mpc_controller.robot_model,
+                                                self.mpc_controller.platform_params,
+                                                frame_id="world")
+        
+        self.statePub_current = WholeBodyStatePublisher('whole_body_state_current',
+                                                self.mpc_controller.robot_model,
+                                                self.mpc_controller.platform_params,
+                                                frame_id="world")
+        
+        # Initialize Path publisher
+        self.path_pub = rospy.Publisher('uav_path', Path, queue_size=10)
+        self.path_msg = Path()
+        self.path_msg.header.frame_id = "map"
         
         # Services  
         # !Note: the service is only used for arm test, do not use it in real flight
@@ -276,7 +301,7 @@ class TrajectoryPublisher:
             vel_world = np.zeros(3)
             acc_world = np.zeros(3)
         
-        # Publish reference
+        # Publish control command
         if self.control_mode == 'PX4':
             # using default PX4 controller, recieve p, v, a
             self.publish_mavros_setpoint_raw(ref_state[0:3], vel_world, acc_world, yaw, 0)  
@@ -304,6 +329,10 @@ class TrajectoryPublisher:
             self.publish_mpc_l1_debug_data()
         else:
             rospy.logwarn("Invalid control mode")
+            
+        # Publish whole body state
+        self.publish_wholebody_state_target()
+        self.publish_wholebody_state_current()
 
     def get_mpc_command(self):
         self.mpc_controller.problem.x0 = self.state
@@ -328,6 +357,8 @@ class TrajectoryPublisher:
         # get MPC debug info
         self.mpc_iter_num = self.mpc_controller.solver.iter
         self.solving_time = (time_end - time_start).to_sec()
+        self.mpc_start_cost = self.mpc_controller.logger.costs[0]
+        self.mpc_final_cost = self.mpc_controller.logger.costs[-1]
         rospy.logdebug("MPC index: {} Solving time: {}".format(self.mpc_ref_index, self.solving_time))
          
         # get mpc control command
@@ -627,14 +658,21 @@ class TrajectoryPublisher:
         euler_ref = euler_from_quaternion(quat_ref)
         state_array_ref_new = np.hstack((state_ref[0:3], euler_ref, state_ref[7:]))
         
+        state_ref_next = self.state_ref.copy()
+        euler_ref_next = euler_from_quaternion(state_ref_next[3:7])
+        state_array_ref_next = np.hstack((state_ref_next[0:3], euler_ref_next, state_ref_next[7:]))
+        
         debug_msg.state = state_array_new
         debug_msg.state_ref = state_array_ref_new
         debug_msg.state_error = state_array_ref_new - state_array_new
+        debug_msg.state_ref_next = state_array_ref_next # state next reference
         
-        # 填充求解器信息
-        # debug_msg.mpc_time_step = self.mpc_ref_index
-        debug_msg.mpc_time_step = self.mpc_iter_num
+        # MPC performance info
+        debug_msg.mpc_time_step = self.mpc_ref_index
+        debug_msg.mpc_iter_num = self.mpc_iter_num
         debug_msg.solving_time = self.solving_time
+        debug_msg.mpc_start_cost = self.mpc_start_cost
+        debug_msg.mpc_final_cost = self.mpc_final_cost
         
         # u_mpc need to transform to force/torque
         u_mpc_motor_thrust = self.control_command[:self.mpc_controller.platform_params.n_rotors]
@@ -735,30 +773,28 @@ class TrajectoryPublisher:
         
     def callback_model_state_gazebo(self, msg):
         model_states = msg
-        # Find the index of the robot model in the model_states
         try:
             index = model_states.name.index(self.robot_name)
-            # print("Robot model index in Gazebo model states: ", index)
-            # Get the pose and twist of the robot model
             pose = model_states.pose[index]
             twist = model_states.twist[index]
+            
             # Update the state with the pose and twist
             self.state[0:3] = [pose.position.x,
                             pose.position.y,
-                            pose.position.z-0.224]
+                            pose.position.z - 0.224]
             self.state[3:7] = [pose.orientation.x,
                             pose.orientation.y,
                             pose.orientation.z,
                             pose.orientation.w]
             self.state[7:10] = [twist.linear.x,
-                            twist.linear.y,
-                            twist.linear.z]
+                                twist.linear.y,
+                                twist.linear.z]
             self.state[10:13] = [twist.angular.x,
                                 twist.angular.y,
                                 twist.angular.z]
-        except ValueError: 
+        except ValueError:
             rospy.logerr("Robot model not found in Gazebo model states")
-            return    
+            return  
     
     def callback_model_local_position(self, msg):
         """处理来自MAVROS的本地位置信息"""
@@ -825,7 +861,58 @@ class TrajectoryPublisher:
         
         return TriggerResponse(success=True, message="Trajectory started.")
 
+    def publish_wholebody_state_target(self):
+        x = self.traj_state_ref[self.traj_ref_index]
+        nq = self.mpc_controller.robot_model.nq
+        nRotors = self.mpc_controller.platform_params.n_rotors
+        
+        u = self.traj_solver.us_squash[self.traj_ref_index-1]
+        
+        # publish  t, q, v, thrusts, tau
+        self.statePub_target.publish(0.123, x[:nq], x[nq:], u[:nRotors], u[nRotors:])
 
+        # qs, vs, ts = [], [], []
+        # for x in self.mpc_controller.xss[self.traj_ref_index]:
+        #     qs.append(x[:nq])
+        #     vs.append(x[nq:])
+        #     ts.append(0.1)
+        # if self.horizon_enabled:
+        #     self.partialTrajectoryPub.publish(ts[0::2], qs[0::2], vs[0::2])
+
+    def publish_wholebody_state_current(self):
+        x = self.state
+        nq = self.mpc_controller.robot_model.nq
+        nRotors = self.mpc_controller.platform_params.n_rotors
+        
+        u = self.mpc_controller.solver.us_squash[0]
+        
+        # publish  t, q, v, thrusts, tau
+        self.statePub_current.publish(0.123, x[:nq], x[nq:], u[:nRotors], u[nRotors:])
+        
+        # publish plan horizon
+        qs, vs, ts = [], [], []
+        for x in self.mpc_controller.solver.xs:
+            qs.append(x[:nq])
+            vs.append(x[nq:])
+            ts.append(0.1)
+        self.partialTrajectoryPub.publish(ts[0::2], qs[0::2], vs[0::2])
+        
+        # Add current position to the path
+        pose_msg = PoseStamped()
+        pose_msg.header.stamp = rospy.Time.now()
+        pose_msg.header.frame_id = "map"
+        pose_msg.pose.position.x = self.state[0]
+        pose_msg.pose.position.y = self.state[1]
+        pose_msg.pose.position.z = self.state[2]
+        self.path_msg.poses.append(pose_msg)
+        
+        # 限制路径长度
+        if len(self.path_msg.poses) > 1000:
+            self.path_msg.poses.pop(0)  # 移除最早的点
+        
+        # Publish the path
+        self.path_pub.publish(self.path_msg)
+        
 if __name__ == '__main__':
     try:
         trajectory_publisher = TrajectoryPublisher()
