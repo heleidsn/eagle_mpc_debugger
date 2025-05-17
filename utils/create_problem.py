@@ -40,8 +40,13 @@ def create_mpc_controller(mpc_name, trajectory, traj_state_ref, dt_traj_opt, mpc
     elif mpc_name == 'carrot':
         mpcController = eagle_mpc.CarrotMpc(trajectory, traj_state_ref, dt_traj_opt, mpc_yaml_path)
         
-    # mpcController.solver.setCallbacks([crocoddyl.CallbackVerbose()])  # 设置回调函数 
+    logger = crocoddyl.CallbackLogger()
+    CallbackVerbose = crocoddyl.CallbackVerbose()
+    
+    mpcController.solver.setCallbacks([logger])  # 设置回调函数 
     mpcController.updateProblem(0)
-    mpcController.solver.convergence_init = 1e-3
+    mpcController.solver.convergence_init = 1e-12
+    
+    mpcController.logger = logger
     
     return mpcController

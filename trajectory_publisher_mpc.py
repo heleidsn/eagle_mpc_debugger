@@ -50,7 +50,7 @@ class TrajectoryPublisher:
 
         # Get parameters
         self.robot_name = rospy.get_param('~robot_name', 's500')
-        self.trajectory_name = rospy.get_param('~trajectory_name', 'displacement_real')
+        self.trajectory_name = rospy.get_param('~trajectory_name', 'displacement_real_fast')
         self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 10)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
         self.yaml_path = rospy.get_param('~yaml_path', '/home/jetson/catkin_ams/src/eagle_mpc_ros/eagle_mpc_yaml')
@@ -67,7 +67,7 @@ class TrajectoryPublisher:
         # for L1 controller
         self.l1_version = rospy.get_param('~l1_version', 'v2')  # v1, v2, v3
         self.As_coef = rospy.get_param('~As_coef', -1)
-        self.filter_time_constant = rospy.get_param('~filter_time_constant', 0.2)
+        self.filter_time_constant = rospy.get_param('~filter_time_constant', 0.4)
         
         self.mpc_iter_num = 0
         self.mpc_start_cost = 0.0
@@ -152,7 +152,7 @@ class TrajectoryPublisher:
         self.timer = rospy.Timer(rospy.Duration(1.0/self.control_rate), self.controller_callback)
         
         # timer 2: 1 Hz state check to start MPC controller
-        self.mpc_status_timer = rospy.Timer(rospy.Duration(0.01), self.mpc_status_time_callback)
+        self.mpc_status_timer = rospy.Timer(rospy.Duration(1), self.mpc_status_time_callback)
         
         rospy.loginfo("Trajectory publisher initialized")
         

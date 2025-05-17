@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-24 10:31:39
-LastEditTime: 2025-04-03 10:28:45
+LastEditTime: 2025-05-16 16:43:34
 Description: Run planning to generate planning results and save them to file
 Github: https://github.com/heleidsn
 '''
@@ -139,7 +139,7 @@ def main():
     mpc_yaml_path = '/home/jetson/catkin_ams/src/eagle_mpc_ros/eagle_mpc_yaml'
     
     robot_name = 's500'   # s500, s500_uam, hexacopter370_flying_arm_3
-    trajectory_name = 'hover'
+    trajectory_name = 'displacement_real_fast'
     dt_traj_opt = 10  # ms
     useSquash = True
     
