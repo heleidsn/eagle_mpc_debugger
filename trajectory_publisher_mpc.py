@@ -325,8 +325,10 @@ class TrajectoryPublisher:
             self.publish_reference_yaw(yaw)
         elif self.control_mode == 'MPC':
             # using MPC controller
+            t0 = time.time()
             self.get_mpc_command()
-            
+            t1 = time.time()
+            rospy.loginfo(f"MPC calculate time: {(t1-t0)*1000:.3f} ms")
             if self.enable_l1_control:
                 # using L1 controller
                 self.get_l1_control(self.state, self.mpc_ref_index)
@@ -436,6 +438,7 @@ class TrajectoryPublisher:
         else:
             
             # Update current state and reference
+            t1 = time.time()
             self.l1_controller.current_state = current_state.copy()
             self.l1_controller.z_ref_all = self.traj_state_ref[index_plan].copy()
             self.l1_controller.z_ref = self.l1_controller.get_state_angle_single_rad(self.l1_controller.z_ref_all)
@@ -446,17 +449,30 @@ class TrajectoryPublisher:
             # transfer z_ref and z_measure to anglself.control_command
             self.l1_controller.u_mpc = baseline_control_ft.copy()
             
+            t2 = time.time()
             # 1. Update state predictor
             self.l1_controller.update_z_hat()
+            
+            t3 = time.time()
             
             # 2. Update state predictor error
             self.l1_controller.update_z_tilde()
             
+            t4 = time.time()
             # 3. Estimate disturbance
             self.l1_controller.update_sig_hat_all_v2()
-            
+            t5 = time.time()
             # 4. Filter the matched uncertainty estimate
             self.l1_controller.update_u_ad()
+            t6 = time.time()
+            
+            rospy.loginfo(f"L1 state prep time: {(t2-t1)*1000:.3f} ms")
+            rospy.loginfo(f"L1 update_z_hat time: {(t3-t2)*1000:.3f} ms")
+            rospy.loginfo(f"L1 update_z_tilde time: {(t4-t3)*1000:.3f} ms")
+            rospy.loginfo(f"L1 update_sig_hat time: {(t5-t4)*1000:.3f} ms")
+            rospy.loginfo(f"L1 update_u_ad time: {(t6-t5)*1000:.3f} ms")
+            rospy.loginfo(f"L1 total time: {(t6-t1)*1000:.3f} ms")
+            
               
     def publish_mpc_control_command(self):
         '''
