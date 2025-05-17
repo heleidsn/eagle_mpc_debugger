@@ -37,6 +37,8 @@ from eagle_mpc_viz import MpcController
 from eagle_mpc_viz import WholeBodyStatePublisher
 from eagle_mpc_viz import WholeBodyTrajectoryPublisher
 
+from collections import deque
+
 
 class TrajectoryPublisher:
     def __init__(self): 
@@ -77,6 +79,8 @@ class TrajectoryPublisher:
         self.l1_controller = None
         
         self.using_position_error_feedback = False
+        
+        self.last_times = deque(maxlen=100)  # 存储最近100次回调时间
         
         # set numpy print precision
         # np.set_printoptions(precision=2, suppress=True)
@@ -257,6 +261,16 @@ class TrajectoryPublisher:
 
     def controller_callback(self, event):
         """Timer callback to publish trajectory setpoints"""
+        
+        now = time.time()
+        self.last_times.append(now)
+
+        # 计算频率
+        if len(self.last_times) >= 2:
+            dt_list = [t2 - t1 for t1, t2 in zip(self.last_times, list(self.last_times)[1:])]
+            avg_dt = sum(dt_list) / len(dt_list)
+            freq = 1.0 / avg_dt if avg_dt > 0 else 0
+            rospy.loginfo_throttle(1.0, f"controller running freq: {freq:.2f} Hz")
         
         # Three conditions: not_started, started, finished       
         if self.controller_started and not self.traj_finished:
