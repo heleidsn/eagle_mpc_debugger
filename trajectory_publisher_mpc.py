@@ -56,7 +56,7 @@ class TrajectoryPublisher:
         self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 10)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
         self.yaml_path = rospy.get_param('~yaml_path', '/home/jetson/catkin_ams/src/eagle_mpc_ros/eagle_mpc_yaml')
-        self.control_rate = rospy.get_param('~control_rate', 100.0)  # Hz
+        self.control_rate = rospy.get_param('~control_rate', 50.0)  # Hz
         
         self.odom_source = rospy.get_param('~odom_source', 'mavros')  # mavros, gazebo  
         
@@ -328,14 +328,15 @@ class TrajectoryPublisher:
             t0 = time.time()
             self.get_mpc_command()
             t1 = time.time()
-            rospy.loginfo(f"MPC calculate time: {(t1-t0)*1000:.3f} ms")
+            
             if self.enable_l1_control:
                 # using L1 controller
                 self.get_l1_control(self.state, self.mpc_ref_index)
             else:
                 # using MPC controller
                 self._init_l1_controller()
-                
+            
+            t2 = time.time()
             self.publish_l1_control_command(self.l1_controller.u_mpc, self.l1_controller.u_ad, self.l1_controller.u_tracking)
             
             if self.arm_enabled:
@@ -343,6 +344,10 @@ class TrajectoryPublisher:
                 
             # debug info
             self.publish_mpc_l1_debug_data()
+
+            t3 = time.time()
+
+            rospy.loginfo_throttle(1, f"MPC calculate time: {(t1-t0)*1000:.3f} ms, L1 calculate time: {(t2-t1)*1000:.3f} ms, publish time: {(t3-t2)*1000:.3f} ms")
         else:
             rospy.logwarn("Invalid control mode")
             
@@ -460,18 +465,18 @@ class TrajectoryPublisher:
             
             t4 = time.time()
             # 3. Estimate disturbance
-            self.l1_controller.update_sig_hat_all_v2()
+            self.l1_controller.update_sig_hat_all_v2_new()
             t5 = time.time()
             # 4. Filter the matched uncertainty estimate
             self.l1_controller.update_u_ad()
             t6 = time.time()
             
-            rospy.loginfo(f"L1 state prep time: {(t2-t1)*1000:.3f} ms")
-            rospy.loginfo(f"L1 update_z_hat time: {(t3-t2)*1000:.3f} ms")
-            rospy.loginfo(f"L1 update_z_tilde time: {(t4-t3)*1000:.3f} ms")
-            rospy.loginfo(f"L1 update_sig_hat time: {(t5-t4)*1000:.3f} ms")
-            rospy.loginfo(f"L1 update_u_ad time: {(t6-t5)*1000:.3f} ms")
-            rospy.loginfo(f"L1 total time: {(t6-t1)*1000:.3f} ms")
+            # rospy.loginfo(f"L1 state prep time: {(t2-t1)*1000:.3f} ms")
+            # rospy.loginfo(f"L1 update_z_hat time: {(t3-t2)*1000:.3f} ms")
+            # rospy.loginfo(f"L1 update_z_tilde time: {(t4-t3)*1000:.3f} ms")
+            # rospy.loginfo(f"L1 update_sig_hat time: {(t5-t4)*1000:.3f} ms")
+            # rospy.loginfo(f"L1 update_u_ad time: {(t6-t5)*1000:.3f} ms")
+            # rospy.loginfo(f"L1 total time: {(t6-t1)*1000:.3f} ms")
             
               
     def publish_mpc_control_command(self):
