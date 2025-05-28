@@ -52,7 +52,7 @@ class TrajectoryPublisher:
 
         # Get parameters
         self.robot_name = rospy.get_param('~robot_name', 's500')
-        self.trajectory_name = rospy.get_param('~trajectory_name', 'displacement_real_fast')
+        self.trajectory_name = rospy.get_param('~trajectory_name', 'displacement_real_slow')
         self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 10)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
         self.yaml_path = rospy.get_param('~yaml_path', '/home/jetson/catkin_ams/src/eagle_mpc_ros/eagle_mpc_yaml')
@@ -74,6 +74,8 @@ class TrajectoryPublisher:
         self.mpc_iter_num = 0
         self.mpc_start_cost = 0.0
         self.mpc_final_cost = 0.0
+        self.mpc_ref_index = 0
+        self.traj_ref_index = 0
         
         self.mpc_controller = None
         self.l1_controller = None
@@ -164,13 +166,30 @@ class TrajectoryPublisher:
         # create mpc controller to get tau_f
         mpc_name = "rail"
         mpc_yaml = '{}/mpc/{}_mpc_real.yaml'.format(self.yaml_path, self.robot_name)
-        self.mpc_controller = create_mpc_controller(
+        
+        # Initialize trajectory tracking MPC
+        self.trajectory_mpc = create_mpc_controller(
             mpc_name,
             self.trajectory_obj,
             self.traj_state_ref,
             self.dt_traj_opt,
             mpc_yaml
         )
+        
+        # Create hover reference state (all states are the same as initial state)
+        hover_state_ref = [self.traj_state_ref[0]] * len(self.traj_state_ref)
+        
+        # Initialize hover MPC
+        self.hover_mpc = create_mpc_controller(
+            mpc_name,
+            self.trajectory_obj,
+            hover_state_ref,  # Use hover reference state
+            self.dt_traj_opt,
+            mpc_yaml
+        )
+        
+        # Set initial MPC controller
+        self.mpc_controller = self.hover_mpc
         
         self.state = self.mpc_controller.state.zero()
         
@@ -225,7 +244,7 @@ class TrajectoryPublisher:
             self.trajectory_duration = self.trajectory_obj.duration  # ms
             rospy.loginfo(f"Loaded trajectory with duration: {self.trajectory_duration}ms")
             
-            # Pre-calculate accelerations using finite differences
+            # Pre-calculate accelerations using finite differences, only used for other controllers
             self.accelerations = []
             dt = self.dt_traj_opt / 1000.0  # Convert to seconds
             
@@ -335,8 +354,8 @@ class TrajectoryPublisher:
             else:
                 # using MPC controller
                 self._init_l1_controller()
-            
             t2 = time.time()
+            
             self.publish_l1_control_command(self.l1_controller.u_mpc, self.l1_controller.u_ad, self.l1_controller.u_tracking)
             
             if self.arm_enabled:
@@ -346,7 +365,9 @@ class TrajectoryPublisher:
             self.publish_mpc_l1_debug_data()
 
             t3 = time.time()
-
+            
+            rospy.loginfo_throttle(1.0, f"MPC calculate time: {(t1-t0)*1000:.3f} ms")
+            rospy.loginfo_throttle(1.0, f"L1 state prep time: {(t2-t1)*1000:.3f} ms")
             rospy.loginfo_throttle(1, f"MPC calculate time: {(t1-t0)*1000:.3f} ms, L1 calculate time: {(t2-t1)*1000:.3f} ms, publish time: {(t3-t2)*1000:.3f} ms")
         else:
             rospy.logwarn("Invalid control mode")
@@ -359,10 +380,16 @@ class TrajectoryPublisher:
         self.mpc_controller.problem.x0 = self.state
             
         if self.controller_started:
-            self.controller_time = rospy.Time.now() - self.controller_start_time
-            self.mpc_ref_index = int(self.controller_time.to_sec() * 1000.0)
+            # Switch to trajectory tracking MPC
+            self.mpc_controller = self.trajectory_mpc
+            # self.controller_time = rospy.Time.now() - self.controller_start_time
+            # self.mpc_ref_index = int(self.controller_time.to_sec() * 1000.0)
+            # self.traj_ref_index = int(self.mpc_ref_index / self.dt_traj_opt)
         else:
-            self.mpc_ref_index = 0
+            # Use hover MPC
+            self.mpc_controller = self.hover_mpc
+            # self.mpc_ref_index = 0
+            # self.traj_ref_index = 0
             
         # update problem
         self.mpc_controller.updateProblem(self.mpc_ref_index)   # update problem using current time in ms
@@ -391,6 +418,10 @@ class TrajectoryPublisher:
         rospy.logdebug('MPC control command: {}'.format(self.control_command))
         
         # get planned state
+        # if self.controller_started:
+        #     self.state_ref = self.mpc_controller.solver.xs[1]
+        # else:
+        #     self.state_ref = self.traj_state_ref[self.traj_ref_index]
         self.state_ref = self.mpc_controller.solver.xs[1]
         
         # get body rate command from planned next state
@@ -621,16 +652,6 @@ class TrajectoryPublisher:
         else:
             rospy.loginfo("Model is not armed")
             self.controller_started = False
-            
-        # check if all conditions are met
-        if not self.controller_started and self.current_state.mode == "OFFBOARD" and self.current_state.armed:
-            rospy.loginfo("All conditions met for MPC start")
-            self.controller_started = True
-            self.traj_finished = False
-            self.controller_start_time = rospy.Time.now()
-        else:
-            # self.controller_started = False
-            rospy.loginfo("Not all conditions met for MPC start")
         
     def publish_body_rate_thrust(self, yaw_rate, thrust):
         msg = AttitudeTarget()
@@ -887,6 +908,13 @@ class TrajectoryPublisher:
         return TriggerResponse(success=True, message="L1 control stopped.")
     
     def start_trajectory(self, req):
+        # Check if we're in offboard mode and armed
+        if self.current_state.mode != "OFFBOARD":
+            return TriggerResponse(success=False, message="Must be in OFFBOARD mode to start trajectory")
+            
+        if not self.current_state.armed:
+            return TriggerResponse(success=False, message="Must be armed to start trajectory")
+            
         # Start trajectory
         self.controller_started = True
         self.traj_finished = False
@@ -894,7 +922,7 @@ class TrajectoryPublisher:
         # Set the start time for the trajectory
         self.controller_start_time = rospy.Time.now()
         
-        return TriggerResponse(success=True, message="Trajectory started.")
+        return TriggerResponse(success=True, message="Trajectory started")
 
     def publish_wholebody_state_target(self):
         x = self.traj_state_ref[self.traj_ref_index]
