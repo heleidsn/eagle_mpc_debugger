@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-24 10:31:39
-LastEditTime: 2025-04-24 12:50:39
+LastEditTime: 2025-05-30 10:24:44
 Description: Run planning to generate planning results and save them to file
 Github: https://github.com/heleidsn
 '''
@@ -138,12 +138,12 @@ def main():
     mpc_name = 'rail'
     mpc_yaml_path = '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml'
     
-    robot_name = 's500'   # s500, s500_uam, hexacopter370_flying_arm_3
-    trajectory_name = 'hover'
+    robot_name = 's500_uam'   # s500, s500_uam, hexacopter370_flying_arm_3
+    trajectory_name = 'catch_vicon'
     dt_traj_opt = 10  # ms
     useSquash = True
     
-    gepetto_vis = False
+    gepetto_vis = False   # 
     
     save_file = False
     save_dir = None
@@ -228,23 +228,26 @@ def main():
     )
     
     if gepetto_vis:
-      robot = example_robot_data.load(trajectory_obj.robot_model.name)
+        if robot_name == 's500_uam':
+            robot_name = 's500_uam_simple'
+        robot = example_robot_data.load(robot_name)
 
-      rate = -1
-      freq = 1
-      cameraTF = [-0.03, 4.4, 2.3, 0, 0.7071, 0, 0.7071]
-      
-      gepetto.corbaserver.Client()
+        rate = -1
+        freq = 1
+        cameraTF = [-0.03, 4.4, 2.3, 0, 0.7071, 0, 0.7071]
+        
+        gepetto.corbaserver.Client()
 
-      display = crocoddyl.GepettoDisplay(
-          robot, rate, freq, cameraTF, floor=False)
-      
-      # display robot with initial state
-    #   display.display(np.array([0, 0, 0, 0, 0, 0, 1, 0, 0]))
+        display = crocoddyl.GepettoDisplay(
+            robot, rate, freq, cameraTF, floor=False)
+        
+        # display robot with initial state
+        # initial_state = np.array([0, 0, 0, 0, 0, 0, 1, 0, 0])
+        # display.display(initial_state)
 
-      while True:
-          display.displayFromSolver(trajectory)
-          time.sleep(1.0)
+        while True:
+            display.displayFromSolver(trajectory)
+            time.sleep(1.0)
 
 if __name__ == '__main__':
     main() 

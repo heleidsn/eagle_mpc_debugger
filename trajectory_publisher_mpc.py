@@ -51,8 +51,8 @@ class TrajectoryPublisher:
         self.using_controller_v3 = False
 
         # Get parameters
-        self.robot_name = rospy.get_param('~robot_name', 's500')
-        self.trajectory_name = rospy.get_param('~trajectory_name', 'displacement')
+        self.robot_name = rospy.get_param('~robot_name', 's500_uam')     # s500, s500_uam, hexacopter370_flying_arm_3
+        self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon')   # displacement, catch_vicon
         self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 10)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
         self.yaml_path = rospy.get_param('~yaml_path', '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml')
@@ -546,17 +546,17 @@ class TrajectoryPublisher:
         # print(ref_control)
         
         if self.arm_control_mode == 'position':
-            joint_msg.position = ref_state[7:9]
-            joint_msg.velocity = [0.0, 0.0]
+            joint_msg.position = -ref_state[7:9]
+            joint_msg.velocity = [0.2, 0.2]
             joint_msg.effort = [0.0, 0.0]
         elif self.arm_control_mode == 'position_velocity':
-            joint_msg.position = ref_state[7:9]
-            joint_msg.velocity = ref_state[-2:]
+            joint_msg.position = -ref_state[7:9]
+            joint_msg.velocity = -ref_state[-2:]
             joint_msg.effort = [0.0, 0.0]
         elif self.arm_control_mode == 'position_velocity_effort':  # this mode is not working, effort is not used
-            joint_msg.position = ref_state[7:9]
-            joint_msg.velocity = ref_state[-2:]
-            joint_msg.effort = ref_control[-2:]*1000
+            joint_msg.position = -ref_state[7:9]
+            joint_msg.velocity = -ref_state[-2:]
+            joint_msg.effort = -ref_control[-2:]*1000
         elif self.arm_control_mode == 'effort':
             joint_msg.position = [0.0, 0.0]
             joint_msg.velocity = [0.0, 0.0]
