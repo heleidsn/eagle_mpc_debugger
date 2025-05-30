@@ -58,23 +58,23 @@ ports:
         # This servo doesn't have any optional values defined, the global defaults will be used
         #
 
-      # - id: 2       # for end effector 1
-      #   joint_name: joint_3
-      #   zero_pos: 2860
-      #   min_pos: 2860
-      #   max_pos: 3400
-
-      #   max_vel: 1.2          # maximum joint speed (rad/s) (in position or velocity control)
-      #   torque_limit: 1.0      # maximum motor torque for all modes, given as a fraction of rated max (0-1)
-
-      - id: 3          # for end effector 2 (soft)
-        joint_name: joint_4
-        zero_pos: 1000
-        min_pos: 1000
-        max_pos: 1600
+      - id: 2            # for end effector 1 (hard)
+        joint_name: joint_3
+        zero_pos: 2860
+        min_pos: 2860
+        max_pos: 3400
 
         max_vel: 1.2          # maximum joint speed (rad/s) (in position or velocity control)
         torque_limit: 1.0      # maximum motor torque for all modes, given as a fraction of rated max (0-1)
+
+      # - id: 3          # for end effector 2 (soft)
+      #   joint_name: joint_4
+      #   zero_pos: 1000
+      #   min_pos: 1000
+      #   max_pos: 1600
+
+      #   max_vel: 1.2          # maximum joint speed (rad/s) (in position or velocity control)
+      #   torque_limit: 1.0      # maximum motor torque for all modes, given as a fraction of rated max (0-1)
 
   # more ports can be defined in the same manner as above, each port can even have a different baudrate and protcol
   # - name: Port_2
