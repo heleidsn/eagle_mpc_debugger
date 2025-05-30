@@ -177,7 +177,12 @@ class TrajectoryPublisher:
         )
         
         # Create hover reference state (all states are the same as initial state)
-        hover_state_ref = [self.traj_state_ref[0]] * len(self.traj_state_ref)
+        # note: self.traj_state_ref[0] is not the initial state, it is the first state of the trajectory
+        
+        # get initial state
+        initial_state = self.trajectory_obj.initial_state
+        
+        hover_state_ref = [initial_state] * len(self.traj_state_ref)
         
         # Initialize hover MPC
         self.hover_mpc = create_mpc_controller(
