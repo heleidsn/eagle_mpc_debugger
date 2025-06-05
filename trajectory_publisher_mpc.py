@@ -52,8 +52,8 @@ class TrajectoryPublisher:
 
         # Get parameters
         self.robot_name = rospy.get_param('~robot_name', 's500_uam')     # s500, s500_uam, hexacopter370_flying_arm_3
-        self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon_real_fast')   # displacement, catch_vicon
-        self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 10)  # ms
+        self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon_real_new')   # displacement, catch_vicon
+        self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 20)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
         self.yaml_path = rospy.get_param('~yaml_path', '/home/jetson/catkin_ams/src/eagle_mpc_ros/eagle_mpc_yaml')
         self.control_rate = rospy.get_param('~control_rate', 50.0)  # Hz
@@ -782,7 +782,7 @@ class TrajectoryPublisher:
         debug_msg.u_tracking = self.l1_controller.u_tracking.tolist()
         
         # Calculate gripper position and orientation using forward kinematics
-        model = self.mpc_controller.robot_model
+        model = self.trajectory_obj.robot_model
         data = model.createData()
         
         # Get current state
@@ -795,7 +795,7 @@ class TrajectoryPublisher:
         
         # Get gripper frame ID
         gripper_frame_id = model.getFrameId("gripper_link")
-        if gripper_frame_id < model.frames.size():
+        if gripper_frame_id < model.nframes:
             # Get gripper position and orientation
             gripper_pose = data.oMf[gripper_frame_id]
             gripper_position = gripper_pose.translation
