@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-24 10:31:39
-LastEditTime: 2025-05-30 10:24:44
+LastEditTime: 2025-06-04 10:47:03
 Description: Run planning to generate planning results and save them to file
 Github: https://github.com/heleidsn
 '''
@@ -20,6 +20,7 @@ import example_robot_data
 import crocoddyl
 import time
 import gepetto
+import pinocchio as pin
 
 def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_opt, state_array,  save_dir=None):
     """Plot optimized trajectory results.
@@ -34,7 +35,6 @@ def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_op
     # Create time vector
     n_points_control = len(control_force_torque)
     n_points_state = len(traj_state_ref)
-    # n_points = min(len(traj_state_ref), len(control_force_torque))
     time_control = np.arange(n_points_control) * dt_traj_opt / 1000  # Convert to seconds
     time_state = np.arange(n_points_state) * dt_traj_opt / 1000  # Convert to seconds
     
@@ -51,8 +51,6 @@ def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_op
     # Create figure for controls
     fig_controls = plt.figure(figsize=(16, 10), dpi=150)
     fig_controls.suptitle('Control Inputs', fontsize=16)
-    
-    # state_array = np.array(traj_state_ref)
     
     control_num = control_force_torque.shape[1]
     state_num = trajectory.robot_model.nv
@@ -88,6 +86,202 @@ def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_op
         
         state_ref_world_frame[i, state_num:state_num+3] = vel_world.copy()
     
+    # Calculate gripper positions and orientations using pinocchio
+    gripper_positions = []
+    gripper_orientations = []
+    
+    # Get robot model from trajectory
+    model = trajectory.robot_model
+    data = model.createData()
+    
+    # Print model information
+    print("\nRobot model information:")
+    print(f"Number of joints (njoints): {model.njoints}")
+    print(f"Number of frames (nframes): {model.nframes}")
+    print(f"Number of configuration variables (nq): {model.nq}")
+    print(f"Number of velocity variables (nv): {model.nv}")
+    
+    # Print all frame names and their parent joints for debugging
+    print("\nDetailed frame information:")
+    print("Index | Frame Name | Parent Joint | Parent Frame")
+    print("-" * 50)
+    for i in range(model.nframes):
+        frame = model.frames[i]
+        parent_joint = model.names[frame.parentJoint]
+        parent_frame = frame.parentFrame if frame.parentFrame < model.nframes else "None"
+        print(f"{i:5d} | {frame.name:11s} | {parent_joint:12s} | {parent_frame}")
+    
+    # Print all joint names
+    print("\nAvailable joints in the robot model:")
+    for i in range(model.njoints):
+        print(f"Joint {i}: {model.names[i]}")
+    
+    # Get gripper frame ID
+    try:
+        gripper_frame_id = model.getFrameId("gripper_link")
+        print(f"\nFound gripper_link at frame ID: {gripper_frame_id}")
+        print(f"Total number of frames: {model.nframes}")
+        print(f"Total number of joints: {model.njoints}")
+        print(f"data.oMf size: {len(data.oMf)}")
+        print(f"data.oMi size: {len(data.oMi)}")
+        
+        # Validate frame ID
+        if gripper_frame_id >= model.nframes:
+            print(f"\nError: Invalid frame ID {gripper_frame_id}. Frame IDs must be between 0 and {model.nframes-1}")
+            print("Please check the URDF file for the correct gripper link name")
+            return
+            
+        # Print the actual frame name at this ID to verify
+        print(f"Frame name at ID {gripper_frame_id}: {model.frames[gripper_frame_id].name}")
+        
+    except Exception as e:
+        print("\nError: Could not find gripper_link in the robot model")
+        print("Please check the URDF file for the correct gripper link name")
+        print(f"Error details: {str(e)}")
+        return
+    
+    # Define grasping parameters
+    grasp_time = 2.0  # Time to start grasping (in seconds)
+    grasp_duration = 0.5  # Duration of grasping motion (in seconds)
+    gripper_open_angle = 0.0  # Open position (radians)
+    gripper_close_angle = 1.57  # Closed position (radians)
+    
+    for i in range(len(state_array)):
+        # Get base position and orientation
+        base_pos = state_array[i, :3]
+        quat = state_array[i, 3:7]
+        rot = R.from_quat([quat[0], quat[1], quat[2], quat[3]])
+        R_mat = rot.as_matrix()
+        
+        # Get joint angles
+        joint_angles = state_array[i, 7:9]
+        
+        # Calculate current time
+        current_time = i * dt_traj_opt / 1000.0  # Convert to seconds
+        
+        # Calculate gripper angles based on time
+        if current_time < grasp_time:
+            # Gripper is open
+            gripper_angle = gripper_open_angle
+        elif current_time < grasp_time + grasp_duration:
+            # Gripper is closing
+            t = (current_time - grasp_time) / grasp_duration
+            gripper_angle = gripper_open_angle + t * (gripper_close_angle - gripper_open_angle)
+        else:
+            # Gripper is closed
+            gripper_angle = gripper_close_angle
+        
+        # Update robot configuration
+        q = np.zeros(model.nq)
+        q[0:3] = base_pos
+        q[3:7] = quat
+        q[7:9] = joint_angles
+        
+        # Print configuration for debugging
+        if i == 0 or i == len(state_array)-1:  # Print first and last configuration
+            print(f"\nConfiguration at step {i}:")
+            print(f"Base position: {base_pos}")
+            print(f"Base orientation (quaternion): {quat}")
+            print(f"Joint angles: {joint_angles}")
+            print(f"Gripper angle: {gripper_angle}")
+            print(f"Full configuration vector q: {q}")
+        
+        # Forward kinematics
+        pin.forwardKinematics(model, data, q)
+        pin.updateFramePlacements(model, data)
+        
+        # Get gripper pose
+        gripper_pose = data.oMf[gripper_frame_id]
+        gripper_pos = gripper_pose.translation
+        gripper_rot = R.from_matrix(gripper_pose.rotation)
+        
+        # Get quaternion representation
+        gripper_quat = gripper_rot.as_quat()
+        
+        # Get Euler angles with different sequences
+        gripper_euler_xyz = gripper_rot.as_euler('xyz', degrees=True)
+        gripper_euler_zyx = gripper_rot.as_euler('zyx', degrees=True)
+        
+        # Check for gimbal lock (pitch near ±90 degrees)
+        pitch_xyz = gripper_euler_xyz[1]
+        pitch_zyx = gripper_euler_zyx[1]
+        
+        # Choose the better representation based on pitch angle
+        if abs(pitch_xyz) > 85:  # If pitch is near ±90 degrees
+            # Use ZYX sequence which is more stable in this case
+            gripper_euler = gripper_euler_zyx
+            euler_seq = 'ZYX'
+        else:
+            # Use XYZ sequence for normal cases
+            gripper_euler = gripper_euler_xyz
+            euler_seq = 'XYZ'
+        
+        # Normalize angles to [-180, 180] range
+        gripper_euler = np.mod(gripper_euler + 180, 360) - 180
+        
+        # Print gripper pose for debugging
+        if i == 0 or i == len(state_array)-1:  # Print first and last pose
+            print(f"\nGripper pose at step {i}:")
+            print(f"Position: {gripper_pos}")
+            print(f"Orientation (quaternion): {gripper_quat}")
+            print(f"Orientation (Euler {euler_seq}): {gripper_euler}")
+            print(f"Pitch angle: {gripper_euler[1]} degrees")
+            if abs(gripper_euler[1]) > 85:
+                print("Warning: Near gimbal lock condition!")
+            print(f"Full transformation matrix:\n{gripper_pose}")
+        
+        gripper_positions.append(gripper_pos.copy())
+        gripper_orientations.append(gripper_euler.copy())
+    
+    gripper_positions = np.array(gripper_positions)
+    gripper_orientations = np.array(gripper_orientations)
+    
+    # Calculate gripper velocities
+    dt = dt_traj_opt / 1000.0  # Convert to seconds
+    gripper_linear_vel = np.zeros_like(gripper_positions)
+    gripper_angular_vel = np.zeros_like(gripper_orientations)
+    
+    # Calculate velocities using central difference
+    for i in range(1, len(gripper_positions)-1):
+        # Linear velocity
+        gripper_linear_vel[i] = (gripper_positions[i+1] - gripper_positions[i-1]) / (2 * dt)
+        
+        # Angular velocity (in degrees/s)
+        angle_diff = gripper_orientations[i+1] - gripper_orientations[i-1]
+        # Handle angle wrapping
+        angle_diff = np.mod(angle_diff + 180, 360) - 180
+        gripper_angular_vel[i] = angle_diff / (2 * dt)
+    
+    # Handle endpoints using forward/backward difference
+    gripper_linear_vel[0] = (gripper_positions[1] - gripper_positions[0]) / dt
+    gripper_linear_vel[-1] = (gripper_positions[-1] - gripper_positions[-2]) / dt
+    
+    angle_diff_start = gripper_orientations[1] - gripper_orientations[0]
+    angle_diff_end = gripper_orientations[-1] - gripper_orientations[-2]
+    angle_diff_start = np.mod(angle_diff_start + 180, 360) - 180
+    angle_diff_end = np.mod(angle_diff_end + 180, 360) - 180
+    gripper_angular_vel[0] = angle_diff_start / dt
+    gripper_angular_vel[-1] = angle_diff_end / dt
+    
+    # Print summary of gripper motion
+    print("\nGripper motion summary:")
+    print(f"Start position: {gripper_positions[0]}")
+    print(f"End position: {gripper_positions[-1]}")
+    print(f"Position range: {np.ptp(gripper_positions, axis=0)}")  # Peak to peak range
+    print(f"Start orientation: {gripper_orientations[0]}")
+    print(f"End orientation: {gripper_orientations[-1]}")
+    print(f"Orientation range: {np.ptp(gripper_orientations, axis=0)}")  # Peak to peak range
+    print(f"Max linear velocity: {np.max(np.abs(gripper_linear_vel), axis=0)} m/s")
+    print(f"Max angular velocity: {np.max(np.abs(gripper_angular_vel), axis=0)} deg/s")
+    
+    # Check for gimbal lock in the trajectory
+    pitch_angles = gripper_orientations[:, 1]
+    gimbal_lock_steps = np.where(np.abs(pitch_angles) > 85)[0]
+    if len(gimbal_lock_steps) > 0:
+        print("\nWarning: Gimbal lock detected at steps:", gimbal_lock_steps)
+        print("Pitch angles at these steps:", pitch_angles[gimbal_lock_steps])
+    
+    # Plot states and gripper information
     for i in range(state_num): 
         ax = plt.subplot(3, 3, i + 1)
         state_data = [s[i] for s in traj_state_ref[:n_points_state]]
@@ -107,6 +301,13 @@ def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_op
         
         if i in [0, 1, 2]:
             ax.plot(time_state, vel_world_data, 'g--', label='Velocity (world)')
+            # Add gripper position and velocity
+            ax.plot(time_state, gripper_positions[:, i], 'm-', label='Gripper Position')
+            ax.plot(time_state, gripper_linear_vel[:, i], 'm--', label='Gripper Velocity')
+        elif i == 4:  # Only plot pitch (index 4) for gripper orientation
+            # Add gripper orientation and angular velocity
+            ax.plot(time_state, gripper_orientations[:, 1], 'm-', label='Gripper Pitch')
+            ax.plot(time_state, gripper_angular_vel[:, 1], 'm--', label='Gripper Pitch Rate')
         
         ax.set_xlabel('Time (s)')
         ax.set_ylabel(state_labels[i])
@@ -128,7 +329,8 @@ def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_op
         np.save(save_dir / 'control_force_torque.npy', control_force_torque[:n_points_control])
         np.save(save_dir / 'time_control.npy', time_control)
         np.save(save_dir / 'time_state.npy', time_state)
-        # np.save(save_dir / 'time.npy', time)
+        np.save(save_dir / 'gripper_positions.npy', gripper_positions)
+        np.save(save_dir / 'gripper_orientations.npy', gripper_orientations)
     
     plt.show()
 
@@ -140,10 +342,10 @@ def main():
     
     robot_name = 's500_uam'   # s500, s500_uam, hexacopter370_flying_arm_3
     trajectory_name = 'catch_vicon'
-    dt_traj_opt = 10  # ms
+    dt_traj_opt = 20  # ms
     useSquash = True
     
-    gepetto_vis = False   # 
+    gepetto_vis = True   # 
     
     save_file = False
     save_dir = None
