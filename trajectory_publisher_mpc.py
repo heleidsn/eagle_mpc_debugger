@@ -160,6 +160,11 @@ class TrajectoryPublisher:
         # timer 2: 1 Hz state check to start MPC controller
         self.mpc_status_timer = rospy.Timer(rospy.Duration(1), self.mpc_status_time_callback)
         
+        # Low pass filter parameters for joint effort
+        self.filter_time_constant_arm_control = 1  # seconds
+        self.filtered_effort = np.zeros(2)  # Store filtered effort values
+        self.last_filter_time = rospy.Time.now()
+        
         rospy.loginfo("Trajectory publisher initialized")
         
     def init_mpc_controller(self):
@@ -196,11 +201,13 @@ class TrajectoryPublisher:
         # Set initial MPC controller
         self.mpc_controller = self.hover_mpc
         
-        self.state = self.mpc_controller.state.zero()
+        self.state = initial_state.copy()
         
         self.thrust_command = np.zeros(self.mpc_controller.platform_params.n_rotors)
         self.speed_command = np.zeros(self.mpc_controller.platform_params.n_rotors)
         self.total_thrust = 0.0
+        
+        self.arm_joint_number = self.mpc_controller.robot_model.nq - 7
         
     def _init_l1_controller(self) -> None:
         """Initialize L1 adaptive controller."""
@@ -548,7 +555,6 @@ class TrajectoryPublisher:
         # get reference state
         ref_state = self.traj_state_ref[self.traj_ref_index]
         ref_control = self.traj_solver.us[min(self.traj_ref_index, len(self.traj_solver.us)-1)]
-        # print(ref_control)
         
         if self.arm_control_mode == 'position':
             joint_msg.position = -ref_state[7:9]
@@ -561,12 +567,28 @@ class TrajectoryPublisher:
         elif self.arm_control_mode == 'position_velocity_effort':  # this mode is not working, effort is not used
             joint_msg.position = -ref_state[7:9]
             joint_msg.velocity = -ref_state[-2:]
-            joint_msg.effort = -ref_control[-2:]*1000
+            if joint_msg.velocity[0] or joint_msg.velocity[1] == 0:
+                joint_msg.velocity = [1, 1]
+            joint_msg.effort = -ref_control[-2:]
         elif self.arm_control_mode == 'effort':
             joint_msg.position = [0.0, 0.0]
             joint_msg.velocity = [0.0, 0.0]
-            joint_msg.effort = [self.control_command[-2], self.control_command[-1]]
-            # joint_msg.effort = [0.1, 0.05]
+            
+            # Calculate time step for filter
+            current_time = rospy.Time.now()
+            dt = (current_time - self.last_filter_time).to_sec()
+            self.last_filter_time = current_time
+            
+            # Apply low pass filter to effort command
+            alpha = dt / (self.filter_time_constant_arm_control + dt)  # Filter coefficient
+            raw_effort = np.array([-self.control_command[-2], -self.control_command[-1]])
+            self.filtered_effort = alpha * raw_effort + (1 - alpha) * self.filtered_effort
+            
+            joint_msg.effort = self.filtered_effort.tolist()
+            
+        # print debug info
+        print('current state: ', self.state)
+        print('control command: ', self.control_command)
             
         # add constrain to joint position
         joint_msg.position[0] = np.clip(joint_msg.position[0], -1.57, 1.57)
@@ -575,8 +597,9 @@ class TrajectoryPublisher:
         joint_msg.velocity[0] = np.clip(joint_msg.velocity[0], -1.0, 1.0)
         joint_msg.velocity[1] = np.clip(joint_msg.velocity[1], -1.0, 1.0)
         
-        joint_msg.effort[0] = np.clip(joint_msg.effort[0], -0.3, 0.3)
-        joint_msg.effort[1] = np.clip(joint_msg.effort[1], -0.3, 0.3)
+        effort_limit = 0.2
+        joint_msg.effort[0] = np.clip(joint_msg.effort[0], -effort_limit, effort_limit)
+        joint_msg.effort[1] = np.clip(joint_msg.effort[1], -effort_limit, effort_limit)
         
         self.arm_control_pub.publish(joint_msg)
         
@@ -739,7 +762,7 @@ class TrajectoryPublisher:
                 self.mpc_controller.platform_params.tau_f
             )
         
-        debug_msg.u_mpc = baseline_control_ft.tolist()
+        debug_msg.u_mpc = self.control_command.tolist()
         
         # if self.enable_l1_control:
         debug_msg.u_ad = self.l1_controller.u_ad.tolist()
@@ -754,6 +777,40 @@ class TrajectoryPublisher:
         debug_msg.z_tilde_ref = self.l1_controller.z_tilde_ref.tolist()
         debug_msg.z_tilde_tracking = self.l1_controller.z_tilde_tracking.tolist()
         debug_msg.u_tracking = self.l1_controller.u_tracking.tolist()
+        
+        # Calculate gripper position and orientation using forward kinematics
+        model = self.mpc_controller.robot_model
+        data = model.createData()
+        
+        # Get current state
+        q = self.state[:model.nq]    # position state
+        v = self.state[model.nq:]    # velocity state
+        
+        # Update forward kinematics
+        pin.forwardKinematics(model, data, q)
+        pin.updateFramePlacements(model, data)
+        
+        # Get gripper frame ID
+        gripper_frame_id = model.getFrameId("gripper_link")
+        if gripper_frame_id < model.frames.size():
+            # Get gripper position and orientation
+            gripper_pose = data.oMf[gripper_frame_id]
+            gripper_position = gripper_pose.translation
+            gripper_orientation = pin.Quaternion(gripper_pose.rotation)
+            
+            # Convert quaternion to Euler angles (roll, pitch, yaw)
+            gripper_euler = pin.rpy.matrixToRpy(gripper_pose.rotation)
+            
+            # Add gripper pose to debug message
+            debug_msg.gripper_position = gripper_position.tolist()
+            debug_msg.gripper_orientation = [gripper_orientation.x, gripper_orientation.y, 
+                                          gripper_orientation.z, gripper_orientation.w]
+            debug_msg.gripper_euler = gripper_euler.tolist()  # [roll, pitch, yaw] in radians
+        else:
+            rospy.logwarn("Gripper frame not found in robot model")
+            debug_msg.gripper_position = [0.0, 0.0, 0.0]
+            debug_msg.gripper_orientation = [0.0, 0.0, 0.0, 1.0]
+            debug_msg.gripper_euler = [0.0, 0.0, 0.0]
         
         # 发布消息
         self.mpc_state_pub.publish(debug_msg)
@@ -826,8 +883,8 @@ class TrajectoryPublisher:
         self.arm_state = msg
         
         # update self.state
-        self.state[7:9] = [msg.position[1], msg.position[0]] # TODO: don't know why it is reversed
-        self.state[-2:] = [msg.velocity[1], msg.velocity[0]]
+        self.state[7:7+self.arm_joint_number] = [-msg.position[-1], -msg.position[-2]]
+        self.state[-2:] = [-msg.velocity[-1], -msg.velocity[-2]]
         
     def callback_model_state_gazebo(self, msg):
         model_states = msg
@@ -840,14 +897,15 @@ class TrajectoryPublisher:
             self.state[0:3] = [pose.position.x,
                             pose.position.y,
                             pose.position.z - 0.224]
+            
             self.state[3:7] = [pose.orientation.x,
                             pose.orientation.y,
                             pose.orientation.z,
                             pose.orientation.w]
-            self.state[7:10] = [twist.linear.x,
+            self.state[7+self.arm_joint_number:10+self.arm_joint_number] = [twist.linear.x,
                                 twist.linear.y,
                                 twist.linear.z]
-            self.state[10:13] = [twist.angular.x,
+            self.state[10+self.arm_joint_number:13+self.arm_joint_number] = [twist.angular.x,
                                 twist.angular.y,
                                 twist.angular.z]
         except ValueError:
