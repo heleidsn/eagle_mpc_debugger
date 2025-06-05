@@ -4,7 +4,8 @@
 
 	<!-- <arg name="fcu_url" default="/dev/ttyACM0:57600" /> -->
 	<arg name="fcu_url" default="/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0:921600" />
-	<arg name="gcs_url" default="udp://@192.168.31.89" />
+	<!-- <arg name="gcs_url" default="udp://@192.168.31.89" /> -->
+    <arg name="gcs_url" default="udp://@192.168.1.11" /> 
 	<arg name="tgt_system" default="1" />
 	<arg name="tgt_component" default="1" />
 	<arg name="log_output" default="screen" />
