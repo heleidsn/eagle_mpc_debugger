@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2024-09-07 17:26:46
-LastEditTime: 2025-05-17 17:45:05
+LastEditTime: 2025-05-30 12:29:32
 Description: L1 adaptive controller with 9 state variables
 Version 3: Used for full actuation
 0916： fixed the bug in adaptive_law_new, change tau_body=u_b + u_ad_all + self.sig_hat_b
@@ -98,7 +98,7 @@ class L1AdaptiveControllerAll:
         
         self.sig_f_prev = np.zeros(3)
         self.sig_t_prev = np.zeros(3)
-        self.sig_t_arm_prev = np.zeros(3)
+        self.sig_t_arm_prev = np.zeros(self.arm_joint_num)
         
     def update_z_tilde(self):
         '''
@@ -421,8 +421,9 @@ class L1AdaptiveControllerAll:
         sigma_hat_disturb = -np.matmul(M_aug, PHI_inv_mul_mu)
 
         # Use direct weight multiplication instead of matrix operations
-        weight = np.array([0, 0, 0, 0, 0, 0, 100, 100, 50, 1, 1, 1])
-        self.sig_hat = -1 * weight * self.z_tilde.copy()
+        weight = np.array([0, 0, 0, 0, 0, 0, 0, 0, 100, 100, 50, 1, 1, 1, 0, 0])
+        # self.sig_hat = -1 * weight * self.z_tilde.copy()
+        self.sig_hat = sigma_hat_disturb
 
         t5 = time.time()
         rospy.loginfo_throttle(1.0, f"timing (ms): crba: {(t1-t0)*1000:.3f}  aug: {(t2-t1)*1000:.3f}  phi_mul: {(t4-t2)*1000:.3f}  sigma_hat: {(t5-t4)*1000:.3f}")
@@ -457,7 +458,10 @@ class L1AdaptiveControllerAll:
         # limitation
         flag_using_limit = True
         if flag_using_limit:
-            min_values = np.array([0, 0, -10, -1, -1, -1])
+            if self.use_arm:
+                min_values = np.array([0, 0, -10, -1, -1, -1, 0, 0])
+            else:
+                min_values = np.array([0, 0, -10, -1, -1, -1])
             max_values = -min_values
             
             clipped_array = np.where(self.u_ad < min_values, min_values, self.u_ad)
