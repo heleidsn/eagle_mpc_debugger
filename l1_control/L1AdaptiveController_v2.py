@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2024-09-07 17:26:46
-LastEditTime: 2025-04-30 21:57:44
+LastEditTime: 2025-05-30 19:44:50
 Description: L1 adaptive controller with 9 state variables
 Version 3: Used for full actuation
 0916： fixed the bug in adaptive_law_new, change tau_body=u_b + u_ad_all + self.sig_hat_b
@@ -79,7 +79,7 @@ class L1AdaptiveControllerAll:
         
         self.sig_f_prev = np.zeros(3)
         self.sig_t_prev = np.zeros(3)
-        self.sig_t_arm_prev = np.zeros(3)
+        self.sig_t_arm_prev = np.zeros(self.arm_joint_num) 
         
         self.A_s = np.diag(self.a_s) # diagonal Hurwitz matrix, same as that used in [3]
         self.expm_A_s_dt = sLA.expm(self.A_s * self.dt)
@@ -364,12 +364,18 @@ class L1AdaptiveControllerAll:
         
         mu  = np.matmul(self.expm_A_s_dt, self.z_tilde)
         PHI_inv_mul_mu = np.matmul(PHI_inv, mu)
+        
+        weight = np.matmul(PHI_inv, self.expm_A_s_dt)
+        weight = np.matmul(B_bar_inv, weight)
+        weight = np.diag(weight)  # Extract diagonal elements
 
         sigma_hat_disturb  = -np.matmul(B_bar_inv, PHI_inv_mul_mu)  # sigma_hat is related to z_tilde
 
         # self.sig_hat = sigma_hat_disturb.copy()
         weight = np.array([0, 0, 0, 0, 0, 0, 100, 100, 50, 1, 1, 1])
-        self.sig_hat = -1 * weight * self.z_tilde.copy()  # 这里的sigma_hat是一个增广矩阵，包含了速度和位置的扰动
+        # self.sig_hat = -1 * weight * self.z_tilde.copy()  # 这里的sigma_hat是一个增广矩阵，包含了速度和位置的扰动
+        
+        self.sig_hat = sigma_hat_disturb.copy()
     
     def update_u_ad(self):
         '''

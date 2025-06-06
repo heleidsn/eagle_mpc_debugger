@@ -12,7 +12,7 @@
     <!-- vehicle model and world -->
     <arg name="est" default="ekf2"/>
     <arg name="vehicle" default="s500"/>
-    <arg name="world" default="$(find mavlink_sitl_gazebo)/worlds/empty.world"/>
+    <arg name="world" default="$(find eagle_mpc_debugger)/worlds/empty.world"/>
     <arg name="sdf" default="$(find mavlink_sitl_gazebo)/models/$(arg vehicle)/$(arg vehicle).sdf"/>
 
     <!-- gazebo configs -->
@@ -53,5 +53,5 @@
     </include>
 
     <!-- gazebo state-->
-    <node pkg="geometric_controller" type="groundtruth_pub.py" name="groundtruth_pub" output="screen"/>
+    <node pkg="eagle_mpc_debugger" type="groundtruth_pub.py" name="groundtruth_pub" output="screen"/>
 </launch>
