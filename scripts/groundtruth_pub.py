@@ -9,29 +9,32 @@ class GroundTruthPublisher:
         # 初始化 ROS 节点
         rospy.init_node("groundtruth_to_mavros")
 
+        # 从参数服务器获取模型名称，默认为 "s500"
+        self.model_name = rospy.get_param("~model_name", "s500")
+
         # 创建发布器
         self.pub = rospy.Publisher("/mavros/vision_pose/pose", PoseStamped, queue_size=10)
 
-        # 等待 s500 模型加载完成
-        rospy.loginfo("Waiting for s500 model to be loaded in Gazebo...")
-        self.iris_idx = self.wait_for_s500()
+        # 等待模型加载完成
+        rospy.loginfo(f"Waiting for {self.model_name} model to be loaded in Gazebo...")
+        self.iris_idx = self.wait_for_model()
 
         # 创建订阅器
         rospy.Subscriber("/gazebo/model_states", ModelStates, self.groundtruth_to_mavros)
         rospy.loginfo("GroundTruthPublisher initialized successfully.")
 
-    def wait_for_s500(self):
-        """等待 s500 模型加载完成"""
+    def wait_for_model(self):
+        """等待模型加载完成"""
         while not rospy.is_shutdown():
             try:
                 # 等待 /gazebo/model_states 消息
                 msg = rospy.wait_for_message("/gazebo/model_states", ModelStates, timeout=5.0)
-                # 尝试获取 s500 的索引
-                return msg.name.index("s500")
+                # 尝试获取模型的索引
+                return msg.name.index(self.model_name)
             except rospy.ROSException:
                 rospy.logwarn("Timeout while waiting for /gazebo/model_states message...")
             except ValueError:
-                rospy.logwarn("s500 model not found in /gazebo/model_states. Retrying...")
+                rospy.logwarn(f"{self.model_name} model not found in /gazebo/model_states. Retrying...")
 
     def groundtruth_to_mavros(self, msg):
         """将 Gazebo 的 ground truth 转换为 MAVROS 的 PoseStamped 消息"""
