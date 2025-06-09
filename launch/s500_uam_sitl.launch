@@ -4,7 +4,7 @@
     <!-- launches MAVROS, PX4 SITL, Gazebo environment, and spawns vehicle -->
     <!-- vehicle model and world -->
     <arg name="vehicle" default="s500_uam"/>
-    <arg name="world" default="$(find eagle_mpc_debugger)/worlds/empty.world"/>
+    <arg name="world" default="$(find eagle_mpc_debugger)/worlds/table_beer.world"/>
     <arg name="sdf" default="$(find eagle_mpc_debugger)/models/sdf/s500_uam/s500_uam.sdf"/>
 
     <!-- gazebo configs -->
@@ -27,8 +27,8 @@
     <node name="sitl" pkg="px4" type="px4" output="screen"
         args="$(find px4)/build/px4_sitl_default/etc -s etc/init.d-posix/rcS $(arg px4_command_arg1)" required="true"/>
 
-    <!-- Gazebo sim -->
-    <arg name="x" default="0"/>
+    <!-- Gazebo sim add arm initial position-->
+    <arg name="x" default="-1.5"/>
     <arg name="y" default="0"/>
     <arg name="z" default="0"/>
     <arg name="joint_1_pos" default="-1.2"/>
@@ -57,11 +57,6 @@
     <param name="arm_controller/robot_description"
          command="$(find xacro)/xacro $(find eagle_mpc_debugger)/models/urdf/s500_uam_arm.urdf.xacro"/>
 
-    <!-- groundtruth position-->
-    <!-- <node pkg="eagle_mpc_debugger" type="groundtruth_pub.py" name="groundtruth_to_mavros" output="screen">
-        <param name="model_name" value="$(arg vehicle)" />
-    </node> -->
-
     <!-- arm controller -->
     <rosparam ns="arm_controller" file="$(find eagle_mpc_debugger)/config/arm_controllers.yaml" command="load"/>
 
@@ -79,6 +74,9 @@
         <param name="use_sim_time" value="true"/>
     </node>
 
-    <!-- <node pkg="eagle_mpc_debugger" type="set_arm_initial_position.py" name="set_arm_initial_position" output="screen"/> -->
+    <!-- gazebo state-->
+    <node pkg="eagle_mpc_debugger" type="groundtruth_pub.py" name="groundtruth_pub" output="screen">
+        <param name="model_name" value="$(arg vehicle)" />
+    </node>
 
 </launch>

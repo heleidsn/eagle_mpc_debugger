@@ -55,7 +55,7 @@ def create_mpc_controller(mpc_name, trajectory, traj_state_ref, dt_traj_opt, mpc
     logger = crocoddyl.CallbackLogger()
     CallbackVerbose = crocoddyl.CallbackVerbose()
     
-    mpcController.solver.setCallbacks([logger, CallbackVerbose])  # 设置回调函数 
+    mpcController.solver.setCallbacks([logger])  # 设置回调函数 
     mpcController.updateProblem(0)
     mpcController.solver.convergence_init = 1e-3
     

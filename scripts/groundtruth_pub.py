@@ -20,8 +20,18 @@ class GroundTruthPublisher:
         self.iris_idx = self.wait_for_model()
 
         # 创建订阅器
-        rospy.Subscriber("/gazebo/model_states", ModelStates, self.groundtruth_to_mavros)
+        rospy.Subscriber("/gazebo/model_states", ModelStates, self.groundtruth_callback)
+        
+        # 创建定时器，100Hz
+        self.rate = rospy.Rate(100)
+        
+        # 存储最新的位姿数据
+        self.latest_pose = None
+        
         rospy.loginfo("GroundTruthPublisher initialized successfully.")
+        
+        # 开始发布循环
+        self.publish_loop()
 
     def wait_for_model(self):
         """等待模型加载完成"""
@@ -36,14 +46,20 @@ class GroundTruthPublisher:
             except ValueError:
                 rospy.logwarn(f"{self.model_name} model not found in /gazebo/model_states. Retrying...")
 
-    def groundtruth_to_mavros(self, msg):
-        """将 Gazebo 的 ground truth 转换为 MAVROS 的 PoseStamped 消息"""
-        pose_msg = PoseStamped()
-        pose_msg.header.stamp = rospy.Time.now()
-        pose_msg.header.frame_id = "map"
-        pose_msg.pose = msg.pose[self.iris_idx]  # 使用 Gazebo 的 ground truth
+    def groundtruth_callback(self, msg):
+        """存储最新的位姿数据"""
+        self.latest_pose = msg.pose[self.iris_idx]
 
-        self.pub.publish(pose_msg)
+    def publish_loop(self):
+        """以固定频率发布位姿数据"""
+        while not rospy.is_shutdown():
+            if self.latest_pose is not None:
+                pose_msg = PoseStamped()
+                pose_msg.header.stamp = rospy.Time.now()
+                pose_msg.header.frame_id = "map"
+                pose_msg.pose = self.latest_pose
+                self.pub.publish(pose_msg)
+            self.rate.sleep()
 
 if __name__ == "__main__":
     GroundTruthPublisher()

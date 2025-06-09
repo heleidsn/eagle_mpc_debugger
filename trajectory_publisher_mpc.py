@@ -18,8 +18,8 @@ from utils.u_convert import thrustToForceTorqueAll
 from controller_msgs.msg import FlatTarget
 from mavros_msgs.msg import State, PositionTarget, AttitudeTarget
 from tf.transformations import quaternion_matrix
-from geometry_msgs.msg import Point, Vector3
-from std_msgs.msg import Float32, Header
+from geometry_msgs.msg import Point, Vector3, Pose, Quaternion, Twist
+from std_msgs.msg import Float32, Header, Float64
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from eagle_mpc_msgs.msg import SolverPerformance, MpcState, MpcControl
 from l1_control.L1AdaptiveController_v1 import L1AdaptiveController_V1
@@ -28,7 +28,8 @@ from l1_control.L1AdaptiveController_v3 import L1AdaptiveControllerRefactored
 from typing import Dict, Any, Tuple
 from sensor_msgs.msg import JointState
 from std_srvs.srv import Trigger, TriggerResponse
-from gazebo_msgs.msg import ModelStates
+from gazebo_msgs.msg import ModelStates, ModelState
+from gazebo_msgs.srv import SetModelState
 
 import crocoddyl
 import pinocchio as pin
@@ -53,8 +54,9 @@ class TrajectoryPublisher:
         # Get parameters
         self.robot_name = rospy.get_param('~robot_name', 's500_uam')     # s500, s500_uam, hexacopter370_flying_arm_3
         self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon')   # displacement, catch_vicon
-        self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 10)  # ms
+        self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 20)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
+        self.use_simulation = rospy.get_param('~use_simulation', True)   #  if true, publish arm control command for ros_control
         self.yaml_path = rospy.get_param('~yaml_path', '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml')
         self.control_rate = rospy.get_param('~control_rate', 100.0)  # Hz
         
@@ -98,19 +100,15 @@ class TrajectoryPublisher:
         self.current_state = State()
         self.arm_state = JointState()
         self.mav_state_sub = rospy.Subscriber('/mavros/state', State, self.mav_state_callback)
-        self.arm_state_sub = rospy.Subscriber('/joint_states', JointState, self.arm_state_callback)
-        
-        # print("Waiting for MAVROS state...")
-        # rospy.wait_for_message("/mavros/state", State, timeout=5)
-        # print("MAVROS state received")
+        if self.use_simulation:
+            self.arm_state_sub = rospy.Subscriber('/arm_controller/joint_states', JointState, self.arm_state_sim_callback)
+        else:
+            self.arm_state_sub = rospy.Subscriber('/joint_states', JointState, self.arm_state_callback)
         
         if self.odom_source == 'mavros':
             self.odom_sub = rospy.Subscriber("/mavros/local_position/odom", Odometry, self.callback_model_local_position)
         else:
             self.odom_sub = rospy.Subscriber("/gazebo/model_states", ModelStates, self.callback_model_state_gazebo)
-            # print("Waiting for MAVROS local position...")
-            # rospy.wait_for_message("/mavros/local_position/odom", Odometry, timeout=5)
-            # print("MAVROS local position received")
         
         # Publishers
         self.pose_pub = rospy.Publisher('/reference/pose', PoseStamped, queue_size=10)
@@ -120,6 +118,15 @@ class TrajectoryPublisher:
         self.body_rate_thrust_pub = rospy.Publisher('/mavros/setpoint_raw/attitude', AttitudeTarget, queue_size=10)
         self.mpc_state_pub = rospy.Publisher("/mpc/state", MpcState, queue_size=10)
         self.arm_control_pub = rospy.Publisher('/desired_joint_states', JointState, queue_size=10)
+        
+        # Create publishers for each joint position controller
+        self.joint1_pub = rospy.Publisher('/arm_controller/joint_1_position_controller/command', Float64, queue_size=10)
+        self.joint2_pub = rospy.Publisher('/arm_controller/joint_2_position_controller/command', Float64, queue_size=10)
+        self.joint3_pub = rospy.Publisher('/arm_controller/joint_3_position_controller/command', Float64, queue_size=10)
+        self.joint4_pub = rospy.Publisher('/arm_controller/joint_4_position_controller/command', Float64, queue_size=10)
+        
+        # arm control publisher
+        
         
         self.partialTrajectoryPub = WholeBodyTrajectoryPublisher('whole_body_partial_trajectory_current',
                                                                      self.mpc_controller.robot_model,
@@ -150,6 +157,28 @@ class TrajectoryPublisher:
         self.stop_l1_control_service = rospy.Service('stop_l1_control', Trigger, self.stop_l1_control)
         self.start_trajectory_service = rospy.Service('start_trajectory', Trigger, self.start_trajectory)
         
+        # Add gripper control services
+        self.open_gripper_service = rospy.Service('open_gripper', Trigger, self.open_gripper_callback)
+        self.close_gripper_service = rospy.Service('close_gripper', Trigger, self.close_gripper_callback)
+        self.reset_beer_service = rospy.Service('reset_beer', Trigger, self.reset_beer_callback)
+        
+        # Wait for Gazebo services
+        rospy.wait_for_service('/gazebo/set_model_state')
+        self.set_model_state = rospy.ServiceProxy('/gazebo/set_model_state', SetModelState)
+        
+        # Initial beer position
+        self.beer_initial_euler = np.array([-1.5708, -1.50229, -1.4e-05])
+        # transfer euler to quaternion
+        self.beer_initial_quat = quaternion_from_euler(self.beer_initial_euler[0], self.beer_initial_euler[1], self.beer_initial_euler[2])
+        self.beer_initial_pose = Pose(
+            position=Point(x=0.0, y=-0.12, z=0.83),
+            orientation=Quaternion(x=self.beer_initial_quat[0], y=self.beer_initial_quat[1], z=self.beer_initial_quat[2], w=self.beer_initial_quat[3])
+        )
+        self.beer_initial_twist = Twist(
+            linear=Vector3(x=0.0, y=0.0, z=0.0),
+            angular=Vector3(x=0.0, y=0.0, z=0.0)
+        )
+        
         # --------------------------------------timer--------------------------------------
         # Timer 1: for publishing trajectory
         self.controller_started = False
@@ -164,6 +193,14 @@ class TrajectoryPublisher:
         self.filter_time_constant_arm_control = 1  # seconds
         self.filtered_effort = np.zeros(2)  # Store filtered effort values
         self.last_filter_time = rospy.Time.now()
+        
+        # Grasping related variables
+        self.grasp_position = np.array([0.0, 0.0, 0.85])  # Fixed target position for grasping
+        self.grasp_time = rospy.Duration(2.0)  # Fixed grasp time (2 seconds)
+        self.is_grasping = False    # Whether the gripper is grasping
+        self.gripper_open_position = -0.7  # Position when gripper is open
+        self.gripper_close_position = 0.0  # Position when gripper is closed
+        self.grasp_start_time = None  # Will be set when trajectory starts
         
         rospy.loginfo("Trajectory publisher initialized")
         
@@ -308,9 +345,6 @@ class TrajectoryPublisher:
             self.controller_time = rospy.Time.now() - self.controller_start_time
             self.mpc_ref_index = int(self.controller_time.to_sec() * 1000.0)
             self.traj_ref_index = int(self.mpc_ref_index / self.dt_traj_opt)
-            # if self.traj_ref_index == 0:
-            #     self._init_l1_controller()
-            #     print("L1 controller initialized")
             
             if self.traj_ref_index >= len(self.traj_state_ref):
                 self.traj_finished = True
@@ -586,10 +620,6 @@ class TrajectoryPublisher:
             
             joint_msg.effort = self.filtered_effort.tolist()
             
-        # print debug info
-        print('current state: ', self.state)
-        print('control command: ', self.control_command)
-            
         # add constrain to joint position
         joint_msg.position[0] = np.clip(joint_msg.position[0], -1.57, 1.57)
         joint_msg.position[1] = np.clip(joint_msg.position[1], -1.57, 1.57)
@@ -603,6 +633,33 @@ class TrajectoryPublisher:
         
         self.arm_control_pub.publish(joint_msg)
         
+        if self.use_simulation:
+            # Control arm joints
+            self.joint1_pub.publish(Float64(-joint_msg.position[0]))
+            self.joint2_pub.publish(Float64(-joint_msg.position[1]))
+            
+            # Control gripper based on grasping logic
+            current_time = rospy.Time.now()
+            
+            if self.grasp_start_time is not None:
+                if current_time >= self.grasp_start_time and not self.is_grasping:
+                    # Close gripper at grasp time
+                    self.joint3_pub.publish(Float64(self.gripper_close_position))
+                    self.joint4_pub.publish(Float64(self.gripper_close_position))
+                    self.is_grasping = True
+                    rospy.loginfo("Gripper closed at grasp time")
+                elif current_time < self.grasp_start_time:
+                    # Keep gripper open before grasp time
+                    self.joint3_pub.publish(Float64(self.gripper_open_position))
+                    self.joint4_pub.publish(Float64(self.gripper_open_position))
+                    self.is_grasping = False
+                    rospy.loginfo_throttle(1.0, "Gripper open, waiting for grasp time")
+            else:
+                # Default to open gripper if no grasp time is set
+                self.joint3_pub.publish(Float64(self.gripper_open_position))
+                self.joint4_pub.publish(Float64(self.gripper_open_position))
+                self.is_grasping = False
+
     def publish_l1_control_command(self, u_mpc, u_ad, u_tracking):
         '''
         发布L1的控制指令
@@ -792,7 +849,7 @@ class TrajectoryPublisher:
         
         # Get gripper frame ID
         gripper_frame_id = model.getFrameId("gripper_link")
-        if gripper_frame_id < model.frames.size():
+        if gripper_frame_id < model.nframes:
             # Get gripper position and orientation
             gripper_pose = data.oMf[gripper_frame_id]
             gripper_position = gripper_pose.translation
@@ -885,6 +942,13 @@ class TrajectoryPublisher:
         # update self.state
         self.state[7:7+self.arm_joint_number] = [-msg.position[-1], -msg.position[-2]]
         self.state[-2:] = [-msg.velocity[-1], -msg.velocity[-2]]
+        
+    def arm_state_sim_callback(self, msg):
+        self.arm_state = msg
+        
+        # update self.state
+        self.state[7:7+self.arm_joint_number] = [msg.position[0], msg.position[1]]
+        self.state[-2:] = [msg.velocity[0], msg.velocity[1]]
         
     def callback_model_state_gazebo(self, msg):
         model_states = msg
@@ -981,6 +1045,8 @@ class TrajectoryPublisher:
         
         # Set the start time for the trajectory
         self.controller_start_time = rospy.Time.now()
+        # Set the grasp start time
+        self.grasp_start_time = self.controller_start_time + self.grasp_time
         
         return TriggerResponse(success=True, message="Trajectory started")
 
@@ -1036,6 +1102,70 @@ class TrajectoryPublisher:
         # Publish the path
         self.path_pub.publish(self.path_msg)
         
+    def set_grasp_target(self, position, grasp_time):
+        """
+        Set the target position and time for grasping
+        
+        Args:
+            position: Target position for grasping
+            grasp_time: Time to start grasping (rospy.Time)
+        """
+        self.grasp_position = position
+        self.grasp_time = grasp_time
+        rospy.loginfo(f"Set grasp target at position {position} and time {grasp_time}")
+        
+    def open_gripper_callback(self, req):
+        """
+        Service callback to open the gripper
+        """
+        if self.use_simulation:
+            self.joint3_pub.publish(Float64(self.gripper_open_position))
+            self.joint4_pub.publish(Float64(self.gripper_open_position))
+            self.is_grasping = False
+            rospy.loginfo("Gripper opened")
+            return TriggerResponse(success=True, message="Gripper opened")
+        else:
+            return TriggerResponse(success=False, message="Simulation mode not enabled")
+
+    def close_gripper_callback(self, req):
+        """
+        Service callback to close the gripper
+        """
+        if self.use_simulation:
+            self.joint3_pub.publish(Float64(self.gripper_close_position))
+            self.joint4_pub.publish(Float64(self.gripper_close_position))
+            self.is_grasping = True
+            rospy.loginfo("Gripper closed")
+            return TriggerResponse(success=True, message="Gripper closed")
+        else:
+            return TriggerResponse(success=False, message="Simulation mode not enabled")
+
+    def reset_beer_callback(self, req):
+        """
+        Service callback to reset the beer model position
+        """
+        try:
+            # Create model state message
+            model_state = ModelState()
+            model_state.model_name = "beer"
+            model_state.pose = self.beer_initial_pose
+            model_state.twist = self.beer_initial_twist
+            model_state.reference_frame = "world"
+
+            # Call Gazebo service to set model state
+            response = self.set_model_state(model_state)
+            
+            if response.success:
+                rospy.loginfo("Beer model position reset successfully")
+                return TriggerResponse(success=True, message="Beer model position reset successfully")
+            else:
+                rospy.logerr("Failed to reset beer model position")
+                return TriggerResponse(success=False, message="Failed to reset beer model position")
+                
+        except rospy.ServiceException as e:
+            rospy.logerr(f"Service call failed: {e}")
+            return TriggerResponse(success=False, message=f"Service call failed: {e}")
+
 if __name__ == '__main__':
     try:
         trajectory_publisher = TrajectoryPublisher()
