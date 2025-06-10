@@ -1,0 +1,51 @@
+trajectory:
+  robot:
+    name: "s500_uam"
+    urdf: "/home/helei/catkin_eagle_mpc/src/eagle_mpc_debugger/config/yaml/s500_robot/s500_uam/urdf/s500_uam_simple.urdf"
+    follow: "/home/helei/catkin_eagle_mpc/src/eagle_mpc_debugger/config/yaml/multicopter/s500.yaml"
+
+  stages:
+    - name: "navigation"
+      duration: 2000 #ms
+      transition: true
+      costs:
+        - name: "reg_state"
+          type: "ResidualModelState"
+          weight: 100
+          reference: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+          activation: "ActivationModelWeightedQuad"
+          weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+
+        - name: "limits_state"
+          type: "ResidualModelState"
+          weight: 100
+          reference: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+          activation: "ActivationModelWeightedQuadraticBarrier"
+          weights: [0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 100, 100]
+          u_bound: [0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1]
+          l_bound: [0, 0, 0, 0, 0, 0, -1, -1, 0, 0, 0, 0, 0, 0, -1, -1]
+
+        - name: "reg_control"
+          type: "ResidualModelControl"
+          weight: 1
+          reference: [5, 5, 5, 5, 0, 0]
+          activation: "ActivationModelWeightedQuad"
+          weights: [1, 1, 1, 1, 0, 0]
+
+    - name: "arm_test"
+      duration: 0 #ms
+      costs:
+        - name: "state_arm"
+          type: "ResidualModelState"
+          weight: 100000
+          reference: [0, 0, 0, 0, 0, 0, 1, 1.0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+          activation: "ActivationModelWeightedQuad"
+          weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+
+
+        - name: "reg_control"
+          type: "ResidualModelControl"
+          weight: 5e-2
+          reference: [5, 5, 5, 5, 0, 0]
+          activation: "ActivationModelWeightedQuad"
+          weights: [1, 1, 1, 1, 1, 1]
