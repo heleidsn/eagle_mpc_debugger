@@ -194,7 +194,7 @@ def plot_multiple_trajectories(trajectories, dt_values, save_dir=None):
 def main():
     # Settings
     mpc_name = 'rail'
-    mpc_yaml_path = '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml'
+    mpc_yaml_path = '/home/helei/catkin_eagle_mpc/src/eagle_mpc_debugger/config/yaml'
     
     robot_name = 's500'   # s500, s500_uam, hexacopter370_flying_arm_3
     trajectory_name = 'takeoff'

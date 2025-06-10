@@ -29,7 +29,7 @@ class TrajectoryPublisher:
         self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon')
         self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 30)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
-        self.yaml_path = rospy.get_param('~yaml_path', '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml')
+        self.yaml_path = rospy.get_param('~yaml_path', '/home/helei/catkin_eagle_mpc/src/eagle_mpc_debugger/config/yaml')
 
         # 服务来启动和初始化轨迹
         self.start_service = rospy.Service('start_trajectory', Trigger, self.start_trajectory)
