@@ -57,7 +57,7 @@ class TrajectoryPublisher:
         self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 20)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
         self.use_simulation = rospy.get_param('~use_simulation', True)   #  if true, publish arm control command for ros_control
-        self.yaml_path = rospy.get_param('~yaml_path', '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml')
+        self.yaml_path = rospy.get_param('~yaml_path', '/home/helei/catkin_eagle_mpc/src/eagle_mpc_debugger/config/yaml')
         self.control_rate = rospy.get_param('~control_rate', 100.0)  # Hz
         
         self.odom_source = rospy.get_param('~odom_source', 'gazebo')  # mavros, gazebo  
@@ -591,19 +591,19 @@ class TrajectoryPublisher:
         ref_control = self.traj_solver.us[min(self.traj_ref_index, len(self.traj_solver.us)-1)]
         
         if self.arm_control_mode == 'position':
-            joint_msg.position = -ref_state[7:9]
+            joint_msg.position = ref_state[7:9]
             joint_msg.velocity = [0.2, 0.2]
             joint_msg.effort = [0.0, 0.0]
         elif self.arm_control_mode == 'position_velocity':
-            joint_msg.position = -ref_state[7:9]
-            joint_msg.velocity = -ref_state[-2:]
+            joint_msg.position = ref_state[7:9]
+            joint_msg.velocity = ref_state[-2:]
             joint_msg.effort = [0.0, 0.0]
         elif self.arm_control_mode == 'position_velocity_effort':  # this mode is not working, effort is not used
-            joint_msg.position = -ref_state[7:9]
-            joint_msg.velocity = -ref_state[-2:]
+            joint_msg.position = ref_state[7:9]
+            joint_msg.velocity = ref_state[-2:]
             if joint_msg.velocity[0] or joint_msg.velocity[1] == 0:
                 joint_msg.velocity = [1, 1]
-            joint_msg.effort = -ref_control[-2:]
+            joint_msg.effort = ref_control[-2:]
         elif self.arm_control_mode == 'effort':
             joint_msg.position = [0.0, 0.0]
             joint_msg.velocity = [0.0, 0.0]
@@ -635,8 +635,8 @@ class TrajectoryPublisher:
         
         if self.use_simulation:
             # Control arm joints
-            self.joint1_pub.publish(Float64(-joint_msg.position[0]))
-            self.joint2_pub.publish(Float64(-joint_msg.position[1]))
+            self.joint1_pub.publish(Float64(joint_msg.position[0]))
+            self.joint2_pub.publish(Float64(joint_msg.position[1]))
             
             # Control gripper based on grasping logic
             current_time = rospy.Time.now()
@@ -940,8 +940,8 @@ class TrajectoryPublisher:
         self.arm_state = msg
         
         # update self.state
-        self.state[7:7+self.arm_joint_number] = [-msg.position[-1], -msg.position[-2]]
-        self.state[-2:] = [-msg.velocity[-1], -msg.velocity[-2]]
+        self.state[7:7+self.arm_joint_number] = [msg.position[-1], msg.position[-2]]
+        self.state[-2:] = [msg.velocity[-1], msg.velocity[-2]]
         
     def arm_state_sim_callback(self, msg):
         self.arm_state = msg

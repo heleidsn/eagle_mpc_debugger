@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-19 11:40:31
-LastEditTime: 2025-04-23 09:50:12
+LastEditTime: 2025-06-10 14:24:01
 Description: MPC Debug Interface, useful for debugging your MPC controller before deploying it to the real robot
 Github: https://github.com/heleidsn
 '''
@@ -45,8 +45,9 @@ class MpcDebugInterface(QWidget):
         self.trajectory_name = trajectory_name
         self.use_squash = useSquash
         self.dt_traj_opt = dt_traj_opt  # ms
-        self.yaml_path = rospy.get_param('~yaml_path', '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml')
-        self.arm_enabled = rospy.get_param('~arm_enabled', True)
+        
+        self.yaml_path = '/home/helei/catkin_eagle_mpc/src/eagle_mpc_debugger/config/yaml'
+        self.arm_enabled = True
         
         # numpy print options
         np.set_printoptions(formatter={'float': lambda x: f"{x:>4.2f}"})  # 固定 6 位小数
@@ -184,7 +185,8 @@ class MpcDebugInterface(QWidget):
             'Position (m)': ['X', 'Y', 'Z'],
             'Orientation (deg)': ['roll', 'pitch', 'yaw'],
             'Linear Velocity (m/s)': ['vx', 'vy', 'vz'],
-            'Angular Velocity (deg/s)': ['wx', 'wy', 'wz']
+            'Angular Velocity (deg/s)': ['wx', 'wy', 'wz'],
+            'Joint Position (rad)': ['joint1', 'joint2']  # 添加关节位置组
         }
         
         # Create sliders and labels
@@ -204,7 +206,10 @@ class MpcDebugInterface(QWidget):
             # Angular velocity control (wx, wy, wz)
             ('wx', -90, 90),
             ('wy', -90, 90),
-            ('wz', -90, 90)
+            ('wz', -90, 90),
+            # Joint position control (joint1, joint2)
+            ('joint1', -3.14, 3.14),  # -π to π
+            ('joint2', -3.14, 3.14)   # -π to π
         ]
         
         # Create a vertical layout for each group
@@ -328,7 +333,7 @@ class MpcDebugInterface(QWidget):
         # Timer for updating plots
         self.timer_plot = QtCore.QTimer()
         self.timer_plot.timeout.connect(self.update_plot)
-        self.timer_plot.start(1)  # 10Hz update
+        self.timer_plot.start(0.1)  # 10Hz update
         
         # Load trajectory and initialize MPC controller
         self.load_trajectory()
@@ -393,7 +398,8 @@ class MpcDebugInterface(QWidget):
             'X': 0, 'Y': 1, 'Z': 2,                    # 位置
             'roll': 3, 'pitch': 4, 'yaw': 5,          # 姿态(用于临时存储欧拉角)
             'vx': 7, 'vy': 8, 'vz': 9,                # 线速度
-            'wx': 10, 'wy': 11, 'wz': 12              # 角速度
+            'wx': 10, 'wy': 11, 'wz': 12,             # 角速度
+            'joint1': 7, 'joint2': 8                   # 关节位置
         }
         
         # 在__init__方法的最后
@@ -744,6 +750,11 @@ class MpcDebugInterface(QWidget):
             self.state_offset[idx] = np.radians(actual_value)
             self.state[idx] = ref_state[idx] + np.radians(actual_value)
         
+        elif name in ['joint1', 'joint2']:
+            idx = self.state_indices[name]
+            self.state_offset[idx] = actual_value
+            self.state[idx] = ref_state[idx] + actual_value
+        
         # 更新显示值
         self.state_labels[name].blockSignals(True)
         self.state_labels[name].setText(f'{actual_value:.2f}')
@@ -851,17 +862,14 @@ class MpcDebugInterface(QWidget):
     def mpc_running_callback(self):
         # calculate the mpc output
         self.mpc_controller.problem.x0 = self.state
-        # print(self.mpc_ref_index, len(self.state_ref))
         self.mpc_controller.updateProblem(self.mpc_ref_time)
         
         time_start = time.time()
-
         self.mpc_controller.solver.solve(
             self.mpc_controller.solver.xs,
             self.mpc_controller.solver.us,
             self.mpc_controller.iters
         )
-         
         time_end = time.time()
         self.solving_time = time_end - time_start
         
@@ -869,6 +877,32 @@ class MpcDebugInterface(QWidget):
         self.mpc_solve_time_history.append(self.solving_time)
         if len(self.mpc_solve_time_history) > 100:
             self.mpc_solve_time_history.pop(0)
+        
+        # 在不使用ROS的情况下更新arm相关的buffer
+        if not self.using_ros:
+            # 获取当前状态和控制输入
+            state_predict = np.array(self.mpc_controller.solver.xs)
+            control_predict = np.array(self.mpc_controller.solver.us_squash)
+            
+            # 更新joint position buffer
+            self.joint_position_buffer.append(state_predict[0, 7:9])
+            if len(self.joint_position_buffer) > 100:
+                self.joint_position_buffer.pop(0)
+            
+            # 更新joint velocity buffer
+            self.joint_velocity_buffer.append(state_predict[0, -2:])
+            if len(self.joint_velocity_buffer) > 100:
+                self.joint_velocity_buffer.pop(0)
+            
+            # 更新joint control buffer
+            self.joint_control_buffer.append(control_predict[0, -2:])
+            if len(self.joint_control_buffer) > 100:
+                self.joint_control_buffer.pop(0)
+            
+            # 对于joint effort，使用控制输入作为effort
+            self.joint_effort_buffer.append(control_predict[0, -2:])
+            if len(self.joint_effort_buffer) > 100:
+                self.joint_effort_buffer.pop(0)
         
         print("solving time: {:.2f} ms".format(self.solving_time * 1000))
         print("state: ", self.state)
@@ -942,7 +976,6 @@ class MpcDebugInterface(QWidget):
             ref_time = np.arange(len(state_ref)) * self.dt_traj_opt / 1000.0
             ax.plot(ref_time, state_ref[:, 0], label='Joint_1_ref', linestyle='--', color='red', linewidth=1)
             ax.plot(ref_time, state_ref[:, 1], label='Joint_2_ref', linestyle='--', color='green', linewidth=1)
-        
         
         ax.legend()
         ax.set_ylim(-y_lim, y_lim)
@@ -1191,7 +1224,7 @@ class MpcDebugInterface(QWidget):
             
             # 应用偏移量
             new_state = ref_state.copy()
-            # 位置和速度直接相加
+            # 位置、速度和关节位置直接相加
             for i in [0,1,2,7,8,9,10,11,12]:
                 new_state[i] = ref_state[i] + self.state_offset[i]
             # 姿态需要特殊处理
@@ -1254,11 +1287,11 @@ if __name__ == '__main__':
     # Settings
     using_ros = False
     mpc_name = 'rail'
-    mpc_yaml_path = '/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml'
+    mpc_yaml_path = '/home/helei/catkin_eagle_mpc/src/eagle_mpc_debugger/config/yaml'
     
-    robot_name = 's500'
-    trajectory_name = 'displacement'
-    dt_traj_opt = 30  # ms
+    robot_name = 's500_uam'
+    trajectory_name = 'catch_vicon'
+    dt_traj_opt = 10  # ms
     useSquash = True
     
     if using_ros:
