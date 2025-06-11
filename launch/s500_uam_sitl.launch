@@ -4,7 +4,8 @@
     <!-- launches MAVROS, PX4 SITL, Gazebo environment, and spawns vehicle -->
     <!-- vehicle model and world -->
     <arg name="vehicle" default="s500_uam"/>
-    <arg name="world" default="$(find eagle_mpc_debugger)/worlds/table_beer.world"/>
+    <!-- <arg name="world" default="$(find eagle_mpc_debugger)/worlds/table_beer.world"/> -->
+    <arg name="world" default="$(find eagle_mpc_debugger)/worlds/empty.world"/>
     <arg name="sdf" default="$(find eagle_mpc_debugger)/models/sdf/s500_uam/s500_uam.sdf"/>
 
     <!-- gazebo configs -->

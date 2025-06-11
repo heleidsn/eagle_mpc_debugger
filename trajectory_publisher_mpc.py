@@ -8,6 +8,7 @@ Description: Trajectory publisher for geometric controller, using MPC trajectory
 import rospy
 import numpy as np
 import time
+import math
 from nav_msgs.msg import Odometry, Path
 from geometry_msgs.msg import PoseStamped
 from geometry_msgs.msg import TwistStamped
@@ -67,6 +68,11 @@ class TrajectoryPublisher:
         self.arm_control_mode = rospy.get_param('~arm_control_mode', 'position_velocity')  # position, position_velocity, position_velocity_effort, effort
         
         self.max_thrust = rospy.get_param('~max_thrust', 8.0664 * 4)
+        
+        # Control limits for L1 controller
+        self.max_angular_velocity = rospy.get_param('~max_angular_velocity', math.radians(120))  # rad/s
+        self.min_thrust_cmd = rospy.get_param('~min_thrust_cmd', 0.0)  # Minimum thrust command pass to px4
+        self.max_thrust_cmd = rospy.get_param('~max_thrust_cmd', 1.0)  # Maximum thrust command pass to px4
         
         # for L1 controller
         self.l1_version = rospy.get_param('~l1_version', 'v2')  # v1, v2, v3
@@ -181,8 +187,8 @@ class TrajectoryPublisher:
         
         # --------------------------------------timer--------------------------------------
         # Timer 1: for publishing trajectory
-        self.controller_started = False
-        self.controller_started_last = False
+        self.trajectory_started = False
+        self.trajectory_started_last = False
         self.traj_finished = False
         self.timer = rospy.Timer(rospy.Duration(1.0/self.control_rate), self.controller_callback)
         
@@ -240,7 +246,6 @@ class TrajectoryPublisher:
         
         self.state = initial_state.copy()
         
-        self.thrust_command = np.zeros(self.mpc_controller.platform_params.n_rotors)
         self.speed_command = np.zeros(self.mpc_controller.platform_params.n_rotors)
         self.total_thrust = 0.0
         
@@ -328,7 +333,14 @@ class TrajectoryPublisher:
             raise
 
     def controller_callback(self, event):
-        """Timer callback to publish trajectory setpoints"""
+        """Timer callback to publish control command
+        MPC:
+            self.control_command_mpc: MPC control command for single rotor
+        L1:
+            self.l1_controller.u_mpc: L1 control command
+            self.l1_controller.u_ad: L1 adaptive control command
+            self.l1_controller.u_tracking: L1 tracking control command
+        """
         
         now = time.time()
         self.last_times.append(now)
@@ -340,15 +352,16 @@ class TrajectoryPublisher:
             freq = 1.0 / avg_dt if avg_dt > 0 else 0
             rospy.loginfo_throttle(1.0, f"controller running freq: {freq:.2f} Hz")
         
+        # 1. Get current reference state from planned trajectory
         # Three conditions: not_started, started, finished       
-        if self.controller_started and not self.traj_finished:
+        if self.trajectory_started and not self.traj_finished:
             self.controller_time = rospy.Time.now() - self.controller_start_time
             self.mpc_ref_index = int(self.controller_time.to_sec() * 1000.0)
             self.traj_ref_index = int(self.mpc_ref_index / self.dt_traj_opt)
             
             if self.traj_ref_index >= len(self.traj_state_ref):
                 self.traj_finished = True
-                self.controller_started_last = False
+                self.trajectory_started_last = False
                 self.traj_ref_index = len(self.traj_state_ref)-1
                 rospy.loginfo("Trajectory finished")
                 
@@ -359,70 +372,77 @@ class TrajectoryPublisher:
         else:
             self.traj_ref_index = 0
             
-        # Get current reference state
         ref_state = self.traj_state_ref[self.traj_ref_index]
         
-        # Get rotation matrix from quaternion
-        R = quaternion_matrix([ref_state[3], ref_state[4], ref_state[5], ref_state[6]])[:3, :3]
-        
-        # Convert body velocities to world frame
-        vel_body = ref_state[7:10]
-        vel_world = R @ vel_body
-        
-        # Get pre-calculated acceleration
-        acc_world = self.accelerations[self.traj_ref_index]
-        
-        # Get yaw from quaternion
-        quat = ref_state[3:7]
-        yaw = euler_from_quaternion([quat[0], quat[1], quat[2], quat[3]])[2]
-        
-        if self.traj_finished:
-            vel_world = np.zeros(3)
-            acc_world = np.zeros(3)
-        
-        # Publish control command
-        if self.control_mode == 'PX4':
-            # using default PX4 controller, recieve p, v, a
-            self.publish_mavros_setpoint_raw(ref_state[0:3], vel_world, acc_world, yaw, 0)  
-        elif self.control_mode == 'Geometric':
-            # using geometric controller
-            self.publish_flat_target(ref_state[0:3], vel_world, acc_world)
-            self.publish_reference_yaw(yaw)
+        if self.control_mode == 'PX4' or self.control_mode == 'Geometric':
+            # Get rotation matrix from quaternion
+            R = quaternion_matrix([ref_state[3], ref_state[4], ref_state[5], ref_state[6]])[:3, :3]
+            
+            # Convert body velocities to world frame
+            vel_body = ref_state[7:10]
+            vel_world = R @ vel_body
+            
+            # Get pre-calculated acceleration
+            acc_world = self.accelerations[self.traj_ref_index]
+            
+            # Get yaw from quaternion
+            quat = ref_state[3:7]
+            yaw = euler_from_quaternion([quat[0], quat[1], quat[2], quat[3]])[2]
+            
+            if self.traj_finished:
+                vel_world = np.zeros(3)
+                acc_world = np.zeros(3)
+            
+            # Publish control command
+            if self.control_mode == 'PX4':
+                # using default PX4 controller, recieve p, v, a
+                self.publish_mavros_setpoint_raw(ref_state[0:3], vel_world, acc_world, yaw, 0)  
+            elif self.control_mode == 'Geometric':
+                # using geometric controller
+                self.publish_flat_target(ref_state[0:3], vel_world, acc_world)
+                self.publish_reference_yaw(yaw)
+                
         elif self.control_mode == 'MPC':
-            # using MPC controller
+            # 1. Get MPC control command
             t0 = time.time()
             self.get_mpc_command()
             t1 = time.time()
             
+            # 2. Get L1 control command
             if self.enable_l1_control:
-                # using L1 controller
                 self.get_l1_control(self.state, self.mpc_ref_index)
             else:
-                # using MPC controller
                 self._init_l1_controller()
             t2 = time.time()
             
-            rospy.loginfo_throttle(1.0, f"MPC calculate time: {(t1-t0)*1000:.3f} ms")
-            rospy.loginfo_throttle(1.0, f"L1 state prep time: {(t2-t1)*1000:.3f} ms")
-                
-            self.publish_l1_control_command(self.l1_controller.u_mpc, self.l1_controller.u_ad, self.l1_controller.u_tracking)
+            # 3. Publish control command
+            self.publish_mpc_control_command(self.l1_controller.u_mpc, self.l1_controller.u_ad, self.l1_controller.u_tracking)
             
             if self.arm_enabled:
                 self.publish_arm_control_command()
                 
-            # debug info
+            # 4. Publish debug info
             self.publish_mpc_l1_debug_data()
+            t3 = time.time()
+            
+            # 5. Show time info
+            rospy.loginfo_throttle(1.0, f"MPC calculate time: {(t1-t0)*1000:.3f} ms")
+            rospy.loginfo_throttle(1.0, f"L1 state prep time: {(t2-t1)*1000:.3f} ms")
+            rospy.loginfo_throttle(1.0, f"Topic publish time: {(t3-t2)*1000:.3f} ms")
         else:
             rospy.logwarn("Invalid control mode")
             
         # Publish whole body state
-        self.publish_wholebody_state_target()
-        self.publish_wholebody_state_current()
+        # self.publish_wholebody_state_target()
+        # self.publish_wholebody_state_current()
 
     def get_mpc_command(self):
+        """Get MPC control command."""
+        
         self.mpc_controller.problem.x0 = self.state
             
-        if self.controller_started:
+        # select MPC controller, trajectory tracking or hover
+        if self.trajectory_started:
             # Switch to trajectory tracking MPC
             self.mpc_controller = self.trajectory_mpc
             # self.controller_time = rospy.Time.now() - self.controller_start_time
@@ -445,137 +465,64 @@ class TrajectoryPublisher:
         )
         time_end = rospy.Time.now()
         
+        # get mpc control command
+        self.control_command_mpc = self.mpc_controller.solver.us_squash[0]
+        
+        # Convert to force/torque
+        self.mpc_control_command_ft = thrustToForceTorqueAll(
+                self.control_command_mpc,
+                self.mpc_controller.platform_params.tau_f
+            )
+        
         # get MPC debug info
         self.mpc_iter_num = self.mpc_controller.solver.iter
         self.solving_time = (time_end - time_start).to_sec()
         self.mpc_start_cost = self.mpc_controller.logger.costs[0]
         self.mpc_final_cost = self.mpc_controller.logger.costs[-1]
-        rospy.logdebug("MPC index: {} Solving time: {}".format(self.mpc_ref_index, self.solving_time))
-         
-        # get mpc control command
-        self.control_command = self.mpc_controller.solver.us_squash[0]
-        self.thrust_command = self.control_command[:len(self.thrust_command)]
         
+        rospy.logdebug("MPC index: {} Solving time: {}".format(self.mpc_ref_index, self.solving_time))
         rospy.logdebug('MPC state          : {}'.format(self.state[7:]))
         rospy.logdebug('MPC reference state: {}'.format(self.traj_state_ref[self.traj_ref_index][7:]))
-        rospy.logdebug('MPC control command: {}'.format(self.control_command))
-        
-        # get planned state
-        # if self.controller_started:
-        #     self.state_ref = self.mpc_controller.solver.xs[1]
-        # else:
-        #     self.state_ref = self.traj_state_ref[self.traj_ref_index]
-        self.state_ref = self.mpc_controller.solver.xs[1]
-        
-        # get body rate command from planned next state
-        self.roll_rate_ref = self.state_ref[self.mpc_controller.robot_model.nq + 3]
-        self.pitch_rate_ref = self.state_ref[self.mpc_controller.robot_model.nq + 4]
-        self.yaw_rate_ref = self.state_ref[self.mpc_controller.robot_model.nq + 5]
-        
-        # get thrust command
-        self.total_thrust = np.sum(self.thrust_command)
-      
+        rospy.logdebug('MPC control command: {}'.format(self.control_command_mpc))
+
     def get_l1_control(self, current_state: np.ndarray, time_step: int) -> Tuple[np.ndarray, Dict[str, Any]]:
         """Get control command from L1 controller."""
         
         # Get the baseline control from mpc_controller_l1
-        baseline_control = np.copy(self.mpc_controller.solver.us_squash[0])
-        
-        # Convert to force/torque
-        baseline_control_ft = thrustToForceTorqueAll(
-                baseline_control,
-                self.mpc_controller.platform_params.tau_f
-            )
-        
         index_plan = self.traj_ref_index
+        self.l1_controller.u_mpc = self.mpc_control_command_ft.copy()
         
-        if self.l1_version == 'v3':
-            self.l1_controller.compute_control(current_state.copy(), baseline_control_ft)
-        elif self.l1_version == 'v1':
-            # Update current state and reference
-            self.l1_controller.current_state = current_state.copy()
-            self.l1_controller.z_ref_all = self.traj_state_ref[index_plan].copy()
-            self.l1_controller.z_ref = self.l1_controller.get_state_angle_single_rad(self.l1_controller.z_ref_all)[self.l1_controller.state_dim_euler:]
-            
-            # update z_real using current state
-            self.l1_controller.z_real = self.l1_controller.get_state_angle_single_rad(self.l1_controller.current_state)[self.l1_controller.state_dim_euler:]
-            
-            # transfer z_ref and z_measure to anglself.control_command
-            self.l1_controller.u_mpc = baseline_control_ft.copy()
-            
-            # 1. Update state predictor
-            self.l1_controller.update_z_hat()
-            
-            # 2. Update state predictor error
-            self.l1_controller.update_z_tilde()
-            
-            # 3. Estimate disturbance
-            self.l1_controller.update_sig_hat_v1()
-            
-            # 4. Filter the matched uncertainty estimate
-            self.l1_controller.update_u_ad()
-        else:
-            
-            # Update current state and reference
-            t1 = time.time()
-            self.l1_controller.current_state = current_state.copy()
-            self.l1_controller.z_ref_all = self.traj_state_ref[index_plan].copy()
-            self.l1_controller.z_ref = self.l1_controller.get_state_angle_single_rad(self.l1_controller.z_ref_all)
-            
-            # update z_real using current state
-            self.l1_controller.z_real = self.l1_controller.get_state_angle_single_rad(self.l1_controller.current_state)
-            
-            # transfer z_ref and z_measure to anglself.control_command
-            self.l1_controller.u_mpc = baseline_control_ft.copy()
-            
-            t2 = time.time()
-            # 1. Update state predictor
-            self.l1_controller.update_z_hat()
-            
-            t3 = time.time()
-            
-            # 2. Update state predictor error
-            self.l1_controller.update_z_tilde()
-            
-            t4 = time.time()
-            # 3. Estimate disturbance
-            self.l1_controller.update_sig_hat_all_v2()
-            t5 = time.time()
-            # 4. Filter the matched uncertainty estimate
-            self.l1_controller.update_u_ad()
-            t6 = time.time()
-            
-            # rospy.loginfo(f"L1 state prep time: {(t2-t1)*1000:.3f} ms")
-            # rospy.loginfo(f"L1 update_z_hat time: {(t3-t2)*1000:.3f} ms")
-            # rospy.loginfo(f"L1 update_z_tilde time: {(t4-t3)*1000:.3f} ms")
-            # rospy.loginfo(f"L1 update_sig_hat time: {(t5-t4)*1000:.3f} ms")
-            # rospy.loginfo(f"L1 update_u_ad time: {(t6-t5)*1000:.3f} ms")
-            # rospy.loginfo(f"L1 total time: {(t6-t1)*1000:.3f} ms")
-            
-              
-    def publish_mpc_control_command(self):
-        '''
-        发布 MPC 控制指令
-            self.control_command: 优化求解器得到的控制指令，包括推力和机械臂控制
-            self.thrust_command: 优化求解器得到的推力指令
-        '''
+        # Update current state and reference
+        t1 = time.time()
         
-        att_msg = AttitudeTarget()
-        att_msg.header.stamp = rospy.Time.now()
+        self.l1_controller.current_state = current_state.copy()
+        self.l1_controller.z_ref_all = self.traj_state_ref[index_plan].copy()
+        self.l1_controller.z_ref = self.l1_controller.get_state_angle_single_rad(self.l1_controller.z_ref_all)
+        self.l1_controller.z_real = self.l1_controller.get_state_angle_single_rad(self.l1_controller.current_state)
+        t2 = time.time()
         
-        # 设置 type_mask，忽略姿态，仅使用角速度 + 推力
-        att_msg.type_mask = AttitudeTarget.IGNORE_ATTITUDE 
+        # 1. Update state predictor
+        self.l1_controller.update_z_hat()
+        t3 = time.time()
         
-        # 机体系角速度 (rad/s)
-        att_msg.body_rate = Vector3(self.roll_rate_ref, self.pitch_rate_ref, self.yaw_rate_ref)  # 仅绕 Z 轴旋转 0.1 rad/s
+        # 2. Update state predictor error
+        self.l1_controller.update_z_tilde()
+        t4 = time.time()
         
-        # 推力值 (范围 0 ~ 1)
-        att_msg.thrust = self.total_thrust / self.max_thrust  # 60% 油门
+        # 3. Estimate disturbance
+        self.l1_controller.update_sig_hat_all_v2()
+        t5 = time.time()
         
-        # 对推力进行限幅
-        att_msg.thrust = np.clip(att_msg.thrust, 0, 1)
-
-        self.body_rate_thrust_pub.publish(att_msg)
+        # 4. Filter the matched uncertainty estimate
+        self.l1_controller.update_u_ad()
+        t6 = time.time()
+        
+        rospy.logdebug(f"L1 state prep time: {(t2-t1)*1000:.3f} ms")
+        rospy.logdebug(f"L1 update_z_hat time: {(t3-t2)*1000:.3f} ms")
+        rospy.logdebug(f"L1 update_z_tilde time: {(t4-t3)*1000:.3f} ms")
+        rospy.logdebug(f"L1 update_sig_hat time: {(t5-t4)*1000:.3f} ms")
+        rospy.logdebug(f"L1 update_u_ad time: {(t6-t5)*1000:.3f} ms")
+        rospy.logdebug(f"L1 total time: {(t6-t1)*1000:.3f} ms")
     
     def publish_arm_control_command(self):
         '''
@@ -660,7 +607,7 @@ class TrajectoryPublisher:
                 self.joint4_pub.publish(Float64(self.gripper_open_position))
                 self.is_grasping = False
 
-    def publish_l1_control_command(self, u_mpc, u_ad, u_tracking):
+    def publish_mpc_control_command(self, u_mpc, u_ad, u_tracking):
         '''
         发布L1的控制指令
             u_ad: L1控制器得到的控制指令，包括推力、力矩和机械臂控制力矩， 如何转换成 PX4 控制指令 推力+角速度？
@@ -669,17 +616,16 @@ class TrajectoryPublisher:
             
             【solved】:将L1得到的力矩作为期望角速度的增量
         '''
-        
-        self.control_command = self.mpc_controller.solver.us_squash[0]
-        self.thrust_command = self.control_command[:len(self.thrust_command)]
+        # get collected thrust command
+        self.control_command = self.control_command_mpc.copy()
         
         # get planned state
         self.state_ref = self.mpc_controller.solver.xs[1]
         
         # get body rate command from MPC
-        self.roll_rate_ref_old = self.state_ref[self.mpc_controller.robot_model.nq + 3]
-        self.pitch_rate_ref_old = self.state_ref[self.mpc_controller.robot_model.nq + 4]
-        self.yaw_rate_ref_old = self.state_ref[self.mpc_controller.robot_model.nq + 5]
+        self.roll_rate_ref_next_step = self.state_ref[self.mpc_controller.robot_model.nq + 3]
+        self.pitch_rate_ref_next_step = self.state_ref[self.mpc_controller.robot_model.nq + 4]
+        self.yaw_rate_ref_next_step = self.state_ref[self.mpc_controller.robot_model.nq + 5]
         
         # get additional body rate control command
         model = self.mpc_controller.robot_model
@@ -688,14 +634,27 @@ class TrajectoryPublisher:
         v = self.state[model.nq:]    # velocity
         u = u_mpc + u_ad                      # using l1 control command
         dt = 1 / self.control_rate
-        v_hat = pin.aba(model, data, q, v, u_ad)   # 使用u_ad来得到角速度的增量
+        rate_ad = pin.aba(model, data, q, v, u_ad)   # TODO: using u or u_ad?
         
-        self.roll_rate_ref = self.state_ref[self.mpc_controller.robot_model.nq + 3] + v_hat[3] * dt
-        self.pitch_rate_ref = self.state_ref[self.mpc_controller.robot_model.nq + 4] + v_hat[4] * dt
-        self.yaw_rate_ref = self.state_ref[self.mpc_controller.robot_model.nq + 5] + v_hat[5] * dt
+        # Calculate angular velocity with limits
+        self.roll_rate_ref = np.clip(
+            self.roll_rate_ref_next_step + rate_ad[3] * dt,
+            -self.max_angular_velocity,
+            self.max_angular_velocity
+        )
+        self.pitch_rate_ref = np.clip(
+            self.pitch_rate_ref_next_step + rate_ad[4] * dt,
+            -self.max_angular_velocity,
+            self.max_angular_velocity
+        )
+        self.yaw_rate_ref = np.clip(
+            self.yaw_rate_ref_next_step + rate_ad[5] * dt,
+            -self.max_angular_velocity,
+            self.max_angular_velocity
+        )
         
-        # get thrust command
-        self.total_thrust = np.sum(self.thrust_command) + u_ad[2] + u_tracking[2] # add u_ad[2] to total thrust +10
+        # Limit total thrust
+        self.total_thrust = self.mpc_control_command_ft[2] + u_ad[2] + u_tracking[2]
         
         att_msg = AttitudeTarget()
         att_msg.header.stamp = rospy.Time.now()
@@ -704,19 +663,19 @@ class TrajectoryPublisher:
         att_msg.type_mask = AttitudeTarget.IGNORE_ATTITUDE 
         
         # 机体系角速度 (rad/s)
-        att_msg.body_rate = Vector3(self.roll_rate_ref_old, self.pitch_rate_ref_old, self.yaw_rate_ref_old)  # 仅绕 Z 轴旋转 0.1 rad/s
+        att_msg.body_rate = Vector3(self.roll_rate_ref, self.pitch_rate_ref, self.yaw_rate_ref)
         
         # 推力值 (范围 0 ~ 1)
-        att_msg.thrust = self.total_thrust / self.max_thrust  # 60% 油门
+        att_msg.thrust = self.total_thrust / self.max_thrust
         
         # 对推力进行限幅
-        att_msg.thrust = np.clip(att_msg.thrust, 0, 1)
+        att_msg.thrust = np.clip(att_msg.thrust, self.min_thrust_cmd, self.max_thrust_cmd)
 
         self.body_rate_thrust_pub.publish(att_msg)
             
     def mpc_status_time_callback(self, event):
         # check if the controller is started
-        if self.controller_started:
+        if self.trajectory_started:
             rospy.loginfo("MPC controller is started")
         else:
             rospy.loginfo("MPC controller is not started")
@@ -726,29 +685,14 @@ class TrajectoryPublisher:
             rospy.loginfo("Model is offboard")
         else:
             rospy.loginfo("Model is not offboard")
-            self.controller_started = False
+            self.trajectory_started = False
         
         # check if model is armed
         if self.current_state.armed:
             rospy.loginfo("Model is armed")
         else:
             rospy.loginfo("Model is not armed")
-            self.controller_started = False
-        
-    def publish_body_rate_thrust(self, yaw_rate, thrust):
-        msg = AttitudeTarget()
-        msg.header = Header()
-        msg.header.stamp = rospy.Time.now()
-        msg.header.frame_id = "map" 
-
-        msg.type_mask = AttitudeTarget.IGNORE_PX | AttitudeTarget.IGNORE_PY | AttitudeTarget.IGNORE_PZ
-        
-        msg.body_rate.x = yaw_rate
-        msg.body_rate.y = 0
-        msg.body_rate.z = 0
-        
-        msg.thrust = thrust
-        self.body_rate_thrust_pub.publish(msg)
+            self.trajectory_started = False
         
     def publish_mpc_l1_debug_data(self):
         '''
@@ -1006,7 +950,7 @@ class TrajectoryPublisher:
         self.state = state_new
         
     def start_arm_test(self, req):
-        # self.controller_started = True
+        # self.trajectory_started = True
         self.current_state.mode = "OFFBOARD"
         self.current_state.armed = True
         
@@ -1014,7 +958,7 @@ class TrajectoryPublisher:
     
     def initialize_trajectory(self, req):
         # 初始化轨迹数据
-        self.controller_started = False
+        self.trajectory_started = False
         self.current_state.mode = "POSCTL"
         self.current_state.armed = False
         self.traj_finished = False
@@ -1040,7 +984,7 @@ class TrajectoryPublisher:
             return TriggerResponse(success=False, message="Must be armed to start trajectory")
             
         # Start trajectory
-        self.controller_started = True
+        self.trajectory_started = True
         self.traj_finished = False
         
         # Set the start time for the trajectory
