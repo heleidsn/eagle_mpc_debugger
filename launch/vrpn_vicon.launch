@@ -26,5 +26,6 @@
     </rosparam>
   <!-- <remap from="/vrpn_client_node/HR_follower1/pose" to="/HR_follower1/mavros/vision_pose/pose"/> -->
   <remap from="/vrpn_client_node/AMS_S500/pose" to="/mavros/vision_pose/pose"/>
+  <remap from="/vrpn_client_node/gripper_lei/pose" to="/gripper/pose_vicon"/>
   </node>
 </launch>
