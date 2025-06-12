@@ -9,6 +9,8 @@ import rospy
 import numpy as np
 import time
 import math
+import threading
+import queue
 from nav_msgs.msg import Odometry, Path
 from geometry_msgs.msg import PoseStamped
 from geometry_msgs.msg import TwistStamped
@@ -208,6 +210,35 @@ class TrajectoryPublisher:
         self.gripper_close_position = 0.0  # Position when gripper is closed
         self.grasp_start_time = None  # Will be set when trajectory starts
         
+        # Add MPC computation mode parameter
+        self.use_threading = rospy.get_param('~use_threading', True)
+        self.mpc_timeout = rospy.get_param('~mpc_timeout', 0.5)  # Timeout for MPC computation in seconds
+        
+        # Initialize thread-related attributes
+        self.mpc_result_queue = queue.Queue()
+        self.mpc_solver_thread = None
+        self.last_valid_control = None  # Store last valid control command
+        self.mpc_solving = False  # Flag to track if MPC is currently solving
+        self.mpc_solve_start_time = None  # Track when MPC solving started
+        
+        # Add debugging statistics
+        self.solve_times = deque(maxlen=100)  # Store last 100 solve times
+        self.timeout_count = 0  # Count of timeouts
+        self.error_count = 0  # Count of solver errors
+        self.last_solve_status = None  # Last solver status
+        self.last_error_msg = None  # Last error message
+        
+        # Add thread control
+        self.thread_lock = threading.Lock()
+        self.stop_thread = False
+        
+        # Initialize debug-related attributes
+        self.solving_time = 0.0
+        
+        # Initialize control command
+        self.control_command_mpc = None
+        self.mpc_control_command_ft = np.zeros(6)
+        
         rospy.loginfo("Trajectory publisher initialized")
         
     def init_mpc_controller(self):
@@ -230,13 +261,13 @@ class TrajectoryPublisher:
         # get initial state
         initial_state = self.trajectory_obj.initial_state
         
-        hover_state_ref = [initial_state] * len(self.traj_state_ref)
+        self.hover_state_ref = [initial_state] * len(self.traj_state_ref)
         
         # Initialize hover MPC
         self.hover_mpc = create_mpc_controller(
             mpc_name,
             self.trajectory_obj,
-            hover_state_ref,  # Use hover reference state
+            self.hover_state_ref,  # Use hover reference state
             self.dt_traj_opt,
             mpc_yaml
         )
@@ -248,6 +279,8 @@ class TrajectoryPublisher:
         
         self.speed_command = np.zeros(self.mpc_controller.platform_params.n_rotors)
         self.total_thrust = 0.0
+        
+        self.mpc_control_command_ft = np.zeros(6)
         
         self.arm_joint_number = self.mpc_controller.robot_model.nq - 7
         
@@ -404,16 +437,13 @@ class TrajectoryPublisher:
                 
         elif self.control_mode == 'MPC':
             # 1. Get MPC control command
-            t0 = time.time()
             self.get_mpc_command()
-            t1 = time.time()
             
             # 2. Get L1 control command
             if self.enable_l1_control:
                 self.get_l1_control(self.state, self.mpc_ref_index)
             else:
                 self._init_l1_controller()
-            t2 = time.time()
             
             # 3. Publish control command
             self.publish_mpc_control_command(self.l1_controller.u_mpc, self.l1_controller.u_ad, self.l1_controller.u_tracking)
@@ -423,12 +453,6 @@ class TrajectoryPublisher:
                 
             # 4. Publish debug info
             self.publish_mpc_l1_debug_data()
-            t3 = time.time()
-            
-            # 5. Show time info
-            rospy.loginfo_throttle(1.0, f"MPC calculate time: {(t1-t0)*1000:.3f} ms")
-            rospy.loginfo_throttle(1.0, f"L1 state prep time: {(t2-t1)*1000:.3f} ms")
-            rospy.loginfo_throttle(1.0, f"Topic publish time: {(t3-t2)*1000:.3f} ms")
         else:
             rospy.logwarn("Invalid control mode")
             
@@ -438,21 +462,22 @@ class TrajectoryPublisher:
 
     def get_mpc_command(self):
         """Get MPC control command."""
-        
+        if self.use_threading:
+            self._get_mpc_command_threading()
+        else:
+            self._get_mpc_command_single()
+
+    def _get_mpc_command_single(self):
+        """Get MPC control command using single thread."""
         self.mpc_controller.problem.x0 = self.state
             
         # select MPC controller, trajectory tracking or hover
         if self.trajectory_started:
             # Switch to trajectory tracking MPC
             self.mpc_controller = self.trajectory_mpc
-            # self.controller_time = rospy.Time.now() - self.controller_start_time
-            # self.mpc_ref_index = int(self.controller_time.to_sec() * 1000.0)
-            # self.traj_ref_index = int(self.mpc_ref_index / self.dt_traj_opt)
         else:
             # Use hover MPC
             self.mpc_controller = self.hover_mpc
-            # self.mpc_ref_index = 0
-            # self.traj_ref_index = 0
             
         # update problem
         self.mpc_controller.updateProblem(self.mpc_ref_index)   # update problem using current time in ms
@@ -470,9 +495,9 @@ class TrajectoryPublisher:
         
         # Convert to force/torque
         self.mpc_control_command_ft = thrustToForceTorqueAll(
-                self.control_command_mpc,
-                self.mpc_controller.platform_params.tau_f
-            )
+            self.control_command_mpc,
+            self.mpc_controller.platform_params.tau_f
+        )
         
         # get MPC debug info
         self.mpc_iter_num = self.mpc_controller.solver.iter
@@ -484,6 +509,159 @@ class TrajectoryPublisher:
         rospy.logdebug('MPC state          : {}'.format(self.state[7:]))
         rospy.logdebug('MPC reference state: {}'.format(self.traj_state_ref[self.traj_ref_index][7:]))
         rospy.logdebug('MPC control command: {}'.format(self.control_command_mpc))
+
+    def solve_mpc_thread(self, q):
+        """Solve MPC problem in a separate thread."""
+        try:
+            with self.thread_lock:
+                if self.stop_thread:
+                    return
+                
+                # Create a copy of the current state
+                state_copy = self.state.copy()
+                
+                # select MPC controller, trajectory tracking or hover
+                if self.trajectory_started:
+                    # Switch to trajectory tracking MPC
+                    mpc_controller = self.trajectory_mpc
+                else:
+                    # Use hover MPC
+                    mpc_controller = self.hover_mpc
+                    
+                mpc_ref_index = self.mpc_ref_index
+                
+                # Update problem
+                mpc_controller.problem.x0 = state_copy
+                mpc_controller.updateProblem(mpc_ref_index)
+            
+            # Solve MPC problem
+            time_start = rospy.Time.now()
+            mpc_controller.solver.solve(
+                mpc_controller.solver.xs,
+                mpc_controller.solver.us,
+                mpc_controller.iters
+            )
+            time_end = rospy.Time.now()
+            solving_time = (time_end - time_start).to_sec()
+            
+            # Get control command
+            control_command = mpc_controller.solver.us_squash[0]
+            control_command_ft = thrustToForceTorqueAll(
+                control_command,
+                mpc_controller.platform_params.tau_f
+            )
+            
+            # Put result in queue
+            q.put({
+                'success': True,
+                'control_command': control_command,
+                'control_command_ft': control_command_ft,
+                'solving_time': solving_time,
+                'mpc_iter_num': mpc_controller.iters,
+                'mpc_start_cost': mpc_controller.solver.cost,
+                'mpc_final_cost': mpc_controller.solver.cost
+            })
+            
+        except Exception as e:
+            rospy.logerr(f"Error in MPC solver thread: {str(e)}")
+            q.put({
+                'success': False,
+                'error': str(e)
+            })
+
+    def _get_mpc_command_threading(self):
+        """Get MPC control command using multi-threading with timeout."""
+        current_time = rospy.Time.now()
+        
+        # Check if we need to start a new solve
+        with self.thread_lock:
+            if not self.mpc_solving:
+                # Stop any existing thread
+                self.stop_thread = True
+                if self.mpc_solver_thread and self.mpc_solver_thread.is_alive():
+                    self.mpc_solver_thread.join(timeout=0.1)
+                
+                # Start new solve
+                self.stop_thread = False
+                self.mpc_solving = True
+                self.mpc_solve_start_time = current_time
+                self.mpc_solver_thread = threading.Thread(target=self.solve_mpc_thread, args=(self.mpc_result_queue,))
+                self.mpc_solver_thread.daemon = True
+                self.mpc_solver_thread.start()
+                rospy.logdebug("Started new MPC solve")
+        
+        # Check if current solve has timed out
+        if (current_time - self.mpc_solve_start_time).to_sec() > self.mpc_timeout:
+            with self.thread_lock:
+                self.timeout_count += 1
+                rospy.logwarn(f"MPC solver timeout after {self.mpc_timeout} seconds")
+                self.mpc_solving = False
+                self.stop_thread = True
+                if self.last_valid_control is not None:
+                    self.control_command_mpc = self.last_valid_control
+                    rospy.logdebug("Using last valid control command")
+                else:
+                    self.control_command_mpc = np.zeros_like(self.control_command_mpc)
+                    rospy.logwarn("No valid control command available, using zero control")
+            return
+        
+        # Try to get result from queue
+        try:
+            result = self.mpc_result_queue.get_nowait()
+            with self.thread_lock:
+                self.mpc_solving = False
+                self.stop_thread = True
+                
+                if result['success']:
+                    # Update control commands and debug info
+                    self.control_command_mpc = result['control_command']
+                    self.last_valid_control = self.control_command_mpc.copy()
+                    self.mpc_control_command_ft = result['control_command_ft']
+                    self.mpc_iter_num = result['mpc_iter_num']
+                    self.solving_time = result['solving_time']
+                    self.mpc_start_cost = result['mpc_start_cost']
+                    self.mpc_final_cost = result['mpc_final_cost']
+                    
+                    # Log detailed debug info
+                    rospy.logdebug(f"MPC solve successful:")
+                    rospy.logdebug(f"  - Index: {self.mpc_ref_index}")
+                    rospy.logdebug(f"  - Solving time: {self.solving_time:.3f}s")
+                    rospy.logdebug(f"  - Iterations: {self.mpc_iter_num}")
+                    rospy.logdebug(f"  - Start cost: {self.mpc_start_cost:.3f}")
+                    rospy.logdebug(f"  - Final cost: {self.mpc_final_cost:.3f}")
+                    rospy.logdebug(f"  - Control command: {self.control_command_mpc}")
+                else:
+                    rospy.logwarn(f"MPC solver failed: {result['error']}")
+                    if self.last_valid_control is not None:
+                        self.control_command_mpc = self.last_valid_control
+                        rospy.logdebug("Using last valid control command after failure")
+                    else:
+                        self.control_command_mpc = np.zeros_like(self.control_command_mpc)
+                        rospy.logwarn("No valid control command available after failure")
+                        
+                    self.mpc_control_command_ft = thrustToForceTorqueAll(
+                        self.control_command_mpc,
+                        self.mpc_controller.platform_params.tau_f
+                    )
+                
+        except queue.Empty:
+            # No result yet, continue using last valid control
+            if self.last_valid_control is not None:
+                self.control_command_mpc = self.last_valid_control
+            else:
+                rospy.logwarn("No valid control command available, using zero control")
+                self.control_command_mpc = np.zeros_like(self.mpc_controller.solver.us_squash[0])
+        
+        # Log periodic statistics
+        if len(self.solve_times) > 0 and len(self.solve_times) % 10 == 0:
+            avg_solve_time = sum(self.solve_times) / len(self.solve_times)
+            rospy.loginfo(f"MPC Statistics:")
+            rospy.loginfo(f"  - Average solve time: {avg_solve_time:.3f}s")
+            rospy.loginfo(f"  - Timeout count: {self.timeout_count}")
+            rospy.loginfo(f"  - Error count: {self.error_count}")
+            rospy.loginfo(f"  - Last status: {self.last_solve_status}")
+            if self.last_error_msg:
+                rospy.loginfo(f"  - Last error: {self.last_error_msg}")
 
     def get_l1_control(self, current_state: np.ndarray, time_step: int) -> Tuple[np.ndarray, Dict[str, Any]]:
         """Get control command from L1 controller."""
@@ -622,6 +800,8 @@ class TrajectoryPublisher:
         # get planned state
         self.state_ref = self.mpc_controller.solver.xs[1]
         
+        print(self.state_ref)
+        
         # get body rate command from MPC
         self.roll_rate_ref_next_step = self.state_ref[self.mpc_controller.robot_model.nq + 3]
         self.pitch_rate_ref_next_step = self.state_ref[self.mpc_controller.robot_model.nq + 4]
@@ -728,7 +908,11 @@ class TrajectoryPublisher:
         debug_msg.header.stamp = rospy.Time.now()
         
         current_state = self.state.tolist()
-        state_ref = self.traj_state_ref[self.traj_ref_index]
+        
+        if self.trajectory_started:
+            state_ref = self.traj_state_ref[self.traj_ref_index]
+        else:
+            state_ref = self.hover_state_ref[0]
         
         # transfer quaternion to euler        
         quat = current_state[3:7]
