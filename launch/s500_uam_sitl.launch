@@ -2,49 +2,51 @@
 <launch>
     <!-- MAVROS posix SITL environment launch script -->
     <!-- launches MAVROS, PX4 SITL, Gazebo environment, and spawns vehicle -->
-    <!-- vehicle pose -->
-    <arg name="x" default="0"/>
-    <arg name="y" default="0"/>
-    <arg name="z" default="0"/>
-    <arg name="R" default="0"/>
-    <arg name="P" default="0"/>
-    <arg name="Y" default="0"/>
     <!-- vehicle model and world -->
-    <arg name="est" default="ekf2"/>
     <arg name="vehicle" default="s500_uam"/>
-    <arg name="world" default="$(find mavlink_sitl_gazebo)/worlds/empty.world"/>
-    <arg name="sdf" default="$(find mavlink_sitl_gazebo)/models/$(arg vehicle)/$(arg vehicle).sdf"/>
+    <!-- <arg name="world" default="$(find eagle_mpc_debugger)/worlds/table_beer.world"/> -->
+    <arg name="world" default="$(find eagle_mpc_debugger)/worlds/empty.world"/>
+    <arg name="sdf" default="$(find eagle_mpc_debugger)/models/sdf/s500_uam/s500_uam.sdf"/>
 
     <!-- gazebo configs -->
     <arg name="gui" default="true"/>
     <arg name="debug" default="false"/>
     <arg name="verbose" default="false"/>
-    <arg name="paused" default="false"/>
+    <arg name="paused" default="true"/>
     <arg name="respawn_gazebo" default="false"/>
+    
+    <!-- PX4 configs -->
+    <arg name="interactive" default="true"/>
+
     <!-- MAVROS configs -->
     <arg name="fcu_url" default="udp://:14540@localhost:14557"/>
     <arg name="respawn_mavros" default="false"/>
-    <!-- PX4 configs -->
-    <arg name="interactive" default="true"/>
-    <!-- PX4 SITL and Gazebo -->
-    <include file="$(find px4)/launch/posix_sitl.launch">
-        <arg name="x" value="$(arg x)"/>
-        <arg name="y" value="$(arg y)"/>
-        <arg name="z" value="$(arg z)"/>
-        <arg name="R" value="$(arg R)"/>
-        <arg name="P" value="$(arg P)"/>
-        <arg name="Y" value="$(arg Y)"/>
-        <arg name="world" value="$(arg world)"/>
-        <arg name="vehicle" value="$(arg vehicle)"/>
-        <arg name="sdf" value="$(arg sdf)"/>
+
+    <!-- PX4 SITL -->
+    <arg unless="$(arg interactive)" name="px4_command_arg1" value="-d"/>
+    <arg     if="$(arg interactive)" name="px4_command_arg1" value=""/>
+    <node name="sitl" pkg="px4" type="px4" output="screen"
+        args="$(find px4)/build/px4_sitl_default/etc -s etc/init.d-posix/rcS $(arg px4_command_arg1)" required="true"/>
+
+    <!-- Gazebo sim add arm initial position-->
+    <arg name="x" default="-1.5"/>
+    <arg name="y" default="0"/>
+    <arg name="z" default="0"/>
+    <arg name="joint_1_pos" default="-1.2"/>
+    <arg name="joint_2_pos" default="-0.6"/>
+    <arg name="joint_3_pos" default="0.0"/>
+    <arg name="joint_4_pos" default="0.0"/>
+    <include file="$(find gazebo_ros)/launch/empty_world.launch">
         <arg name="gui" value="$(arg gui)"/>
-        <arg name="interactive" value="$(arg interactive)"/>
+        <arg name="world_name" value="$(arg world)"/>
         <arg name="debug" value="$(arg debug)"/>
         <arg name="verbose" value="$(arg verbose)"/>
         <arg name="paused" value="$(arg paused)"/>
         <arg name="respawn_gazebo" value="$(arg respawn_gazebo)"/>
     </include>
-    <!-- MAVROS -->
+    <!-- gazebo model -->
+    <node name="$(anon vehicle_spawn)" pkg="gazebo_ros" type="spawn_model" output="screen" args="-sdf -file $(arg sdf) -model $(arg vehicle) -x $(arg x) -y $(arg y) -z $(arg z) -J joint_1 $(arg joint_1_pos) -J joint_2 $(arg joint_2_pos) -J joint_3 $(arg joint_3_pos) -J joint_4 $(arg joint_4_pos)" />
+
     <include file="$(find mavros)/launch/px4.launch">
         <!-- GCS link is provided by SITL -->
         <arg name="gcs_url" value=""/>
@@ -52,25 +54,30 @@
         <arg name="respawn_mavros" value="$(arg respawn_mavros)"/>
     </include>
 
-    <!-- 加载 SDF 模型 但是无法直接从sdf中进行加载，需要urdf -->
-    <!-- <param name="robot_description" command="$(find xacro)/xacro /home/helei/PX4_1_16/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models/s500_uam/s500_uam.urdf"/> -->
-    <param name="robot_description" textfile="/home/helei/catkin_eagle_mpc/src/eagle_mpc_ros/eagle_mpc_yaml/s500_robot/s500_uam/urdf/s500_uam.urdf"/>
+    <!-- robot description -->
+    <param name="arm_controller/robot_description"
+         command="$(find xacro)/xacro $(find eagle_mpc_debugger)/models/urdf/s500_uam_arm.urdf.xacro"/>
 
-    <!-- 运行 robot_state_publisher（虽然 SDF 不直接使用 TF，但可以发布状态） -->
-    <!-- <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher"/> -->
+    <!-- arm controller -->
+    <rosparam ns="arm_controller" file="$(find eagle_mpc_debugger)/config/arm_controllers.yaml" command="load"/>
 
-    <!-- 加载控制器配置 -->
-    <!-- <param name="controller_config" textfile="/home/helei/PX4_1_16/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models/s500_uam/config/joint_controllers.yaml"/> -->
+    <!-- Spawn controllers with correct namespace and controller manager -->
+    <node name="spawn_arm_controllers" pkg="controller_manager" type="spawner" output="screen"
+        args="
+        joint_state_controller
+        joint_1_position_controller
+        joint_2_position_controller
+        joint_3_position_controller
+        joint_4_position_controller
+        "
+        ns="arm_controller"
+        respawn="false">
+        <param name="use_sim_time" value="true"/>
+    </node>
 
-    <rosparam command="load" file="/home/helei/PX4_1_16/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models/s500_uam/config/joint_controllers.yaml"/>
-
-    <!-- 启动控制器管理器 -->
-    <!-- <node name="controller_manager" pkg="controller_manager" type="spawner" args="joint_1_position_controller"/> -->
-    <!-- <node name="controller_manager" pkg="controller_manager" type="controller_manager" output="screen"/> -->
-
-    <node name="controller_spawner" pkg="controller_manager" type="spawner" respawn="false"
-        output="screen" args="joint_1_position_controller joint_state_controller">
-        <param name="respawn_delay" value="5.0"/>
+    <!-- gazebo state-->
+    <node pkg="eagle_mpc_debugger" type="groundtruth_pub.py" name="groundtruth_pub" output="screen">
+        <param name="model_name" value="$(arg vehicle)" />
     </node>
 
 </launch>

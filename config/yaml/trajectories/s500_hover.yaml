@@ -1,0 +1,48 @@
+trajectory:
+  robot:
+    name: "s500"
+    urdf: "/home/helei/catkin_eagle_mpc/src/eagle_mpc_debugger/models/urdf/s500_simple.urdf"
+    follow: "/home/helei/catkin_eagle_mpc/src/eagle_mpc_debugger/config/yaml/multicopter/s500.yaml"
+
+  stages:
+    - name: "navigation"
+      duration: 3000 #ms
+      transition: true
+      costs:
+        - name: "reg_state"
+          type: "ResidualModelState"
+          weight: 1e-1
+          reference: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
+          activation: "ActivationModelWeightedQuad"
+          weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+
+        - name: "reg_control"
+          type: "ResidualModelControl"
+          weight: 5e-2
+          reference: [0, 0, 0, 0]
+          activation: "ActivationModelWeightedQuad"
+          weights: [1, 1, 1, 1]
+
+    - name: "hover"
+      duration: 0 #ms
+      costs:
+        - name: "placement_base_link"
+          type: "ResidualModelFramePlacement"
+          weight: 6000
+          link_name: "base_link"
+          position: [0, 0, 1.5]
+          orientation: [0, 0, 0, 1] # x,y,z,w
+
+        - name: "motion_base_link"
+          type: "ResidualModelFrameVelocity"
+          weight: 1000
+          link_name: "base_link"
+          linear: [0, 0, 0]
+          angular: [0, 0, 0]
+
+        - name: "reg_control"
+          type: "ResidualModelControl"
+          weight: 5e-2
+          reference: [0, 0, 0, 0]
+          activation: "ActivationModelWeightedQuad"
+          weights: [1, 1, 1, 1]

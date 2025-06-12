@@ -1,6 +1,7 @@
 import time
 import eagle_mpc
 import crocoddyl
+import matplotlib.pyplot as plt
 
 def get_opt_traj(robotName, trajectoryName, dt_traj_opt, useSquash, yaml_file_path):
     '''
@@ -16,12 +17,23 @@ def get_opt_traj(robotName, trajectoryName, dt_traj_opt, useSquash, yaml_file_pa
     else:
         solver = crocoddyl.SolverBoxFDDP(problem)
 
-    # solver.convergence_init = 1e-4
+    # solver.convergence_init = 1e-9
+    logger = crocoddyl.CallbackLogger()
     
-    solver.setCallbacks([crocoddyl.CallbackVerbose()])
+    solver.setCallbacks([logger, crocoddyl.CallbackVerbose()])
     start_time = time.time()
     solver.solve([], [], maxiter=400)
     end_time = time.time()
+    
+    # 绘制 cost 曲线
+    # plt.figure(figsize=(8, 5))
+    # plt.plot(logger.costs, marker='o')
+    # plt.xlabel('Iteration')
+    # plt.ylabel('Total Cost')
+    # plt.title('Cost Convergence during DDP Optimization')
+    # plt.grid(True)
+    # plt.tight_layout()
+    # plt.show()
     
     print("Time taken for trajectory optimization: {:.2f} ms".format((end_time - start_time)*1000))
     
@@ -39,13 +51,13 @@ def create_mpc_controller(mpc_name, trajectory, traj_state_ref, dt_traj_opt, mpc
         mpcController = eagle_mpc.WeightedMpc(trajectory, dt_traj_opt, mpc_yaml_path)
     elif mpc_name == 'carrot':
         mpcController = eagle_mpc.CarrotMpc(trajectory, traj_state_ref, dt_traj_opt, mpc_yaml_path)
-        
+    
     logger = crocoddyl.CallbackLogger()
     CallbackVerbose = crocoddyl.CallbackVerbose()
     
     mpcController.solver.setCallbacks([logger])  # 设置回调函数 
     mpcController.updateProblem(0)
-    mpcController.solver.convergence_init = 1e-12
+    mpcController.solver.convergence_init = 1e-3
     
     mpcController.logger = logger
     
