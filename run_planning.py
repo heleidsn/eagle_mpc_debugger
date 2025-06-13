@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-24 10:31:39
-LastEditTime: 2025-06-10 11:47:05
+LastEditTime: 2025-06-12 16:03:47
 Description: Run planning to generate planning results and save them to file
 Github: https://github.com/heleidsn
 '''
@@ -338,7 +338,7 @@ def main():
     
     # Settings
     mpc_name = 'rail'
-    mpc_yaml_path = '/home/jetson/catkin_ams/src/eagle_mpc_ros/eagle_mpc_yaml'
+    mpc_yaml_path = '/home/jetson/catkin_ams/src/eagle_mpc_debugger/config/yaml'
     
     robot_name = 's500_uam'   # s500, s500_uam, hexacopter370_flying_arm_3
     trajectory_name = 'catch_vicon_real_new'

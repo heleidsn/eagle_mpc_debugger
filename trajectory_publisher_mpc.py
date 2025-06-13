@@ -56,14 +56,10 @@ class TrajectoryPublisher:
         self.robot_name = rospy.get_param('~robot_name', 's500_uam')     # s500, s500_uam, hexacopter370_flying_arm_3
         self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon_real_new')   # displacement, catch_vicon
         self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 20)  # ms
-        self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon')   # displacement, catch_vicon
-        self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 20)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
         self.yaml_path = rospy.get_param('~yaml_path', '/home/jetson/catkin_ams/src/eagle_mpc_ros/eagle_mpc_yaml')
         self.control_rate = rospy.get_param('~control_rate', 50.0)  # Hz
-        self.use_simulation = rospy.get_param('~use_simulation', True)   #  if true, publish arm control command for ros_control
-        self.yaml_path = rospy.get_param('~yaml_path', '/home/helei/catkin_eagle_mpc/src/eagle_mpc_debugger/config/yaml')
-        self.control_rate = rospy.get_param('~control_rate', 100.0)  # Hz
+        self.use_simulation = rospy.get_param('~use_simulation', False)   #  if true, publish arm control command for ros_control
         
         self.odom_source = rospy.get_param('~odom_source', 'mavros')  # mavros, gazebo  
         
@@ -172,9 +168,10 @@ class TrajectoryPublisher:
         self.close_gripper_service = rospy.Service('close_gripper', Trigger, self.close_gripper_callback)
         self.reset_beer_service = rospy.Service('reset_beer', Trigger, self.reset_beer_callback)
         
-        # Wait for Gazebo services
-        rospy.wait_for_service('/gazebo/set_model_state')
-        self.set_model_state = rospy.ServiceProxy('/gazebo/set_model_state', SetModelState)
+        if self.use_simulation:
+            # Wait for Gazebo services
+            rospy.wait_for_service('/gazebo/set_model_state')
+            self.set_model_state = rospy.ServiceProxy('/gazebo/set_model_state', SetModelState)
         
         # Initial beer position
         self.beer_initial_euler = np.array([-1.5708, -1.50229, -1.4e-05])
