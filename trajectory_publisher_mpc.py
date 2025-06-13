@@ -20,6 +20,7 @@ from utils.u_convert import thrustToForceTorqueAll
 
 from controller_msgs.msg import FlatTarget
 from mavros_msgs.msg import State, PositionTarget, AttitudeTarget
+from mavros_msgs.srv import SetMode, SetModeRequest
 from tf.transformations import quaternion_matrix
 from geometry_msgs.msg import Point, Vector3, Pose, Quaternion, Twist
 from std_msgs.msg import Float32, Header, Float64
@@ -32,7 +33,7 @@ from typing import Dict, Any, Tuple
 from sensor_msgs.msg import JointState
 from std_srvs.srv import Trigger, TriggerResponse
 from gazebo_msgs.msg import ModelStates, ModelState
-from gazebo_msgs.srv import SetModelState
+from gazebo_msgs.srv import SetModelState, GetModelState, GetModelStateRequest, GetModelStateResponse
 
 import crocoddyl
 import pinocchio as pin
@@ -94,15 +95,13 @@ class TrajectoryPublisher:
         
         self.last_times = deque(maxlen=100)  # 存储最近100次回调时间
         
-        # set numpy print precision
-        # np.set_printoptions(precision=2, suppress=True)
-        np.set_printoptions(formatter={'float': lambda x: f"{x:>4.2f}"})  # 固定 6 位小数
-        
         # Load trajectory
         self.load_trajectory()
+        
+        # Initialize MPC and L1 controller
         if self.control_mode == 'MPC':
             self.init_mpc_controller()
-            self._init_l1_controller()
+            self.init_l1_controller()
         
         # Subscriber
         self.current_state = State()
@@ -171,8 +170,10 @@ class TrajectoryPublisher:
         self.reset_beer_service = rospy.Service('reset_beer', Trigger, self.reset_beer_callback)
         
         # Wait for Gazebo services
-        rospy.wait_for_service('/gazebo/set_model_state')
-        self.set_model_state = rospy.ServiceProxy('/gazebo/set_model_state', SetModelState)
+        if self.use_simulation:
+            rospy.wait_for_service('/gazebo/get_model_state')
+            self.get_model_state = rospy.ServiceProxy('/gazebo/get_model_state', GetModelState)
+            self.set_model_state = rospy.ServiceProxy('/gazebo/set_model_state', SetModelState)
         
         # Initial beer position
         self.beer_initial_euler = np.array([-1.5708, -1.50229, -1.4e-05])
@@ -211,7 +212,7 @@ class TrajectoryPublisher:
         self.grasp_start_time = None  # Will be set when trajectory starts
         
         # Add MPC computation mode parameter
-        self.use_threading = rospy.get_param('~use_threading', True)
+        self.use_multi_thread = rospy.get_param('~use_multi_thread', False)
         self.mpc_timeout = rospy.get_param('~mpc_timeout', 0.5)  # Timeout for MPC computation in seconds
         
         # Initialize thread-related attributes
@@ -238,6 +239,44 @@ class TrajectoryPublisher:
         # Initialize control command
         self.control_command_mpc = None
         self.mpc_control_command_ft = np.zeros(6)
+        
+        # State limit parameters
+        self.position_limits = np.array([
+            rospy.get_param('~max_position_xy', 10.0),  # max position in x, y direction
+            rospy.get_param('~max_position_xy', 10.0),
+            rospy.get_param('~max_position_z', 5.0)     # max position in z direction
+        ])
+        
+        self.velocity_limits = np.array([
+            rospy.get_param('~max_velocity_xy', 2.0),   # max velocity in x, y direction
+            rospy.get_param('~max_velocity_xy', 2.0),
+            rospy.get_param('~max_velocity_z', 2.0)     # max velocity in z direction
+        ])
+        
+        self.angular_velocity_limits = np.array([
+            rospy.get_param('~max_angular_velocity', 2.0),  # max angular velocity
+            rospy.get_param('~max_angular_velocity', 2.0),
+            rospy.get_param('~max_angular_velocity', 2.0)
+        ])
+        
+        # Arm joint limit parameters
+        self.arm_joint_limits = np.array([
+            rospy.get_param('~max_arm_joint_angle', 1.57),  # max joint angle (±90 degrees)
+            rospy.get_param('~max_arm_joint_angle', 1.57)
+        ])
+        
+        self.arm_joint_velocity_limits = np.array([
+            rospy.get_param('~max_arm_joint_velocity', 2.0),  # max joint angular velocity
+            rospy.get_param('~max_arm_joint_velocity', 2.0)
+        ])
+        
+        # Print parameter information
+        rospy.loginfo("State limits parameters:")
+        rospy.loginfo(f"Position limits (x,y,z): {self.position_limits}")
+        rospy.loginfo(f"Velocity limits (x,y,z): {self.velocity_limits}")
+        rospy.loginfo(f"Angular velocity limits: {self.angular_velocity_limits}")
+        rospy.loginfo(f"Arm joint limits: {self.arm_joint_limits}")
+        rospy.loginfo(f"Arm joint velocity limits: {self.arm_joint_velocity_limits}")
         
         rospy.loginfo("Trajectory publisher initialized")
         
@@ -284,7 +323,7 @@ class TrajectoryPublisher:
         
         self.arm_joint_number = self.mpc_controller.robot_model.nq - 7
         
-    def _init_l1_controller(self) -> None:
+    def init_l1_controller(self) -> None:
         """Initialize L1 adaptive controller."""
         dt_controller = 1.0/self.control_rate
         robot_model = self.mpc_controller.robot_model
@@ -443,7 +482,7 @@ class TrajectoryPublisher:
             if self.enable_l1_control:
                 self.get_l1_control(self.state, self.mpc_ref_index)
             else:
-                self._init_l1_controller()
+                self.init_l1_controller()
             
             # 3. Publish control command
             self.publish_mpc_control_command(self.l1_controller.u_mpc, self.l1_controller.u_ad, self.l1_controller.u_tracking)
@@ -462,12 +501,12 @@ class TrajectoryPublisher:
 
     def get_mpc_command(self):
         """Get MPC control command."""
-        if self.use_threading:
-            self._get_mpc_command_threading()
+        if self.use_multi_thread:
+            self.get_mpc_command_multi_thread()
         else:
-            self._get_mpc_command_single()
+            self.get_mpc_command_single_thread()
 
-    def _get_mpc_command_single(self):
+    def get_mpc_command_single_thread(self):
         """Get MPC control command using single thread."""
         self.mpc_controller.problem.x0 = self.state
             
@@ -479,15 +518,39 @@ class TrajectoryPublisher:
             # Use hover MPC
             self.mpc_controller = self.hover_mpc
             
+        # 检查并限制输入状态
+        self.state = self.limit_state_input(self.state)
+        
         # update problem
+        self.mpc_controller.problem.x0 = self.state
         self.mpc_controller.updateProblem(self.mpc_ref_index)   # update problem using current time in ms
         
         time_start = rospy.Time.now()
-        self.mpc_controller.solver.solve(
-            self.mpc_controller.solver.xs,
-            self.mpc_controller.solver.us,
-            self.mpc_controller.iters
-        )
+        try:
+            success = self.mpc_controller.solver.solve(
+                self.mpc_controller.solver.xs,
+                self.mpc_controller.solver.us,
+                self.mpc_controller.iters
+            )
+            if not success or self.mpc_controller.safe_cb.cost > 5000:
+                rospy.logerr("MPC solver failed, cost: {}".format(self.mpc_controller.safe_cb.cost))
+                self.trajectory_started = False
+                # switch to auto land mode
+                try:
+                    rospy.wait_for_service('/mavros/set_mode')
+                    set_mode = rospy.ServiceProxy('/mavros/set_mode', SetMode)
+                    response = set_mode(custom_mode='AUTO.LAND')
+                    if response.mode_sent:
+                        rospy.loginfo("Successfully switched to PX4 auto land mode")
+                    else:
+                        rospy.logerr("Failed to switch to auto land mode")
+                except rospy.ServiceException as e:
+                    rospy.logerr(f"Service call failed: {e}")
+                return
+        except Exception as e:
+            rospy.logerr(f"Error in MPC solver: {str(e)}")
+            return
+        
         time_end = rospy.Time.now()
         
         # get mpc control command
@@ -569,7 +632,7 @@ class TrajectoryPublisher:
                 'error': str(e)
             })
 
-    def _get_mpc_command_threading(self):
+    def get_mpc_command_multi_thread(self):
         """Get MPC control command using multi-threading with timeout."""
         current_time = rospy.Time.now()
         
@@ -800,8 +863,6 @@ class TrajectoryPublisher:
         # get planned state
         self.state_ref = self.mpc_controller.solver.xs[1]
         
-        print(self.state_ref)
-        
         # get body rate command from MPC
         self.roll_rate_ref_next_step = self.state_ref[self.mpc_controller.robot_model.nq + 3]
         self.pitch_rate_ref_next_step = self.state_ref[self.mpc_controller.robot_model.nq + 4]
@@ -940,14 +1001,8 @@ class TrajectoryPublisher:
         debug_msg.mpc_start_cost = self.mpc_start_cost
         debug_msg.mpc_final_cost = self.mpc_final_cost
         
-        # u_mpc need to transform to force/torque
-        u_mpc_motor_thrust = self.control_command[:self.mpc_controller.platform_params.n_rotors]
-        baseline_control_ft = thrustToForceTorqueAll(
-                u_mpc_motor_thrust,
-                self.mpc_controller.platform_params.tau_f
-            )
-        
-        debug_msg.u_mpc = self.control_command.tolist()
+        # u_mpc
+        debug_msg.u_mpc = self.mpc_control_command_ft.tolist()
         
         # if self.enable_l1_control:
         debug_msg.u_ad = self.l1_controller.u_ad.tolist()
@@ -1293,6 +1348,98 @@ class TrajectoryPublisher:
         except rospy.ServiceException as e:
             rospy.logerr(f"Service call failed: {e}")
             return TriggerResponse(success=False, message=f"Service call failed: {e}")
+
+    def limit_state_input(self, state):
+        """Limit state input ranges, especially for velocities"""
+        try:
+            state_limited = state.copy()
+            
+            # Position limits (x, y, z)
+            state_limited[0:3] = np.clip(state[0:3], -self.position_limits, self.position_limits)
+            
+            # Quaternion normalization
+            quat = state[3:7]
+            quat_norm = np.linalg.norm(quat)
+            if quat_norm > 0:
+                state_limited[3:7] = quat / quat_norm
+            else:
+                state_limited[3:7] = np.array([0.0, 0.0, 0.0, 1.0])  # default orientation
+                
+            # Get nq from robot model
+            nq = self.mpc_controller.robot_model.nq
+            
+            # Velocity limits (vx, vy, vz)
+            state_limited[nq:nq+3] = np.clip(state[nq:nq+3], -self.velocity_limits, self.velocity_limits)
+            
+            # Angular velocity limits (wx, wy, wz)
+            state_limited[nq+3:nq+6] = np.clip(state[nq+3:nq+6], -self.angular_velocity_limits, self.angular_velocity_limits)
+            
+            # Arm joint angle limits (start after quaternion)
+            arm_joint_start = 7  # start index of arm joint angles (after quaternion)
+            arm_joint_end = arm_joint_start + self.arm_joint_number
+            state_limited[arm_joint_start:arm_joint_end] = np.clip(
+                state[arm_joint_start:arm_joint_end], 
+                -self.arm_joint_limits, 
+                self.arm_joint_limits
+            )
+            
+            # Arm joint angular velocity limits (at the end of state vector)
+            arm_vel_start = -self.arm_joint_number  # start index from the end
+            arm_vel_end = None  # until the end
+            state_limited[arm_vel_start:arm_vel_end] = np.clip(
+                state[arm_vel_start:arm_vel_end], 
+                -self.arm_joint_velocity_limits, 
+                self.arm_joint_velocity_limits
+            )
+            
+            # Log if state was limited
+            tolerance = 1e-2  # 设置一个合适的容差
+            
+            # Check position limits
+            pos_diff = np.abs(state[0:3] - state_limited[0:3])
+            if np.any(pos_diff > tolerance):
+                rospy.logwarn("Position limits exceeded:")
+                for i, (orig, lim) in enumerate(zip(state[0:3], state_limited[0:3])):
+                    if abs(orig - lim) > tolerance:
+                        rospy.logwarn(f"  {['x', 'y', 'z'][i]}: {orig:.3f} -> {lim:.3f} (limit: ±{self.position_limits[i]:.3f})")
+            
+            # Check velocity limits
+            vel_diff = np.abs(state[nq:nq+3] - state_limited[nq:nq+3])
+            if np.any(vel_diff > tolerance):
+                rospy.logwarn("Velocity limits exceeded:")
+                for i, (orig, lim) in enumerate(zip(state[nq:nq+3], state_limited[nq:nq+3])):
+                    if abs(orig - lim) > tolerance:
+                        rospy.logwarn(f"  {['vx', 'vy', 'vz'][i]}: {orig:.3f} -> {lim:.3f} (limit: ±{self.velocity_limits[i]:.3f})")
+            
+            # Check angular velocity limits
+            ang_vel_diff = np.abs(state[nq+3:nq+6] - state_limited[nq+3:nq+6])
+            if np.any(ang_vel_diff > tolerance):
+                rospy.logwarn("Angular velocity limits exceeded:")
+                for i, (orig, lim) in enumerate(zip(state[nq+3:nq+6], state_limited[nq+3:nq+6])):
+                    if abs(orig - lim) > tolerance:
+                        rospy.logwarn(f"  {['wx', 'wy', 'wz'][i]}: {orig:.3f} -> {lim:.3f} (limit: ±{self.angular_velocity_limits[i]:.3f})")
+            
+            # Check arm joint angle limits
+            arm_angle_diff = np.abs(state[arm_joint_start:arm_joint_end] - state_limited[arm_joint_start:arm_joint_end])
+            if np.any(arm_angle_diff > tolerance):
+                rospy.logwarn("Arm joint angle limits exceeded:")
+                for i, (orig, lim) in enumerate(zip(state[arm_joint_start:arm_joint_end], state_limited[arm_joint_start:arm_joint_end])):
+                    if abs(orig - lim) > tolerance:
+                        rospy.logwarn(f"  Joint {i+1} angle: {orig:.3f} -> {lim:.3f} (limit: ±{self.arm_joint_limits[i]:.3f})")
+            
+            # Check arm joint velocity limits
+            arm_vel_diff = np.abs(state[arm_vel_start:arm_vel_end] - state_limited[arm_vel_start:arm_vel_end])
+            if np.any(arm_vel_diff > tolerance):
+                rospy.logwarn("Arm joint velocity limits exceeded:")
+                for i, (orig, lim) in enumerate(zip(state[arm_vel_start:arm_vel_end], state_limited[arm_vel_start:arm_vel_end])):
+                    if abs(orig - lim) > tolerance:
+                        rospy.logwarn(f"  Joint {i+1} velocity: {orig:.3f} -> {lim:.3f} (limit: ±{self.arm_joint_velocity_limits[i]:.3f})")
+            
+            return state_limited
+            
+        except Exception as e:
+            rospy.logerr(f"Error in state limiting: {str(e)}")
+            return state  # return original state if error occurs
 
 if __name__ == '__main__':
     try:

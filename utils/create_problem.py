@@ -2,6 +2,19 @@ import time
 import eagle_mpc
 import crocoddyl
 import matplotlib.pyplot as plt
+import numpy as np
+
+class SafeCallback(crocoddyl.CallbackAbstract):
+    def __init__(self):
+        super(SafeCallback, self).__init__()
+        self.threshold = 5000
+        self.cost = 0
+
+    def __call__(self, solver):
+        self.cost = solver.cost
+        if not np.isfinite(self.cost) or self.cost > self.threshold:
+            print(f"[SafeCallback] 🚨 Cost exploded: {self.cost}")
+            # Raise exception will NOT break the C++ solver, so you can use flags or logs instead
 
 def get_opt_traj(robotName, trajectoryName, dt_traj_opt, useSquash, yaml_file_path):
     '''
@@ -55,7 +68,9 @@ def create_mpc_controller(mpc_name, trajectory, traj_state_ref, dt_traj_opt, mpc
     logger = crocoddyl.CallbackLogger()
     CallbackVerbose = crocoddyl.CallbackVerbose()
     
-    mpcController.solver.setCallbacks([logger])  # 设置回调函数 
+    mpcController.safe_cb = SafeCallback()
+    
+    mpcController.solver.setCallbacks([logger, mpcController.safe_cb])
     mpcController.updateProblem(0)
     mpcController.solver.convergence_init = 1e-3
     
