@@ -1,14 +1,14 @@
 trajectory:
   robot:
     name: "s500_uam"
-    urdf: "/home/jetson/catkin_ams/src/example_robot_data/robots/s500_description/s500_uam/urdf/s500_uam_simple.urdf"
-    follow: "/home/jetson/catkin_ams/src/eagle_mpc_ros/eagle_mpc_yaml/multicopter/s500.yaml"
+    urdf: "/home/jetson/catkin_ams/src/eagle_mpc_debugger/models/urdf/s500_uam_simple.urdf"
+    follow: "/home/jetson/catkin_ams/src/eagle_mpc_debugger/config/yaml/multicopter/s500.yaml"
 
-  initial_state: [-1.5, 0, 1.5, 0, 0, 0, 1, -1.2, -0.6, 0, 0, 0, 0, 0, 0, 0, 0]
+  initial_state: [-1.5, 0, 1.5, 0, 0, 0, 1, -1.2, -0.7, 0, 0, 0, 0, 0, 0, 0, 0]
 
   stages:
     - name: "approach"
-      duration: 2000 #ms
+      duration: 3000 #ms
       transition: true
       costs:
         - name: "state_reg"
@@ -23,9 +23,9 @@ trajectory:
           weight: 10
           reference: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
           activation: "ActivationModelWeightedQuadraticBarrier"
-          weights: [0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 100, 100]
-          u_bound: [0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1]
-          l_bound: [0, 0, 0, 0, 0, 0, -1, -1, 0, 0, 0, 0, 0, 0, -1, -1]
+          weights: [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 100, 100]
+          u_bound: [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1]
+          l_bound: [0, 0, 0, 0, 0, 0, -1, -1, -1, -1, -1, 0, 0, 0, -1, -1]
 
         - name: "control_reg"
           type: "ResidualModelControl"
@@ -40,7 +40,7 @@ trajectory:
         - name: "state_quadrotor"
           type: "ResidualModelState"
           weight: 100
-          reference: [0, 0, 1.2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+          reference: [0, 0, 1.1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
           activation: "ActivationModelWeightedQuad"
           weights: [1, 1, 1, 1, 1, 1, 10, 10, 0, 0, 0, 0, 0, 0, 0, 0]
 
@@ -59,7 +59,7 @@ trajectory:
           weight: 1e-2
           reference: [0, 0, 1.2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
           activation: "ActivationModelWeightedQuad"
-          weights: [1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+          weights: [1, 1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0]
 
         - name: "state_limits"
           type: "ResidualModelState"
@@ -82,7 +82,7 @@ trajectory:
           type: "ResidualModelFrameTranslation"
           weight: 1000
           link_name: "gripper_link"
-          position: [0, 0, 1.0]
+          position: [0.0, 0, 0.8]
 
         - name: "motion_ee"
           type: "ResidualModelFrameVelocity"
@@ -94,7 +94,7 @@ trajectory:
           angular: [0, 0, 0]
 
     - name: "move_away"
-      duration: 2000 #ms
+      duration: 3000 #ms
       transition: true
       costs:
         - name: "state_reg"

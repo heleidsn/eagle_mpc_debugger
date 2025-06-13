@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-24 10:31:39
-LastEditTime: 2025-06-12 16:03:47
+LastEditTime: 2025-06-13 16:20:44
 Description: Run planning to generate planning results and save them to file
 Github: https://github.com/heleidsn
 '''
@@ -302,12 +302,13 @@ def plot_trajectory(trajectory, traj_state_ref, control_force_torque, dt_traj_op
         if i in [0, 1, 2]:
             ax.plot(time_state, vel_world_data, 'g--', label='Velocity (world)')
             # Add gripper position and velocity
-            ax.plot(time_state, gripper_positions[:, i], 'm-', label='Gripper Position')
-            ax.plot(time_state, gripper_linear_vel[:, i], 'm--', label='Gripper Velocity')
+            # ax.plot(time_state, gripper_positions[:, i], 'm-', label='Gripper Position')
+            # ax.plot(time_state, gripper_linear_vel[:, i], 'm--', label='Gripper Velocity')
         elif i == 4:  # Only plot pitch (index 4) for gripper orientation
             # Add gripper orientation and angular velocity
-            ax.plot(time_state, gripper_orientations[:, 1], 'm-', label='Gripper Pitch')
-            ax.plot(time_state, gripper_angular_vel[:, 1], 'm--', label='Gripper Pitch Rate')
+            # ax.plot(time_state, gripper_orientations[:, 1], 'm-', label='Gripper Pitch')
+            # ax.plot(time_state, gripper_angular_vel[:, 1], 'm--', label='Gripper Pitch Rate')
+            pass
         
         ax.set_xlabel('Time (s)')
         ax.set_ylabel(state_labels[i])
@@ -341,8 +342,8 @@ def main():
     mpc_yaml_path = '/home/jetson/catkin_ams/src/eagle_mpc_debugger/config/yaml'
     
     robot_name = 's500_uam'   # s500, s500_uam, hexacopter370_flying_arm_3
-    trajectory_name = 'catch_vicon_real_new'
-    dt_traj_opt = 20  # ms
+    trajectory_name = 'catch_vicon_real'
+    dt_traj_opt = 50  # ms
     useSquash = True
     
     gepetto_vis = True   # 

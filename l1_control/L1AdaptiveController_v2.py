@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2024-09-07 17:26:46
-LastEditTime: 2025-06-09 10:22:28
+LastEditTime: 2025-06-13 16:31:09
 Description: L1 adaptive controller with 9 state variables
 Version 3: Used for full actuation
 0916： fixed the bug in adaptive_law_new, change tau_body=u_b + u_ad_all + self.sig_hat_b
@@ -370,8 +370,7 @@ class L1AdaptiveControllerAll:
         t0 = time.time()
         M = pin.crba(self.robot_model, self.robot_model_data, q)  # get inertia matrix according to the current state
         t1 = time.time()
-        rospy.loginfo(f"crba time: {(t1-t0)*1000:.3f} ms")
-        
+
         # 3. calculate sigma_hat (body frame)
         #! 对B_bar_inv进行增广
         M_aug = np.zeros((self.state_dim_euler, self.state_dim_euler))
@@ -389,19 +388,63 @@ class L1AdaptiveControllerAll:
         t3 = time.time()
         PHI_inv = LA.inv(PHI)
         
+        t4 = time.time()
+        
         mu  = np.matmul(self.expm_A_s_dt, self.z_tilde)
         PHI_inv_mul_mu = np.matmul(PHI_inv, mu)
         
+        t5 = time.time()
         weight = np.matmul(PHI_inv, self.expm_A_s_dt)
         weight = np.matmul(B_bar_inv, weight)
         weight = np.diag(weight)  # Extract diagonal elements
 
-        sigma_hat_disturb  = -np.matmul(B_bar_inv, PHI_inv_mul_mu)  # sigma_hat is related to z_tilde
+        # sigma_hat_disturb  = -np.matmul(B_bar_inv, PHI_inv_mul_mu)  # sigma_hat is related to z_tilde
 
         # self.sig_hat = sigma_hat_disturb.copy()
-        weight = np.array([0, 0, 0, 0, 0, 0, 100, 100, 50, 1, 1, 1])
-        # self.sig_hat = -1 * weight * self.z_tilde.copy()  # 这里的sigma_hat是一个增广矩阵，包含了速度和位置的扰动
         
+        
+        # weight = np.array([0, 0, 0, 0, 0, 0, 0, 0, 100, 100, 50, 1, 1, 1, 0, 0])
+        self.sig_hat = -1 * weight * self.z_tilde.copy()  # 这里的sigma_hat是一个增广矩阵，包含了速度和位置的扰动
+        t6 = time.time()
+        
+        # self.sig_hat = sigma_hat_disturb.copy()
+        
+        # calculation time
+        # rospy.loginfo(f"crba time: {(t1-t0)*1000:.3f} ms")
+        # rospy.loginfo(f"crba time: {(t2-t1)*1000:.3f} ms")
+        # rospy.loginfo(f"crba time: {(t3-t2)*1000:.3f} ms")
+        # rospy.loginfo(f"crba time: {(t4-t3)*1000:.3f} ms")
+        # rospy.loginfo(f"crba time: {(t5-t4)*1000:.3f} ms")
+        # rospy.loginfo(f"crba time: {(t6-t5)*1000:.3f} ms")
+        
+    def update_sig_hat_all_v2_new(self):
+        """Optimized version that uses pre-computed matrices and diagonal structure"""
+        q = self.current_state[:self.robot_model.nq]
+        t0 = time.time()
+        M = pin.crba(self.robot_model, self.robot_model_data, q)
+        t1 = time.time()
+
+        # Use pre-computed template and update only the necessary part
+        M_aug = self.M_aug_template.copy()
+        M_aug[-self.control_dim:, -self.control_dim:] = M
+
+        t2 = time.time()
+
+        # Fast computation using pre-computed diagonal elements and element-wise operations
+        mu = np.matmul(self.expm_A_s_dt, self.z_tilde)
+        # Since PHI is diagonal, PHI_inv @ mu is element-wise multiplication
+        PHI_inv_mul_mu = self.PHI_inv_diag * mu
+        
+        t4 = time.time()
+        sigma_hat_disturb = -np.matmul(M_aug, PHI_inv_mul_mu)
+
+        # Use direct weight multiplication instead of matrix operations
+        weight = np.array([0, 0, 0, 0, 0, 0, 0, 0, 100, 100, 50, 1, 1, 1, 0, 0])
+        self.sig_hat = -1 * weight * self.z_tilde.copy()
+        # self.sig_hat = sigma_hat_disturb
+
+        t5 = time.time()
+        # rospy.loginfo(f"timing (ms): crba: {(t1-t0)*1000:.3f}  aug: {(t2-t1)*1000:.3f}  phi_mul: {(t4-t2)*1000:.3f}  sigma_hat: {(t5-t4)*1000:.3f}")
         self.sig_hat = sigma_hat_disturb.copy()
     
     def update_u_ad(self):
@@ -432,7 +475,7 @@ class L1AdaptiveControllerAll:
         self.u_ad = -sig_hat_filtered
         
         # limitation
-        flag_using_limit = False
+        flag_using_limit = True
         if flag_using_limit:
             if self.use_arm:
                 min_values = np.array([0, 0, -10, -1, -1, -1, 0, 0])

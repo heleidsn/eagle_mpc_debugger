@@ -1,8 +1,8 @@
 mpc_controller:
   robot:
     name: "s500_uam"
-    urdf: "/home/jetson/catkin_ams/src/example_robot_data/robots/s500_description/s500_uam/urdf/s500_uam_simple.urdf"
-    follow: "/home/jetson/catkin_ams/src/eagle_mpc_ros/eagle_mpc_yaml/multicopter/s500.yaml"
+    urdf: "/home/jetson/catkin_ams/src/eagle_mpc_debugger/models/urdf/s500_uam_simple.urdf"
+    follow: "/home/jetson/catkin_ams/src/eagle_mpc_debugger/config/yaml/multicopter/s500.yaml"
 
   integration_method: "IntegratedActionModelEuler"
   knots: 20
