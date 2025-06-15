@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-24 10:31:39
-LastEditTime: 2025-06-15 14:33:12
+LastEditTime: 2025-06-15 16:06:03
 Description: Run planning to generate planning results and save them to file
 Github: https://github.com/heleidsn
 '''
@@ -15,6 +15,7 @@ from pathlib import Path
 from scipy.spatial.transform import Rotation as R
 import os
 from pathlib import Path
+import argparse
 
 import example_robot_data
 import crocoddyl
@@ -487,21 +488,41 @@ def plot_trajectory(trajectory, trajectory_obj, traj_state_ref, control_force_to
         np.save(save_dir / 'gripper_positions.npy', gripper_positions)
         np.save(save_dir / 'gripper_orientations.npy', gripper_orientations)
     
-    plt.show()
+    plt.show(block=False)
+    plt.pause(0.1)  # Give a small pause to ensure plots are displayed
 
 def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Run trajectory planning for drone control')
+    parser.add_argument('--robot', type=str, default='s500_uam',
+                      choices=['s500', 's500_uam', 'hexacopter370_flying_arm_3'],
+                      help='Robot model to use')
+    parser.add_argument('--trajectory', type=str, default='catch_vicon',
+                      help='Trajectory name')
+    parser.add_argument('--dt', type=int, default=20,
+                      help='Time step for trajectory optimization (ms)')
+    parser.add_argument('--use-squash', action='store_true', default=True,
+                      help='Use squash function for control inputs')
+    parser.add_argument('--gepetto-vis', action='store_true', default=True,
+                      help='Enable Gepetto visualization')
+    parser.add_argument('--save', action='store_true', default=False,
+                      help='Save results to file')
+    parser.add_argument('--config-path', type=str, default='config/yaml',
+                      help='Path to MPC configuration files')
+    
+    args = parser.parse_args()
     
     # Settings
-    mpc_yaml_path = '/home/helei/catkin_eagle_mpc/src/eagle_mpc_debugger/config/yaml'
+    mpc_yaml_path = args.config_path
     
-    robot_name = 's500_uam'   # s500, s500_uam, hexacopter370_flying_arm_3
-    trajectory_name = 'catch_vicon_fine_tune'
-    dt_traj_opt = 20  # ms
-    useSquash = True
+    robot_name = args.robot
+    trajectory_name = args.trajectory
+    dt_traj_opt = args.dt
+    useSquash = args.use_squash
     
-    gepetto_vis = True   # 
+    gepetto_vis = args.gepetto_vis
     
-    save_file = False
+    save_file = args.save
     save_dir = None
     
     root = tk.Tk()
@@ -514,6 +535,9 @@ def main():
     print(f"Parameters:")
     print(f"  dt_traj_opt: {dt_traj_opt} ms")
     print(f"  useSquash: {useSquash}")
+    print(f"  gepetto_vis: {gepetto_vis}")
+    print(f"  save_file: {save_file}")
+    print(f"  config_path: {mpc_yaml_path}")
     
     # Run trajectory optimization
     trajectory, traj_state_ref, _, trajectory_obj = get_opt_traj(
@@ -572,26 +596,39 @@ def main():
     )
     
     if gepetto_vis:
+        # Check if gepetto-gui is running
+        try:
+            gepetto.corbaserver.Client()
+        except Exception as e:
+            print("\nError: gepetto-gui is not running!")
+            print("Please start gepetto-gui first by running 'gepetto-gui' in a terminal.")
+            print("Then run this program again.")
+            plt.show(block=True)  # Keep plots open after program ends
+            return
+
         if robot_name == 's500_uam':
             robot_name = 's500_uam_simple'
         robot = example_robot_data.load(robot_name)
 
         rate = -1
         freq = 1
-        cameraTF = [-0.03, 4.4, 2.3, 0, 0.7071, 0, 0.7071]
-        
-        gepetto.corbaserver.Client()
 
+        # Camera position: [x, y, z, qw, qx, qy, qz]
+        # Position the camera at (3, -3, 2) looking at the center of the movement range
+        # Using quaternion for 45-degree rotation around z-axis and 30-degree around x-axis
+        cameraTF = [3, -3, 2, 0.8536, 0.1464, 0.1464, 0.3536]  # todo: looks not working
+        
         display = crocoddyl.GepettoDisplay(
             robot, rate, freq, cameraTF, floor=False)
         
-        # display robot with initial state
-        # initial_state = np.array([0, 0, 0, 0, 0, 0, 1, 0, 0])
-        # display.display(initial_state)
-
-        while True:
-            display.displayFromSolver(trajectory)
-            time.sleep(1.0)
+        print("\nGepetto visualization is running. Press Ctrl+C to stop.")
+        try:
+            while True:
+                display.displayFromSolver(trajectory)
+                time.sleep(1)  
+        except KeyboardInterrupt:
+            print("\nStopping visualization...")
+            plt.show(block=True)  # Keep plots open after program ends
 
 if __name__ == '__main__':
     main() 

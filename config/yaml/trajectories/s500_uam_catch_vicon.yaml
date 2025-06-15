@@ -8,41 +8,40 @@ trajectory:
 
   stages:
     - name: "approach"
-      duration: 2000 #ms
+      duration: 3000 #ms
       transition: true
       costs:
         - name: "state_reg"
           type: "ResidualModelState"
-          weight: 1e-1
-          reference: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+          weight: 1
+          reference: [0, 0, 1.1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
           activation: "ActivationModelWeightedQuad"
-          weights: [1, 1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1]
+          weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 
         - name: "state_limits"
           type: "ResidualModelState"
           weight: 10
-          reference: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
           activation: "ActivationModelWeightedQuadraticBarrier"
-          weights: [0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 100, 100]
-          u_bound: [0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1]
-          l_bound: [0, 0, 0, 0, 0, 0, -1, -1, 0, 0, 0, 0, 0, 0, -1, -1]
+          weights: [0, 0, 0, 0, 0, 0, 10, 10, 1, 1, 1, 1, 1, 1, 10, 10]
+          u_bound: [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0.5, 0.5]
+          l_bound: [0, 0, 0, 0, 0, 0, -1, -1, -1, -1, -1, -1, -1, -1, -0.5, -0.5]
 
         - name: "control_reg"
           type: "ResidualModelControl"
-          weight: 5e-2
+          weight: 1
           reference: [5, 5, 5, 5, 0, 0]
           activation: "ActivationModelWeightedQuad"
           weights: [1, 1, 1, 1, 1, 1]
 
     - name: "pre_grasp"
-      duration: 0 #ms
+      duration: 0  #ms
       costs:
         - name: "state_quadrotor"
           type: "ResidualModelState"
-          weight: 100
-          reference: [0, 0, 1.1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+          weight: 1
+          reference: [0, 0, 1.1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]  # note the reference attitude using quaternion
           activation: "ActivationModelWeightedQuad"
-          weights: [1, 1, 1, 1, 1, 1, 10, 10, 0, 0, 0, 0, 0, 0, 0, 0]
+          weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 
         - name: "reg_control"
           type: "ResidualModelControl"
@@ -53,36 +52,35 @@ trajectory:
 
     - name: "grasp"
       duration: 500 #ms
+      transition: true
       costs:
         - name: "state_reg"
           type: "ResidualModelState"
           weight: 1e-2
           reference: [0, 0, 1.2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
           activation: "ActivationModelWeightedQuad"
-          weights: [1, 1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+          weights: [1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0]
 
         - name: "state_limits"
           type: "ResidualModelState"
           weight: 10
-          reference: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
           activation: "ActivationModelWeightedQuadraticBarrier"
-          weights: [0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1]
-          u_bound: [0, 0, 0, 0, 0, 0, 1.9, 1.9, 0, 0, 0, 0, 0, 0, 3, 3]
-          l_bound:
-            [0, 0, 0, 0, 0, 0, -1.9, -1.9, 0, 0, 0, 0, 0, 0, -3, -3]
+          weights: [0, 0, 0, 0, 0, 0, 10, 10, 1, 1, 1, 1, 1, 1, 10, 10]
+          u_bound: [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0.5, 0.5]
+          l_bound: [0, 0, 0, 0, 0, 0, -1, -1, -1, -1, -1, -1, -1, -1, -0.5, -0.5]
 
         - name: "control_reg"
           type: "ResidualModelControl"
-          weight: 1e-2
+          weight: 100
           reference: [5, 5, 5, 5, 0, 0]
           activation: "ActivationModelWeightedQuad"
-          weights: [1, 1, 1, 1, 1, 1]
+          weights: [1, 1, 1, 1, 1000, 1000]
 
         - name: "translation_ee"
           type: "ResidualModelFrameTranslation"
           weight: 1000
           link_name: "gripper_link"
-          position: [0.0, 0, 0.7]
+          position: [0.0, 0, 0.8]
 
         - name: "motion_ee"
           type: "ResidualModelFrameVelocity"
@@ -94,38 +92,46 @@ trajectory:
           angular: [0, 0, 0]
 
     - name: "move_away"
-      duration: 2000 #ms
+      duration: 3000 #ms
       transition: true
       costs:
         - name: "state_reg"
           type: "ResidualModelState"
-          weight: 1e-1
-          reference: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+          weight: 1
+          reference: [0, 0, 1.5, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
           activation: "ActivationModelWeightedQuad"
-          weights: [1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1]
+          weights: [1, 1, 1, 1, 1, 1, 10, 10, 1, 1, 1, 1, 1, 1, 10, 10]
 
         - name: "state_limits"
           type: "ResidualModelState"
           weight: 10
-          reference: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
           activation: "ActivationModelWeightedQuadraticBarrier"
-          weights: [0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 100, 100]
-          u_bound: [0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1]
-          l_bound: [0, 0, 0, 0, 0, 0, -1, -1, 0, 0, 0, 0, 0, 0, -1, -1]
+          weights: [0, 0, 0, 0, 0, 0, 10, 10, 1, 1, 1, 1, 1, 1, 10, 10]
+          u_bound: [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0.5, 0.5]
+          l_bound: [0, 0, 0, 0, 0, 0, -1, -1, -1, -1, -1, -1, -1, -1, -0.5, -0.5]
 
         - name: "control_reg"
           type: "ResidualModelControl"
-          weight: 5e-2
-          reference: [0, 0, 0, 0, 0, 0]
+          weight: 1
+          reference: [5, 5, 5, 5, 0, 0]
           activation: "ActivationModelWeightedQuad"
-          weights: [1, 1, 1, 1, 0, 0]
+          weights: [1, 1, 1, 1, 100, 100]
+
+        # - name: "motion_ee"
+        #   type: "ResidualModelFrameVelocity"
+        #   weight: 100
+        #   link_name: "gripper_link"
+        #   activation: "ActivationModelWeightedQuad"
+        #   weights: [1, 1, 1, 0, 0, 0]
+        #   linear: [0, 0, 0]
+        #   angular: [0, 0, 0]
 
     - name: "hover_after_grasp"
       duration: 0 #ms
       costs:
-        - name: "state_arm"
+        - name: "state_all"
           type: "ResidualModelState"
-          weight: 100
+          weight: 1000
           reference: [1.5, 0, 1.5, 0, 0, 0, 1, -1.2, -0.6, 0, 0, 0, 0, 0, 0, 0, 0]
           activation: "ActivationModelWeightedQuad"
           weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
@@ -153,8 +159,8 @@ trajectory:
 
         - name: "reg_control"
           type: "ResidualModelControl"
-          weight: 5e-1
-          reference: [0, 0, 0, 0, 0, 0]
+          weight: 0.1
+          reference: [5, 5, 5, 5, 0, 0]
           activation: "ActivationModelWeightedQuad"
           weights: [1, 1, 1, 1, 100, 100]
 

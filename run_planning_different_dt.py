@@ -15,6 +15,7 @@ from pathlib import Path
 from scipy.spatial.transform import Rotation as R
 import os
 from pathlib import Path
+import argparse
 
 import example_robot_data
 import crocoddyl
@@ -192,18 +193,38 @@ def plot_multiple_trajectories(trajectories, dt_values, save_dir=None):
     plt.show()
 
 def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Run trajectory planning with different dt values')
+    parser.add_argument('--robot', type=str, default='s500',
+                      choices=['s500', 's500_uam', 'hexacopter370_flying_arm_3'],
+                      help='Robot model to use')
+    parser.add_argument('--trajectory', type=str, default='takeoff',
+                      help='Trajectory name')
+    parser.add_argument('--dt', type=int, default=20,
+                      help='Time step for trajectory optimization (ms)')
+    parser.add_argument('--use-squash', action='store_true', default=True,
+                      help='Use squash function for control inputs')
+    parser.add_argument('--gepetto-vis', action='store_true', default=False,
+                      help='Enable Gepetto visualization')
+    parser.add_argument('--save', action='store_true', default=False,
+                      help='Save results to file')
+    parser.add_argument('--config-path', type=str, default='config/yaml',
+                      help='Path to MPC configuration files')
+    
+    args = parser.parse_args()
+    
     # Settings
     mpc_name = 'rail'
-    mpc_yaml_path = '/home/helei/catkin_eagle_mpc/src/eagle_mpc_debugger/config/yaml'
+    mpc_yaml_path = args.config_path
     
-    robot_name = 's500'   # s500, s500_uam, hexacopter370_flying_arm_3
-    trajectory_name = 'takeoff'
+    robot_name = args.robot
+    trajectory_name = args.trajectory
     dt_values = [5, 10, 20, 30]  # Different dt values to compare
-    useSquash = True
+    useSquash = args.use_squash
     
-    gepetto_vis = False
+    gepetto_vis = args.gepetto_vis
     
-    save_file = False
+    save_file = args.save
     save_dir = None
     
     # 获取当前屏幕分辨率
