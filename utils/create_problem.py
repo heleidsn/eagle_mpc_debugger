@@ -30,24 +30,14 @@ def get_opt_traj(robotName, trajectoryName, dt_traj_opt, useSquash, yaml_file_pa
     else:
         solver = crocoddyl.SolverBoxFDDP(problem)
 
-    # solver.convergence_init = 1e-9
-    logger = crocoddyl.CallbackLogger()
+    solver.convergence_init = 1e-6
+    trajectory.logger = crocoddyl.CallbackLogger()
     
-    solver.setCallbacks([logger, crocoddyl.CallbackVerbose()])
+    solver.setCallbacks([trajectory.logger, crocoddyl.CallbackVerbose()])
     start_time = time.time()
     solver.solve([], [], maxiter=400)
     end_time = time.time()
-    
-    # 绘制 cost 曲线
-    # plt.figure(figsize=(8, 5))
-    # plt.plot(logger.costs, marker='o')
-    # plt.xlabel('Iteration')
-    # plt.ylabel('Total Cost')
-    # plt.title('Cost Convergence during DDP Optimization')
-    # plt.grid(True)
-    # plt.tight_layout()
-    # plt.show()
-    
+
     print("Time taken for trajectory optimization: {:.2f} ms".format((end_time - start_time)*1000))
     
     traj_state_ref = solver.xs
