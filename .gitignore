@@ -2,3 +2,5 @@
 .vscode/*
 build/*
 test_data/
+.cspell/custom-dictionary-workspace.txt
+resources/qgroundcontrol/QGroundControl.AppImage

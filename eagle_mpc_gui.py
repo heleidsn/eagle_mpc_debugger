@@ -392,6 +392,7 @@ class EagleMPCDebuggerGUI(QMainWindow):
         
         # Arm control options
         self.arm_enabled_check = QCheckBox("Enable Arm")
+        self.arm_enabled_check.setChecked(True)
         controller_config_layout.addRow("Arm Control:", self.arm_enabled_check)
         
         self.arm_control_mode_combo = QComboBox()
@@ -400,6 +401,7 @@ class EagleMPCDebuggerGUI(QMainWindow):
         
         # Simulation mode
         self.simulation_check = QCheckBox("Simulation Mode")
+        self.simulation_check.setChecked(True)
         controller_config_layout.addRow("Simulation:", self.simulation_check)
         
         # L1 control parameters
@@ -422,6 +424,11 @@ class EagleMPCDebuggerGUI(QMainWindow):
         self.start_mpc_btn = QPushButton("Start MPC Controller")
         self.start_mpc_btn.clicked.connect(self.start_mpc_controller)
         controller_config_layout.addRow(self.start_mpc_btn)
+        
+        # Add Stop controller button
+        self.stop_mpc_btn = QPushButton("Stop MPC Controller")
+        self.stop_mpc_btn.clicked.connect(self.stop_mpc_controller)
+        controller_config_layout.addRow(self.stop_mpc_btn)
         
         controller_config_group.setLayout(controller_config_layout)
         
