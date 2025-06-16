@@ -60,9 +60,9 @@ class TrajectoryPublisher:
         self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon_real')   # displacement, catch_vicon
         self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 50)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
-        self.yaml_path = rospy.get_param('~yaml_path', '/home/jetson/catkin_ams/src/eagle_mpc_debugger/config/yaml')
+        self.use_simulation = rospy.get_param('~use_simulation', True)   #  if true, publish arm control command for ros_control
+        self.yaml_path = rospy.get_param('~yaml_path', 'config/yaml')
         self.control_rate = rospy.get_param('~control_rate', 50.0)  # Hz
-        self.use_simulation = rospy.get_param('~use_simulation', False)   #  if true, publish arm control command for ros_control
         
         self.odom_source = rospy.get_param('~odom_source', 'mavros')  # mavros, gazebo  
         
@@ -490,7 +490,7 @@ class TrajectoryPublisher:
                 self.get_l1_control(self.state, self.mpc_ref_index)
             else:
                 self.init_l1_controller()
-                
+
             t2 = time.time()
             
             # 3. Publish control command
@@ -498,6 +498,7 @@ class TrajectoryPublisher:
             
             if self.arm_enabled:
                 self.publish_arm_control_command()
+                self.publish_gripper_control_command()
                 
             # 4. Publish debug info
             self.publish_mpc_l1_debug_data()
@@ -836,7 +837,7 @@ class TrajectoryPublisher:
             
             # Apply low pass filter to effort command
             alpha = dt / (self.filter_time_constant_arm_control + dt)  # Filter coefficient
-            raw_effort = np.array([self.control_command[-2], self.control_command[-1], 0])
+            raw_effort = np.array([self.control_command[-2], self.control_command[-1]])
             self.filtered_effort = alpha * raw_effort + (1 - alpha) * self.filtered_effort
             
             joint_msg.effort = self.filtered_effort.tolist()
@@ -858,29 +859,46 @@ class TrajectoryPublisher:
             # Control arm joints
             self.joint1_pub.publish(Float64(joint_msg.position[0]))
             self.joint2_pub.publish(Float64(joint_msg.position[1]))
-            
-            # Control gripper based on grasping logic
-            current_time = rospy.Time.now()
-            
-            if self.grasp_start_time is not None:
-                if current_time >= self.grasp_start_time and not self.is_grasping:
-                    # Close gripper at grasp time
+        
+
+    def publish_gripper_control_command(self):
+        '''
+        description: publish gripper control command
+        return {*}
+        '''
+        current_time = rospy.Time.now()
+        
+        joint_msg = JointState()
+        joint_msg.header.stamp = rospy.Time.now()
+        joint_msg.name = ['joint_3']
+        
+        if self.trajectory_started and not self.traj_finished:  # only publish gripper control command when trajectory is running
+            if current_time >= self.grasp_start_time and not self.is_grasping:
+                # Close gripper at grasp time
+                if self.use_simulation:
                     self.joint3_pub.publish(Float64(self.gripper_close_position))
                     self.joint4_pub.publish(Float64(self.gripper_close_position))
-                    self.is_grasping = True
-                    rospy.loginfo("Gripper closed at grasp time")
-                elif current_time < self.grasp_start_time:
-                    # Keep gripper open before grasp time
+                else:
+                    joint_msg.position = [self.gripper_close_position_real]
+                    joint_msg.velocity = [0.0]
+                    joint_msg.effort = [0.0]
+                    self.gripper_control_pub.publish(joint_msg)
+                self.is_grasping = True
+                rospy.loginfo("Gripper closed at grasp time")
+            elif current_time < self.grasp_start_time:
+                # Keep gripper open before grasp time
+                if self.use_simulation:
                     self.joint3_pub.publish(Float64(self.gripper_open_position))
                     self.joint4_pub.publish(Float64(self.gripper_open_position))
-                    self.is_grasping = False
-                    rospy.loginfo_throttle(1.0, "Gripper open, waiting for grasp time")
-            else:
-                # Default to open gripper if no grasp time is set
-                self.joint3_pub.publish(Float64(self.gripper_open_position))
-                self.joint4_pub.publish(Float64(self.gripper_open_position))
+                else:
+                    joint_msg.position = [self.gripper_open_position_real]
+                    joint_msg.velocity = [0.0]
+                    joint_msg.effort = [0.0]
+                    self.gripper_control_pub.publish(joint_msg)
                 self.is_grasping = False
-
+                rospy.loginfo_throttle(1.0, "Gripper open, waiting for grasp time")
+        
+        
     def publish_mpc_control_command(self, u_mpc, u_ad, u_tracking):
         '''
         发布L1的控制指令

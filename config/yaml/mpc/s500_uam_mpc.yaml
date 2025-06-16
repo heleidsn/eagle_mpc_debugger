@@ -5,10 +5,10 @@ mpc_controller:
     follow: "/home/helei/catkin_eagle_mpc/src/eagle_mpc_debugger/config/yaml/multicopter/s500.yaml"
 
   integration_method: "IntegratedActionModelEuler"
-  knots: 30
+  knots: 20
   solver: "SolverSbFDDP"
   iters: 10
-  dt: 30
+  dt: 50
 
   carrot_weight: 1000
   carrot_tail_weight: 1
@@ -23,7 +23,7 @@ mpc_controller:
   carrot_state_limits_l_bound: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
   rail_weight: 100
-  rail_activation_weights: [10, 10, 10, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+  rail_activation_weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
   rail_control_weight: 5
 
   control_reference: [5, 5, 5, 5, 0, 0]
