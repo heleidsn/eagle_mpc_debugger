@@ -7,7 +7,7 @@ import numpy as np
 class SafeCallback(crocoddyl.CallbackAbstract):
     def __init__(self):
         super(SafeCallback, self).__init__()
-        self.threshold = 5000
+        self.threshold = 20000
         self.cost = 0
 
     def __call__(self, solver):

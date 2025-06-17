@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-24 10:31:39
-LastEditTime: 2025-06-15 16:06:03
+LastEditTime: 2025-06-16 14:29:20
 Description: Run planning to generate planning results and save them to file
 Github: https://github.com/heleidsn
 '''
@@ -497,9 +497,9 @@ def main():
     parser.add_argument('--robot', type=str, default='s500_uam',
                       choices=['s500', 's500_uam', 'hexacopter370_flying_arm_3'],
                       help='Robot model to use')
-    parser.add_argument('--trajectory', type=str, default='catch_vicon',
+    parser.add_argument('--trajectory', type=str, default='catch_vicon_real',
                       help='Trajectory name')
-    parser.add_argument('--dt', type=int, default=20,
+    parser.add_argument('--dt', type=int, default=50,
                       help='Time step for trajectory optimization (ms)')
     parser.add_argument('--use-squash', action='store_true', default=True,
                       help='Use squash function for control inputs')

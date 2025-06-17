@@ -60,7 +60,7 @@ class TrajectoryPublisher:
         self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon_real')   # displacement, catch_vicon
         self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 50)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
-        self.use_simulation = rospy.get_param('~use_simulation', True)   #  if true, publish arm control command for ros_control
+        self.use_simulation = rospy.get_param('~use_simulation', False)   #  if true, publish arm control command for ros_control
         self.yaml_path = rospy.get_param('~yaml_path', 'config/yaml')
         self.control_rate = rospy.get_param('~control_rate', 50.0)  # Hz
         
@@ -68,7 +68,7 @@ class TrajectoryPublisher:
         
         self.control_mode = rospy.get_param('~control_mode', 'MPC')  # MPC, Geometric, PX4, MPC_L1
         self.arm_enabled = rospy.get_param('~arm_enabled', True)
-        self.arm_control_mode = rospy.get_param('~arm_control_mode', 'position_velocity')  # position, position_velocity, position_velocity_effort, effort
+        self.arm_control_mode = rospy.get_param('~arm_control_mode', 'position')  # position, position_velocity, position_velocity_effort, effort
         
         self.max_thrust = rospy.get_param('~max_thrust', 8.0664 * 4)
         
@@ -212,9 +212,11 @@ class TrajectoryPublisher:
         self.grasp_start_time = None  # Will be set when trajectory starts
         
         # gripper settings for real flight test
-        self.gripper_open_position_real = 0.5
+        self.gripper_open_position_real = 0.6
         self.gripper_close_velocity_real = 1
         self.gripper_close_position_real = 0
+        
+        self.gripper_position_cmd = self.gripper_close_position_real  # start from closed position
         
         # Add MPC computation mode parameter
         self.use_multi_thread = rospy.get_param('~use_multi_thread', False)
@@ -498,7 +500,7 @@ class TrajectoryPublisher:
             
             if self.arm_enabled:
                 self.publish_arm_control_command()
-                self.publish_gripper_control_command()
+                # self.publish_gripper_control_command()
                 
             # 4. Publish debug info
             self.publish_mpc_l1_debug_data()
@@ -547,21 +549,21 @@ class TrajectoryPublisher:
                 self.mpc_controller.solver.us,
                 self.mpc_controller.iters
             )
-            if not success or self.mpc_controller.safe_cb.cost > 5000:
+            if not success or self.mpc_controller.safe_cb.cost > 20000:
                 rospy.logerr("MPC solver failed, cost: {}".format(self.mpc_controller.safe_cb.cost))
                 self.trajectory_started = False
                 # switch to auto land mode
-                try:
-                    rospy.wait_for_service('/mavros/set_mode')
-                    set_mode = rospy.ServiceProxy('/mavros/set_mode', SetMode)
-                    response = set_mode(custom_mode='AUTO.LAND')
-                    if response.mode_sent:
-                        rospy.loginfo("Successfully switched to PX4 auto land mode")
-                    else:
-                        rospy.logerr("Failed to switch to auto land mode")
-                except rospy.ServiceException as e:
-                    rospy.logerr(f"Service call failed: {e}")
-                return
+                # try:
+                #     rospy.wait_for_service('/mavros/set_mode')
+                #     set_mode = rospy.ServiceProxy('/mavros/set_mode', SetMode)
+                #     response = set_mode(custom_mode='AUTO.LAND')
+                #     if response.mode_sent:
+                #         rospy.loginfo("Successfully switched to PX4 auto land mode")
+                #     else:
+                #         rospy.logerr("Failed to switch to auto land mode")
+                # except rospy.ServiceException as e:
+                #     rospy.logerr(f"Service call failed: {e}")
+                # return
         except Exception as e:
             rospy.logerr(f"Error in MPC solver: {str(e)}")
             return
@@ -793,37 +795,36 @@ class TrajectoryPublisher:
         ref_state = self.traj_state_ref[self.traj_ref_index]
         ref_control = self.traj_solver.us[min(self.traj_ref_index, len(self.traj_solver.us)-1)]
         
+        # mpc_planned_state = self.mpc_controller.solver.xs[0]
+        # mpc_planned_state_next = self.mpc_controller.solver.xs[1]
+        # ref_state = mpc_planned_state_next
+        
         current_time = rospy.Time.now()
         
         gripper_position = self.gripper_close_position_real
         gripper_velocity = 0
         
         # select gripper state
-        if self.grasp_start_time is not None:
+        if self.trajectory_started and not self.traj_finished:
             if current_time >= self.grasp_start_time and not self.is_grasping:
                 # Close gripper at grasp time
-                gripper_position = self.gripper_close_position_real
+                self.gripper_position_cmd = self.gripper_close_position_real
                 gripper_velocity = self.gripper_close_velocity_real
                 self.is_grasping = True
                 rospy.loginfo("Gripper closed at grasp time")
             elif current_time < self.grasp_start_time:
                 # Keep gripper open before grasp time
-                gripper_position = self.gripper_open_position_real
+                self.gripper_position_cmd = self.gripper_open_position_real
                 gripper_velocity = 0
                 self.is_grasping = False
                 rospy.loginfo_throttle(1.0, "Gripper open, waiting for grasp time")
-        else:
-            # Default to open gripper if no grasp time is set
-            gripper_position = self.gripper_open_position_real
-            gripper_velocity = 0
-            self.is_grasping = False
         
         if self.arm_control_mode == 'position':
-            joint_msg.position = [ref_state[7], ref_state[8], gripper_position]
-            joint_msg.velocity = [0.2, 0.2, gripper_velocity]
+            joint_msg.position = [ref_state[7], ref_state[8], self.gripper_position_cmd]
+            joint_msg.velocity = [0.0, 0.0, gripper_velocity]
             joint_msg.effort = [0.0, 0.0, 0.0]
         elif self.arm_control_mode == 'position_velocity':
-            joint_msg.position = [ref_state[7], ref_state[8], gripper_position]
+            joint_msg.position = [ref_state[7], ref_state[8], self.gripper_position_cmd]
             joint_msg.velocity = [ref_state[-2], ref_state[-1], gripper_velocity]
             joint_msg.effort = [0.0, 0.0, 0.0]
         elif self.arm_control_mode == 'effort':
@@ -843,8 +844,8 @@ class TrajectoryPublisher:
             joint_msg.effort = self.filtered_effort.tolist()
             
         # add constrain to joint position
-        joint_msg.position[0] = np.clip(joint_msg.position[0], -1.57, 1.57)
-        joint_msg.position[1] = np.clip(joint_msg.position[1], -1.57, 1.57)
+        joint_msg.position[0] = np.clip(joint_msg.position[0], -1.3, 1.3)
+        joint_msg.position[1] = np.clip(joint_msg.position[1], -0.8, 0.8)
         
         joint_msg.velocity[0] = np.clip(joint_msg.velocity[0], -1.0, 1.0)
         joint_msg.velocity[1] = np.clip(joint_msg.velocity[1], -1.0, 1.0)
@@ -882,7 +883,7 @@ class TrajectoryPublisher:
                     joint_msg.position = [self.gripper_close_position_real]
                     joint_msg.velocity = [0.0]
                     joint_msg.effort = [0.0]
-                    self.gripper_control_pub.publish(joint_msg)
+                    self.arm_control_pub.publish(joint_msg)
                 self.is_grasping = True
                 rospy.loginfo("Gripper closed at grasp time")
             elif current_time < self.grasp_start_time:
@@ -894,7 +895,7 @@ class TrajectoryPublisher:
                     joint_msg.position = [self.gripper_open_position_real]
                     joint_msg.velocity = [0.0]
                     joint_msg.effort = [0.0]
-                    self.gripper_control_pub.publish(joint_msg)
+                    self.arm_control_pub.publish(joint_msg)
                 self.is_grasping = False
                 rospy.loginfo_throttle(1.0, "Gripper open, waiting for grasp time")
         
@@ -1357,9 +1358,12 @@ class TrajectoryPublisher:
             self.joint4_pub.publish(Float64(self.gripper_open_position))
             self.is_grasping = False
             rospy.loginfo("Gripper opened")
-            return TriggerResponse(success=True, message="Gripper opened")
+            return TriggerResponse(success=True, message="Gripper opened (Simulation mode)")
         else:
-            return TriggerResponse(success=False, message="Simulation mode not enabled")
+            self.gripper_position_cmd = self.gripper_open_position_real
+            self.is_grasping = False
+            rospy.loginfo("Gripper opened")
+            return TriggerResponse(success=True, message="Gripper opened")
 
     def close_gripper_callback(self, req):
         """
@@ -1370,9 +1374,12 @@ class TrajectoryPublisher:
             self.joint4_pub.publish(Float64(self.gripper_close_position))
             self.is_grasping = True
             rospy.loginfo("Gripper closed")
-            return TriggerResponse(success=True, message="Gripper closed")
+            return TriggerResponse(success=True, message="Gripper closed (Simulation mode)")
         else:
-            return TriggerResponse(success=False, message="Simulation mode not enabled")
+            self.gripper_position_cmd = self.gripper_close_position_real
+            self.is_grasping = False
+            rospy.loginfo("Gripper closed")
+            return TriggerResponse(success=True, message="Gripper closed")
 
     def reset_beer_callback(self, req):
         """
