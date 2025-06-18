@@ -1,8 +1,8 @@
 trajectory:
   robot:
     name: "s500"
-    urdf: "/home/jetson/catkin_ams/src/eagle_mpc_debugger/config/yaml/s500_robot/s500_quadrotor/urdf/s500_simple.urdf"
-    follow: "/home/jetson/catkin_ams/src/eagle_mpc_debugger/config/yaml/multicopter/s500.yaml"
+    urdf: "models/urdf/s500_simple.urdf"
+    follow: "config/yaml/multicopter/s500.yaml"
 
   initial_state: [-1.5, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
 

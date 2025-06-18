@@ -1,8 +1,8 @@
 mpc_controller:
   robot:
     name: "s500"
-    urdf: "/home/helei/catkin_eagle_mpc/src/eagle_mpc_debugger/models/urdf/s500_simple.urdf"
-    follow: "/home/helei/catkin_eagle_mpc/src/eagle_mpc_debugger/config/yaml/multicopter/s500.yaml"
+    urdf: "models/urdf/s500_simple.urdf"
+    follow: "config/yaml/multicopter/s500.yaml"
   integration_method: "IntegratedActionModelEuler"
   knots: 20
   solver: "SolverSbFDDP"

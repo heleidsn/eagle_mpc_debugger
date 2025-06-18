@@ -1,8 +1,8 @@
 trajectory:
   robot:
     name: "s500_uam"
-    urdf: "/home/helei/catkin_eagle_mpc/src/eagle_mpc_debugger/config/yaml/s500_robot/s500_uam/urdf/s500_uam_simple.urdf"
-    follow: "/home/helei/catkin_eagle_mpc/src/eagle_mpc_debugger/config/yaml/multicopter/s500.yaml"
+    urdf: "models/urdf/s500_uam_simple.urdf"
+    follow: "config/yaml/multicopter/s500.yaml"
 
   stages:
     - name: "take_off"
