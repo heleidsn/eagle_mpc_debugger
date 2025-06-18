@@ -320,6 +320,7 @@ class TrajectoryPublisher:
         self.mpc_controller = self.hover_mpc
         
         self.state = initial_state.copy()
+        print(f"initial state: {self.state}")
         
         self.speed_command = np.zeros(self.mpc_controller.platform_params.n_rotors)
         self.total_thrust = 0.0
@@ -506,7 +507,6 @@ class TrajectoryPublisher:
             t3 = time.time()
             
             rospy.loginfo_throttle(1.0, f"mpc time: {(t1-t0)*1000:.2f} ms l1 time: {(t2-t1)*1000:.2f} publish time: {(t3-t2)*1000:.2f} ms")
-            # rospy.loginfo(f"mpc time: {(t1-t0)*1000:.2f} ms l1 time: {(t2-t1)*1000:.2f} publish time: {(t3-t2)*1000:.2f} ms")
         else:
             rospy.logwarn("Invalid control mode")
             
@@ -547,7 +547,7 @@ class TrajectoryPublisher:
                 self.mpc_controller.solver.us,
                 self.mpc_controller.iters
             )
-            if not success or self.mpc_controller.safe_cb.cost > 5000:
+            if not success or self.mpc_controller.safe_cb.cost > 20000:
                 rospy.logerr("MPC solver failed, cost: {}".format(self.mpc_controller.safe_cb.cost))
                 self.trajectory_started = False
                 # switch to auto land mode
@@ -840,7 +840,6 @@ class TrajectoryPublisher:
             # Control arm joints
             self.joint1_pub.publish(Float64(joint_msg.position[0]))
             self.joint2_pub.publish(Float64(joint_msg.position[1]))
-        
 
     def publish_gripper_control_command(self):
         '''
@@ -878,8 +877,7 @@ class TrajectoryPublisher:
                     self.gripper_control_pub.publish(joint_msg)
                 self.is_grasping = False
                 rospy.loginfo_throttle(1.0, "Gripper open, waiting for grasp time")
-        
-        
+              
     def publish_mpc_control_command(self, u_mpc, u_ad, u_tracking):
         '''
         发布L1的控制指令
@@ -890,7 +888,8 @@ class TrajectoryPublisher:
             【solved】:将L1得到的力矩作为期望角速度的增量
         '''
         # get collected thrust command
-        self.control_command = self.control_command_mpc.copy()
+        if self.control_command_mpc is not None:
+            self.control_command = self.control_command_mpc.copy()
         
         # get planned state
         self.state_ref = self.mpc_controller.solver.xs[1]
