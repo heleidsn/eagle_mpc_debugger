@@ -18,7 +18,7 @@ from eagle_mpc_msgs.msg import MpcState
 from utils.create_problem import get_opt_traj, create_mpc_controller
 from utils.u_convert import thrustToForceTorqueAll
 
-from controller_msgs.msg import FlatTarget
+# from controller_msgs.msg import FlatTarget
 from mavros_msgs.msg import State, PositionTarget, AttitudeTarget
 from mavros_msgs.srv import SetMode, SetModeRequest
 from tf.transformations import quaternion_matrix
@@ -57,18 +57,18 @@ class TrajectoryPublisher:
 
         # Get parameters
         self.robot_name = rospy.get_param('~robot_name', 's500_uam')     # s500, s500_uam, hexacopter370_flying_arm_3
-        self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon')   # displacement, catch_vicon
+        self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon_real')   # displacement, catch_vicon
         self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 50)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
-        self.use_simulation = rospy.get_param('~use_simulation', True)   #  if true, publish arm control command for ros_control
+        self.use_simulation = rospy.get_param('~use_simulation', False)   #  if true, publish arm control command for ros_control
         self.yaml_path = rospy.get_param('~yaml_path', 'config/yaml')
         self.control_rate = rospy.get_param('~control_rate', 50.0)  # Hz
         
-        self.odom_source = rospy.get_param('~odom_source', 'gazebo')  # mavros, gazebo  
+        self.odom_source = rospy.get_param('~odom_source', 'mavros')  # mavros, gazebo  
         
         self.control_mode = rospy.get_param('~control_mode', 'MPC')  # MPC, Geometric, PX4, MPC_L1
         self.arm_enabled = rospy.get_param('~arm_enabled', True)
-        self.arm_control_mode = rospy.get_param('~arm_control_mode', 'position_velocity')  # position, position_velocity, position_velocity_effort, effort
+        self.arm_control_mode = rospy.get_param('~arm_control_mode', 'position')  # position, position_velocity, position_velocity_effort, effort
         
         self.max_thrust = rospy.get_param('~max_thrust', 8.0664 * 4)
         
@@ -119,7 +119,7 @@ class TrajectoryPublisher:
         
         # Publishers
         self.pose_pub = rospy.Publisher('/reference/pose', PoseStamped, queue_size=10)
-        self.flat_target_pub = rospy.Publisher('/reference/flatsetpoint', FlatTarget, queue_size=10)
+        # self.flat_target_pub = rospy.Publisher('/reference/flatsetpoint', FlatTarget, queue_size=10)
         self.mavros_setpoint_raw_pub = rospy.Publisher('/mavros/setpoint_raw/local', PositionTarget, queue_size=10)
         self.yaw_pub = rospy.Publisher('/reference/yaw', Float32, queue_size=10)
         self.body_rate_thrust_pub = rospy.Publisher('/mavros/setpoint_raw/attitude', AttitudeTarget, queue_size=10)
@@ -212,9 +212,11 @@ class TrajectoryPublisher:
         self.grasp_start_time = None  # Will be set when trajectory starts
         
         # gripper settings for real flight test
-        self.gripper_open_position_real = 0.5
+        self.gripper_open_position_real = 0.6
         self.gripper_close_velocity_real = 1
         self.gripper_close_position_real = 0
+        
+        self.gripper_position_cmd = self.gripper_close_position_real  # start from closed position
         
         # Add MPC computation mode parameter
         self.use_multi_thread = rospy.get_param('~use_multi_thread', False)
@@ -243,7 +245,7 @@ class TrajectoryPublisher:
         
         # Initialize control command
         self.control_command_mpc = None
-        self.mpc_control_command_ft = np.zeros(6)
+        self.mpc_control_command_ft = None
         
         # State limit parameters
         self.position_limits = np.array([
@@ -288,7 +290,7 @@ class TrajectoryPublisher:
     def init_mpc_controller(self):
         # create mpc controller to get tau_f
         mpc_name = "rail"
-        mpc_yaml = '{}/mpc/{}_mpc.yaml'.format(self.yaml_path, self.robot_name)
+        mpc_yaml = '{}/mpc/{}_mpc_real.yaml'.format(self.yaml_path, self.robot_name)
         
         # Initialize trajectory tracking MPC
         self.trajectory_mpc = create_mpc_controller(
@@ -498,7 +500,7 @@ class TrajectoryPublisher:
             
             if self.arm_enabled:
                 self.publish_arm_control_command()
-                self.publish_gripper_control_command()
+                # self.publish_gripper_control_command()
                 
             # 4. Publish debug info
             self.publish_mpc_l1_debug_data()
@@ -534,7 +536,7 @@ class TrajectoryPublisher:
             self.mpc_controller = self.hover_mpc
             
         # 检查并限制输入状态
-        self.state = self.limit_state_input(self.state)
+        # self.state = self.limit_state_input(self.state)
         
         # update problem
         self.mpc_controller.problem.x0 = self.state
@@ -547,21 +549,21 @@ class TrajectoryPublisher:
                 self.mpc_controller.solver.us,
                 self.mpc_controller.iters
             )
-            if not success or self.mpc_controller.safe_cb.cost > 5000:
+            if not success or self.mpc_controller.safe_cb.cost > 20000:
                 rospy.logerr("MPC solver failed, cost: {}".format(self.mpc_controller.safe_cb.cost))
                 self.trajectory_started = False
                 # switch to auto land mode
-                try:
-                    rospy.wait_for_service('/mavros/set_mode')
-                    set_mode = rospy.ServiceProxy('/mavros/set_mode', SetMode)
-                    response = set_mode(custom_mode='AUTO.LAND')
-                    if response.mode_sent:
-                        rospy.loginfo("Successfully switched to PX4 auto land mode")
-                    else:
-                        rospy.logerr("Failed to switch to auto land mode")
-                except rospy.ServiceException as e:
-                    rospy.logerr(f"Service call failed: {e}")
-                return
+                # try:
+                #     rospy.wait_for_service('/mavros/set_mode')
+                #     set_mode = rospy.ServiceProxy('/mavros/set_mode', SetMode)
+                #     response = set_mode(custom_mode='AUTO.LAND')
+                #     if response.mode_sent:
+                #         rospy.loginfo("Successfully switched to PX4 auto land mode")
+                #     else:
+                #         rospy.logerr("Failed to switch to auto land mode")
+                # except rospy.ServiceException as e:
+                #     rospy.logerr(f"Service call failed: {e}")
+                # return
         except Exception as e:
             rospy.logerr(f"Error in MPC solver: {str(e)}")
             return
@@ -773,12 +775,12 @@ class TrajectoryPublisher:
         self.l1_controller.update_u_ad()
         t6 = time.time()
         
-        rospy.logdebug(f"L1 state prep time: {(t2-t1)*1000:.3f} ms")
-        rospy.logdebug(f"L1 update_z_hat time: {(t3-t2)*1000:.3f} ms")
-        rospy.logdebug(f"L1 update_z_tilde time: {(t4-t3)*1000:.3f} ms")
-        rospy.logdebug(f"L1 update_sig_hat time: {(t5-t4)*1000:.3f} ms")
-        rospy.logdebug(f"L1 update_u_ad time: {(t6-t5)*1000:.3f} ms")
-        rospy.logdebug(f"L1 total time: {(t6-t1)*1000:.3f} ms")
+        # rospy.loginfo(f"L1 state prep time: {(t2-t1)*1000:.3f} ms")
+        # rospy.loginfo(f"L1 update_z_hat time: {(t3-t2)*1000:.3f} ms")
+        # rospy.loginfo(f"L1 update_z_tilde time: {(t4-t3)*1000:.3f} ms")
+        # rospy.loginfo(f"L1 update_sig_hat time: {(t5-t4)*1000:.3f} ms")
+        # rospy.loginfo(f"L1 update_u_ad time: {(t6-t5)*1000:.3f} ms")
+        # rospy.loginfo(f"L1 total time: {(t6-t1)*1000:.3f} ms")
     
     def publish_arm_control_command(self):
         '''
@@ -787,29 +789,47 @@ class TrajectoryPublisher:
         '''        
         joint_msg = JointState()
         joint_msg.header.stamp = rospy.Time.now()
-        joint_msg.name = ['joint_1', 'joint_2']
+        joint_msg.name = ['joint_1', 'joint_2', 'joint_3']
         
         # get reference state
         ref_state = self.traj_state_ref[self.traj_ref_index]
         ref_control = self.traj_solver.us[min(self.traj_ref_index, len(self.traj_solver.us)-1)]
         
+        # mpc_planned_state = self.mpc_controller.solver.xs[0]
+        # mpc_planned_state_next = self.mpc_controller.solver.xs[1]
+        # ref_state = mpc_planned_state_next
+        
+        current_time = rospy.Time.now()
+        
+        gripper_position = self.gripper_close_position_real
+        gripper_velocity = 0
+        
+        # select gripper state
+        if self.trajectory_started and not self.traj_finished:
+            if current_time >= self.grasp_start_time and not self.is_grasping:
+                # Close gripper at grasp time
+                self.gripper_position_cmd = self.gripper_close_position_real
+                gripper_velocity = self.gripper_close_velocity_real
+                self.is_grasping = True
+                rospy.loginfo("Gripper closed at grasp time")
+            elif current_time < self.grasp_start_time:
+                # Keep gripper open before grasp time
+                self.gripper_position_cmd = self.gripper_open_position_real
+                gripper_velocity = 0
+                self.is_grasping = False
+                rospy.loginfo_throttle(1.0, "Gripper open, waiting for grasp time")
+        
         if self.arm_control_mode == 'position':
-            joint_msg.position = ref_state[7:9]
-            joint_msg.velocity = [0.2, 0.2]
-            joint_msg.effort = [0.0, 0.0]
+            joint_msg.position = [ref_state[7], ref_state[8], self.gripper_position_cmd]
+            joint_msg.velocity = [0.0, 0.0, gripper_velocity]
+            joint_msg.effort = [0.0, 0.0, 0.0]
         elif self.arm_control_mode == 'position_velocity':
-            joint_msg.position = ref_state[7:9]
-            joint_msg.velocity = ref_state[-2:]
-            joint_msg.effort = [0.0, 0.0]
-        elif self.arm_control_mode == 'position_velocity_effort':  # this mode is not working, effort is not used
-            joint_msg.position = ref_state[7:9]
-            joint_msg.velocity = ref_state[-2:]
-            if joint_msg.velocity[0] or joint_msg.velocity[1] == 0:
-                joint_msg.velocity = [1, 1]
-            joint_msg.effort = ref_control[-2:]
+            joint_msg.position = [ref_state[7], ref_state[8], self.gripper_position_cmd]
+            joint_msg.velocity = [ref_state[-2], ref_state[-1], gripper_velocity]
+            joint_msg.effort = [0.0, 0.0, 0.0]
         elif self.arm_control_mode == 'effort':
-            joint_msg.position = [0.0, 0.0]
-            joint_msg.velocity = [0.0, 0.0]
+            joint_msg.position = [0.0, 0.0, 0.0]
+            joint_msg.velocity = [0.0, 0.0, 0.0]
             
             # Calculate time step for filter
             current_time = rospy.Time.now()
@@ -824,8 +844,8 @@ class TrajectoryPublisher:
             joint_msg.effort = self.filtered_effort.tolist()
             
         # add constrain to joint position
-        joint_msg.position[0] = np.clip(joint_msg.position[0], -1.57, 1.57)
-        joint_msg.position[1] = np.clip(joint_msg.position[1], -1.57, 1.57)
+        joint_msg.position[0] = np.clip(joint_msg.position[0], -1.3, 1.3)
+        joint_msg.position[1] = np.clip(joint_msg.position[1], -0.8, 0.8)
         
         joint_msg.velocity[0] = np.clip(joint_msg.velocity[0], -1.0, 1.0)
         joint_msg.velocity[1] = np.clip(joint_msg.velocity[1], -1.0, 1.0)
@@ -863,7 +883,7 @@ class TrajectoryPublisher:
                     joint_msg.position = [self.gripper_close_position_real]
                     joint_msg.velocity = [0.0]
                     joint_msg.effort = [0.0]
-                    self.gripper_control_pub.publish(joint_msg)
+                    self.arm_control_pub.publish(joint_msg)
                 self.is_grasping = True
                 rospy.loginfo("Gripper closed at grasp time")
             elif current_time < self.grasp_start_time:
@@ -875,7 +895,7 @@ class TrajectoryPublisher:
                     joint_msg.position = [self.gripper_open_position_real]
                     joint_msg.velocity = [0.0]
                     joint_msg.effort = [0.0]
-                    self.gripper_control_pub.publish(joint_msg)
+                    self.arm_control_pub.publish(joint_msg)
                 self.is_grasping = False
                 rospy.loginfo_throttle(1.0, "Gripper open, waiting for grasp time")
         
@@ -1122,31 +1142,31 @@ class TrajectoryPublisher:
         yaw_msg.data = yaw
         self.yaw_pub.publish(yaw_msg)
         
-    def publish_flat_target(self, pos_world, vel_world, acc_world):
+    # def publish_flat_target(self, pos_world, vel_world, acc_world):
         
-        # Publish flat reference
-        flat_target_msg = FlatTarget()
-        flat_target_msg.header.stamp = rospy.Time.now()
-        flat_target_msg.header.frame_id = "world"
-        flat_target_msg.type_mask = flat_target_msg.IGNORE_SNAP_JERK  # Don't ignore acceleration
+    #     # Publish flat reference
+    #     flat_target_msg = FlatTarget()
+    #     flat_target_msg.header.stamp = rospy.Time.now()
+    #     flat_target_msg.header.frame_id = "world"
+    #     flat_target_msg.type_mask = flat_target_msg.IGNORE_SNAP_JERK  # Don't ignore acceleration
         
-        # Position
-        flat_target_msg.position.x = pos_world[0]
-        flat_target_msg.position.y = pos_world[1]
-        flat_target_msg.position.z = pos_world[2] + 3
+    #     # Position
+    #     flat_target_msg.position.x = pos_world[0]
+    #     flat_target_msg.position.y = pos_world[1]
+    #     flat_target_msg.position.z = pos_world[2] + 3
         
-        # Velocity (world frame)
-        flat_target_msg.velocity.x = vel_world[0]
-        flat_target_msg.velocity.y = vel_world[1]
-        flat_target_msg.velocity.z = vel_world[2]
+    #     # Velocity (world frame)
+    #     flat_target_msg.velocity.x = vel_world[0]
+    #     flat_target_msg.velocity.y = vel_world[1]
+    #     flat_target_msg.velocity.z = vel_world[2]
         
-        # Acceleration (world frame)
-        flat_target_msg.acceleration.x = acc_world[0]
-        flat_target_msg.acceleration.y = acc_world[1]
-        flat_target_msg.acceleration.z = acc_world[2]
+    #     # Acceleration (world frame)
+    #     flat_target_msg.acceleration.x = acc_world[0]
+    #     flat_target_msg.acceleration.y = acc_world[1]
+    #     flat_target_msg.acceleration.z = acc_world[2]
         
-        # Publish messages
-        self.flat_target_pub.publish(flat_target_msg)
+    #     # Publish messages
+    #     self.flat_target_pub.publish(flat_target_msg)
         
     def mav_state_callback(self, msg):
         self.current_state = msg
@@ -1338,9 +1358,12 @@ class TrajectoryPublisher:
             self.joint4_pub.publish(Float64(self.gripper_open_position))
             self.is_grasping = False
             rospy.loginfo("Gripper opened")
-            return TriggerResponse(success=True, message="Gripper opened")
+            return TriggerResponse(success=True, message="Gripper opened (Simulation mode)")
         else:
-            return TriggerResponse(success=False, message="Simulation mode not enabled")
+            self.gripper_position_cmd = self.gripper_open_position_real
+            self.is_grasping = False
+            rospy.loginfo("Gripper opened")
+            return TriggerResponse(success=True, message="Gripper opened")
 
     def close_gripper_callback(self, req):
         """
@@ -1351,9 +1374,12 @@ class TrajectoryPublisher:
             self.joint4_pub.publish(Float64(self.gripper_close_position))
             self.is_grasping = True
             rospy.loginfo("Gripper closed")
-            return TriggerResponse(success=True, message="Gripper closed")
+            return TriggerResponse(success=True, message="Gripper closed (Simulation mode)")
         else:
-            return TriggerResponse(success=False, message="Simulation mode not enabled")
+            self.gripper_position_cmd = self.gripper_close_position_real
+            self.is_grasping = False
+            rospy.loginfo("Gripper closed")
+            return TriggerResponse(success=True, message="Gripper closed")
 
     def reset_beer_callback(self, req):
         """

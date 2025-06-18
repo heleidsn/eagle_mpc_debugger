@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2024-09-07 17:26:46
-LastEditTime: 2025-06-09 10:22:28
+LastEditTime: 2025-06-13 16:31:09
 Description: L1 adaptive controller with 9 state variables
 Version 3: Used for full actuation
 0916： fixed the bug in adaptive_law_new, change tau_body=u_b + u_ad_all + self.sig_hat_b
@@ -11,11 +11,14 @@ Github: https://github.com/heleidsn
 
 
 import numpy as np
+import time
+import rospy
 
 from numpy import linalg as LA
 from scipy import linalg as sLA
 from scipy.spatial.transform import Rotation as R
 import pinocchio as pin
+from scipy.linalg import solve
 
     
 class L1AdaptiveControllerAll:
@@ -53,7 +56,23 @@ class L1AdaptiveControllerAll:
         
         # tunning parameters
         self.a_s = np.ones(self.state_dim_euler) * self.as_matrix_coef #! Hurwitz matrix
-        self.filter_time_const = np.ones(self.filter_num) * self.filter_time_coef  # 注意这里的单位为s， dt = 0.005s  tc = 0.001 alpha = 0.833  tc = 0.005 alpha = 0.5 
+        self.filter_time_const = np.ones(self.filter_num) * self.filter_time_coef
+        
+        # Pre-compute matrices for optimization
+        self.A_s = np.diag(self.a_s)  # diagonal Hurwitz matrix
+        self.expm_A_s_dt = sLA.expm(self.A_s * self.dt)
+        
+        # Pre-compute PHI inverse elements since A_s is diagonal
+        # For a diagonal matrix A, exp(A*dt) is a diagonal matrix with exp(a_ii*dt)
+        # And (exp(A*dt) - I) is diagonal with (exp(a_ii*dt) - 1)
+        # Therefore PHI = A^(-1)(exp(A*dt) - I) is diagonal with (exp(a_ii*dt) - 1)/a_ii
+        expm_minus_I = self.expm_A_s_dt - np.identity(self.state_dim_euler)
+        self.PHI_diag = expm_minus_I.diagonal() / self.a_s
+        self.PHI_inv_diag = 1.0 / self.PHI_diag  # Pre-compute the inverse elements
+        
+        # Pre-compute M_aug template
+        self.M_aug_template = np.zeros((self.state_dim_euler, self.state_dim_euler))
+        self.M_aug_template[:self.control_dim, :self.control_dim] = np.diag(np.ones(self.control_dim))
         
     def init_controller(self):
         '''
@@ -285,7 +304,7 @@ class L1AdaptiveControllerAll:
         return {*}
         '''
         # 1. get inertia matrix        
-        q = self.current_state[:self.model.nq]
+        q = self.current_state[:self.robot_model.nq]
         model = self.robot_model
         data = self.robot_model_data
         M = pin.crba(model, data, q)  # get inertia matrix
@@ -348,8 +367,10 @@ class L1AdaptiveControllerAll:
         '''
         # 1. get inertia matrix        
         q = self.current_state[:self.robot_model.nq]
+        t0 = time.time()
         M = pin.crba(self.robot_model, self.robot_model_data, q)  # get inertia matrix according to the current state
-        
+        t1 = time.time()
+
         # 3. calculate sigma_hat (body frame)
         #! 对B_bar_inv进行增广
         M_aug = np.zeros((self.state_dim_euler, self.state_dim_euler))
@@ -359,22 +380,71 @@ class L1AdaptiveControllerAll:
         B_bar_inv = M_aug.copy()
         
         #! 将以下计算改为18维
+        t2 = time.time()
         PHI = np.matmul(LA.inv(self.A_s), (self.expm_A_s_dt - np.identity(self.state_dim_euler)))
+        # PHI = np.matmul(LA.inv(self.A_s), self.expm_A_s_dt)
+        # PHI = self.A_s
+        
+        t3 = time.time()
         PHI_inv = LA.inv(PHI)
+        
+        t4 = time.time()
         
         mu  = np.matmul(self.expm_A_s_dt, self.z_tilde)
         PHI_inv_mul_mu = np.matmul(PHI_inv, mu)
         
+        t5 = time.time()
         weight = np.matmul(PHI_inv, self.expm_A_s_dt)
         weight = np.matmul(B_bar_inv, weight)
         weight = np.diag(weight)  # Extract diagonal elements
 
-        sigma_hat_disturb  = -np.matmul(B_bar_inv, PHI_inv_mul_mu)  # sigma_hat is related to z_tilde
+        # sigma_hat_disturb  = -np.matmul(B_bar_inv, PHI_inv_mul_mu)  # sigma_hat is related to z_tilde
 
         # self.sig_hat = sigma_hat_disturb.copy()
-        weight = np.array([0, 0, 0, 0, 0, 0, 100, 100, 50, 1, 1, 1])
-        # self.sig_hat = -1 * weight * self.z_tilde.copy()  # 这里的sigma_hat是一个增广矩阵，包含了速度和位置的扰动
         
+        
+        # weight = np.array([0, 0, 0, 0, 0, 0, 0, 0, 100, 100, 50, 1, 1, 1, 0, 0])
+        self.sig_hat = -1 * weight * self.z_tilde.copy()  # 这里的sigma_hat是一个增广矩阵，包含了速度和位置的扰动
+        t6 = time.time()
+        
+        # self.sig_hat = sigma_hat_disturb.copy()
+        
+        # calculation time
+        # rospy.loginfo(f"crba time: {(t1-t0)*1000:.3f} ms")
+        # rospy.loginfo(f"crba time: {(t2-t1)*1000:.3f} ms")
+        # rospy.loginfo(f"crba time: {(t3-t2)*1000:.3f} ms")
+        # rospy.loginfo(f"crba time: {(t4-t3)*1000:.3f} ms")
+        # rospy.loginfo(f"crba time: {(t5-t4)*1000:.3f} ms")
+        # rospy.loginfo(f"crba time: {(t6-t5)*1000:.3f} ms")
+        
+    def update_sig_hat_all_v2_new(self):
+        """Optimized version that uses pre-computed matrices and diagonal structure"""
+        q = self.current_state[:self.robot_model.nq]
+        t0 = time.time()
+        M = pin.crba(self.robot_model, self.robot_model_data, q)
+        t1 = time.time()
+
+        # Use pre-computed template and update only the necessary part
+        M_aug = self.M_aug_template.copy()
+        M_aug[-self.control_dim:, -self.control_dim:] = M
+
+        t2 = time.time()
+
+        # Fast computation using pre-computed diagonal elements and element-wise operations
+        mu = np.matmul(self.expm_A_s_dt, self.z_tilde)
+        # Since PHI is diagonal, PHI_inv @ mu is element-wise multiplication
+        PHI_inv_mul_mu = self.PHI_inv_diag * mu
+        
+        t4 = time.time()
+        sigma_hat_disturb = -np.matmul(M_aug, PHI_inv_mul_mu)
+
+        # Use direct weight multiplication instead of matrix operations
+        weight = np.array([0, 0, 0, 0, 0, 0, 0, 0, 100, 100, 50, 1, 1, 1, 0, 0])
+        self.sig_hat = -1 * weight * self.z_tilde.copy()
+        # self.sig_hat = sigma_hat_disturb
+
+        t5 = time.time()
+        # rospy.loginfo(f"timing (ms): crba: {(t1-t0)*1000:.3f}  aug: {(t2-t1)*1000:.3f}  phi_mul: {(t4-t2)*1000:.3f}  sigma_hat: {(t5-t4)*1000:.3f}")
         self.sig_hat = sigma_hat_disturb.copy()
     
     def update_u_ad(self):
@@ -405,9 +475,12 @@ class L1AdaptiveControllerAll:
         self.u_ad = -sig_hat_filtered
         
         # limitation
-        flag_using_limit = False
+        flag_using_limit = True
         if flag_using_limit:
-            min_values = np.array([0, 0, -10, -1, -1, -1])
+            if self.use_arm:
+                min_values = np.array([0, 0, -10, -1, -1, -1, 0, 0])
+            else:
+                min_values = np.array([0, 0, -10, -1, -1, -1])
             max_values = -min_values
             
             clipped_array = np.where(self.u_ad < min_values, min_values, self.u_ad)

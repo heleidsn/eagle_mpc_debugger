@@ -1,0 +1,29 @@
+mpc_controller:
+  robot:
+    name: "s500_uam"
+    urdf: "/home/jetson/catkin_ams/src/eagle_mpc_debugger/models/urdf/s500_uam_simple.urdf"
+    follow: "/home/jetson/catkin_ams/src/eagle_mpc_debugger/config/yaml/multicopter/s500.yaml"
+
+  integration_method: "IntegratedActionModelEuler"
+  knots: 20
+  solver: "SolverSbFDDP"
+  iters: 10
+  dt: 50
+
+  carrot_weight: 1000
+  carrot_tail_weight: 1
+  carrot_tail_act_weights: [1000, 1000, 1000, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+  carrot_control_reg_weight: 1e-1
+  carrot_control_reg_act_weights: [1, 1, 1, 1]
+  carrot_state_reg_weight: 1e-2
+  carrot_state_ref_act_weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+  carrot_state_limits_weight: 10
+  carrot_state_limits_act_weights: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  carrot_state_limits_u_bound: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  carrot_state_limits_l_bound: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+  rail_weight: 50
+  rail_activation_weights: [20, 20, 50, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+  rail_control_weight: 5
+
+  control_reference: [5, 5, 5, 5, 0, 0]
