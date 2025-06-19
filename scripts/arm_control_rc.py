@@ -13,10 +13,10 @@ class RCToJointStateMapper:
         self.using_soft_ee = rospy.get_param('~using_soft_ee', True)
 
         # 关节角度范围（弧度），按顺序给出
-        self.min_angles = [-1.2, -0.8, -0.2]   # rad
+        self.min_angles = [-1.2, -0.8, 0.0]   # rad
         self.max_angles = [1.2, 0.8, 0.6]   # rad
         
-        self.action_velocity = 0.5  # 关节速度
+        self.action_velocity = 1.5 # 关节速度
 
         # RC输入通道索引
         self.rc_channels = [9, 10, 11]
