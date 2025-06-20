@@ -1,11 +1,11 @@
+#!/usr/bin/env python3
 '''
 Author: Lei He
 Date: 2025-02-19 11:40:31
-LastEditTime: 2025-06-12 11:16:58
+LastEditTime: 2025-06-20 14:51:18
 Description: MPC Debug Interface, useful for debugging your MPC controller before deploying it to the real robot
 Github: https://github.com/heleidsn
 '''
-#!/usr/bin/env python3
 
 import rospy
 import numpy as np
@@ -14,18 +14,26 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QSlider
 from eagle_mpc_msgs.msg import MpcState, MpcControl
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, TwistStamped
+from sensor_msgs.msg import Imu
+from mavros_msgs.msg import State, PositionTarget, AttitudeTarget
+from sensor_msgs.msg import JointState
+from tf.transformations import quaternion_matrix
 import matplotlib
 matplotlib.use('Qt5Agg')
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from std_msgs.msg import Float64
-from mavros_msgs.msg import State, PositionTarget, AttitudeTarget
-from sensor_msgs.msg import JointState
-from tf.transformations import quaternion_matrix
 
+# Only import eagle_mpc related modules if not in ROS mode
+import sys
+if len(sys.argv) > 1 and '--ros' in sys.argv:
+    using_ros_mode = True
+else:
+    using_ros_mode = False
 
-from utils.create_problem import get_opt_traj, create_mpc_controller
+if not using_ros_mode:
+    from utils.create_problem import get_opt_traj, create_mpc_controller
 
 from mavros_msgs.msg import AttitudeTarget
 from geometry_msgs.msg import Vector3
@@ -43,10 +51,20 @@ class MpcDebugInterface(QWidget):
         self.mpc_yaml_path = mpc_yaml_path
         self.robot_name = robot_name
         self.trajectory_name = trajectory_name
-        self.use_squash = useSquash
+        self.use_squash = True
         self.dt_traj_opt = dt_traj_opt  # ms
-        self.yaml_path = rospy.get_param('~yaml_path', '/home/jetson/catkin_ams/src/eagle_mpc_ros/eagle_mpc_yaml')
+        self.yaml_path = rospy.get_param('~yaml_path', 'config/yaml')
         self.arm_enabled = rospy.get_param('~arm_enabled', False)
+        
+        # 动态分配，初始化为None，等mpc_controller初始化后再分配具体维度
+        if self.robot_name == 's500_uam':
+            self.real_time_state = np.zeros(17)
+            self.control_command = np.zeros(6)
+        elif self.robot_name == 's500':
+            self.real_time_state = np.zeros(13)
+            self.control_command = np.zeros(4)
+        else:
+            raise ValueError(f"Unsupported robot name: {self.robot_name}")
         
         # numpy print options
         np.set_printoptions(formatter={'float': lambda x: f"{x:>4.2f}"})  # 固定 6 位小数
@@ -334,53 +352,83 @@ class MpcDebugInterface(QWidget):
         self.timer_plot.timeout.connect(self.update_plot)
         self.timer_plot.start(0.1)  # 10Hz update
         
-        # Load trajectory and initialize MPC controller
-        self.load_trajectory()
-        self.init_mpc_controller()
-        
-        self.state = self.mpc_controller.state.zero()
-        self.state_ref = np.copy(self.mpc_controller.state_ref)
-        self.mpc_ref_time = 0
-        self.solving_time = 0.0
-        
-        # Set time slider maximum based on trajectory length
-        traj_duration_ms = (len(self.state_ref) - 1) * self.dt_traj_opt
-        self.time_slider.setMaximum(traj_duration_ms+2000)
-        
-        # Store MPC time step (convert to milliseconds)
-        self.dt_mpc = self.mpc_controller.dt  # Convert to milliseconds
-        print(f"Trajectory dt: {self.dt_traj_opt}ms, MPC dt: {self.dt_mpc}ms")
+        # Load trajectory and initialize MPC controller (only for non-ROS mode)
+        if not self.using_ros:
+            self.load_trajectory()
+            self.init_mpc_controller()
+            
+            self.state = self.mpc_controller.state.zero()
+            self.state_ref = np.copy(self.mpc_controller.state_ref)
+            self.mpc_ref_time = 0
+            self.solving_time = 0.0
+            
+            # Set time slider maximum based on trajectory length
+            traj_duration_ms = (len(self.state_ref) - 1) * self.dt_traj_opt
+            self.time_slider.setMaximum(traj_duration_ms+2000)
+            
+            # Store MPC time step (convert to milliseconds)
+            self.dt_mpc = self.mpc_controller.dt  # Convert to milliseconds
+            print(f"Trajectory dt: {self.dt_traj_opt}ms, MPC dt: {self.dt_mpc}ms")
+        else:
+            # ROS mode: initialize with default values
+            self.state = np.zeros(13)
+            self.state_ref = np.zeros(13)
+            self.mpc_ref_time = 0
+            self.solving_time = 0.0
+            self.dt_mpc = 0.01  # Default 10ms
+            print("ROS mode: using real-time data from topics")
         
         # Create MPC controller with different timer
         if self.using_ros:
-            rospy.loginfo("MPC controller initialized")
+            rospy.loginfo("MPC debug interface initialized in ROS mode")
             
             # ROS subscribers and publishers
             self.pose_pub = rospy.Publisher('/debug/pose', PoseStamped, queue_size=1)
-            # self.time_pub = rospy.Publisher('/debug/time', Float64, queue_size=1)
             
-            # Subscriber
+            # Subscribers for real-time data
             self.current_state = State()
             self.arm_state = JointState()
             self.mav_state_sub = rospy.Subscriber('/mavros/state', State, self.mav_state_callback)
             self.arm_state_sub = rospy.Subscriber('/joint_states', JointState, self.arm_state_callback)
             
+            # MPC data subscribers
             self.state_sub = rospy.Subscriber('/debug/mpc_state', MpcState, self.state_callback)
             self.control_sub = rospy.Subscriber('/debug/mpc_control', MpcControl, self.control_callback)
             
+            # Additional ROS topics for real-time data
+            self.odom_sub = rospy.Subscriber('/mavros/local_position/pose', PoseStamped, self.odom_callback)
+            self.vel_sub = rospy.Subscriber('/mavros/local_position/velocity_local', TwistStamped, self.vel_callback)
+            self.imu_sub = rospy.Subscriber('/mavros/imu/data', Imu, self.imu_callback)
+            
+            # Publishers (for debugging purposes)
             self.mpc_state_pub = rospy.Publisher('/mpc/state', MpcState, queue_size=10)
             self.mpc_control_pub = rospy.Publisher('/mpc/control', MpcControl, queue_size=10)
-            
             self.solving_time_pub = rospy.Publisher('/mpc/solving_time', Float64, queue_size=1)
-            
             self.attitude_pub = rospy.Publisher('/mavros/setpoint_raw/attitude', AttitudeTarget, queue_size=10)
             
-            # Start MPC controller and wait for it to start
-            self.mpc_rate = 100.0  # Hz
-            self.mpc_ref_index = 0
-            self.mpc_timer = rospy.Timer(rospy.Duration(1.0/self.mpc_rate), self.mpc_timer_callback_ros)
+            # Real-time data buffers for ROS mode
+            self.real_time_data = {
+                'position': [],      # [x, y, z]
+                'orientation': [],   # [qx, qy, qz, qw]
+                'linear_velocity': [], # [vx, vy, vz]
+                'angular_velocity': [], # [wx, wy, wz]
+                'joint_position': [],   # [joint1, joint2]
+                'joint_velocity': [],   # [joint1_vel, joint2_vel]
+                'joint_effort': [],     # [joint1_effort, joint2_effort]
+                'control': [],          # control commands
+                'solving_time': [],     # MPC solving time
+                'timestamps': []        # timestamps for plotting
+            }
             
-            rospy.loginfo(f"MPC started at {self.mpc_rate}Hz")
+            # Buffer size for real-time data
+            self.buffer_size = 200
+            
+            
+            # Timer for updating plots (faster update rate for real-time display)
+            self.timer_plot.stop()  # Stop the original timer
+            self.timer_plot.start(50)  # 20Hz update for real-time display
+            
+            rospy.loginfo("ROS mode initialized - all data will be fetched from ROS topics")
         
         else:
             self.mpc_rate = 100.0  # Hz
@@ -471,6 +519,12 @@ class MpcDebugInterface(QWidget):
         self.thrust_command = np.zeros(self.mpc_controller.platform_params.n_rotors)
         self.speed_command = np.zeros(self.mpc_controller.platform_params.n_rotors)
         self.total_thrust = 0.0
+
+        # 动态分配real_time_state和control_command的维度
+        nx = getattr(self.mpc_controller.robot_model, 'nx', 13)
+        nu = getattr(self.mpc_controller.robot_model, 'nu', 4)
+        self.real_time_state = np.zeros(nx)
+        self.control_command = np.zeros(nu)
     
     #endregion
     
@@ -497,7 +551,7 @@ class MpcDebugInterface(QWidget):
         if len(self.mpc_solve_time_history) > 100:
             self.mpc_solve_time_history.pop(0)
         
-        self.traj_ref_index = int(self.mpc_ref_index / self.dt_traj_opt)
+        self.traj_ref_index = int(self.mpc_ref_time / self.dt_traj_opt)
         self.control_command = self.mpc_controller.solver.us_squash[0]
         
         rospy.logdebug('MPC ref index      : {}'.format(self.traj_ref_index))
@@ -580,16 +634,104 @@ class MpcDebugInterface(QWidget):
         # Update slider positions to match current state
         if self.state_history:
             current_state = self.state_history[-1].state
-            for i, axis in enumerate(['X', 'Y', 'Z']):
-                self.state_sliders[axis].blockSignals(True)  # Prevent callback triggering
-                self.state_sliders[axis].setValue(int(current_state[i] * 100))
-                self.state_labels[axis].setText(f'{current_state[i]:.2f}')
-                self.state_sliders[axis].blockSignals(False)
             
+            if self.using_ros:
+                # In ROS mode, update all sliders to show current state
+                # Position
+                for i, axis in enumerate(['X', 'Y', 'Z']):
+                    self.state_sliders[axis].blockSignals(True)
+                    self.state_sliders[axis].setValue(int(current_state[i] * 100))
+                    self.state_labels[axis].setText(f'{current_state[i]:.2f}')
+                    self.state_sliders[axis].blockSignals(False)
+                
+                # Orientation (convert quaternion to euler angles)
+                euler = R.from_quat(current_state[3:7]).as_euler('xyz', degrees=True)
+                for i, axis in enumerate(['roll', 'pitch', 'yaw']):
+                    self.state_sliders[axis].blockSignals(True)
+                    self.state_sliders[axis].setValue(int(euler[i]))
+                    self.state_labels[axis].setText(f'{euler[i]:.2f}')
+                    self.state_sliders[axis].blockSignals(False)
+                
+                # Linear velocity
+                for i, axis in enumerate(['vx', 'vy', 'vz']):
+                    self.state_sliders[axis].blockSignals(True)
+                    self.state_sliders[axis].setValue(int(current_state[i + 7] * 100))
+                    self.state_labels[axis].setText(f'{current_state[i + 7]:.2f}')
+                    self.state_sliders[axis].blockSignals(False)
+                
+                # Angular velocity (convert to degrees)
+                for i, axis in enumerate(['wx', 'wy', 'wz']):
+                    ang_vel_deg = np.degrees(current_state[i + 10])
+                    self.state_sliders[axis].blockSignals(True)
+                    self.state_sliders[axis].setValue(int(ang_vel_deg))
+                    self.state_labels[axis].setText(f'{ang_vel_deg:.2f}')
+                    self.state_sliders[axis].blockSignals(False)
+                
+                # Joint position (if available)
+                if len(current_state) > 12:
+                    for i, axis in enumerate(['joint1', 'joint2']):
+                        self.state_sliders[axis].blockSignals(True)
+                        self.state_sliders[axis].setValue(int(current_state[i + 7] * 100))
+                        self.state_labels[axis].setText(f'{current_state[i + 7]:.2f}')
+                        self.state_sliders[axis].blockSignals(False)
+            else:
+                # Non-ROS mode: original logic
+                for i, axis in enumerate(['X', 'Y', 'Z']):
+                    self.state_sliders[axis].blockSignals(True)  # Prevent callback triggering
+                    self.state_sliders[axis].setValue(int(current_state[i] * 100))
+                    self.state_labels[axis].setText(f'{current_state[i]:.2f}')
+                    self.state_sliders[axis].blockSignals(False)
+        
+        # Update real-time data buffers in ROS mode
+        if self.using_ros:
+            timestamp = msg.header.stamp.to_sec()
+            
+            # Extract state data
+            state_data = np.array(msg.state)
+            position = state_data[0:3].tolist()
+            orientation = state_data[3:7].tolist()
+            linear_vel = state_data[7:10].tolist()
+            angular_vel = state_data[10:13].tolist()
+            
+            # Update real-time state
+            self.real_time_state = state_data
+            
+            # Add to buffers with synchronization
+            self._add_synchronized_data('position', position, timestamp)
+            self._add_synchronized_data('orientation', orientation, timestamp)
+            self._add_synchronized_data('linear_velocity', linear_vel, timestamp)
+            self._add_synchronized_data('angular_velocity', angular_vel, timestamp)
+        
+        # Update real-time control data in ROS mode
+        if self.using_ros:
+            timestamp = msg.header.stamp.to_sec()
+            
+            # Extract control data
+            control_data = np.array(msg.control_squash)
+            
+            # Update control command
+            self.control_command = control_data
+            
+            # Add to buffer with synchronization
+            self._add_synchronized_data('control', control_data.tolist(), timestamp)
+
     def control_callback(self, msg):
         self.control_history.append(msg)
         if len(self.control_history) > 100:
             self.control_history.pop(0)
+        
+        # Update real-time control data in ROS mode
+        if self.using_ros:
+            timestamp = msg.header.stamp.to_sec()
+            
+            # Extract control data
+            control_data = np.array(msg.control_squash)
+            
+            # Update control command
+            self.control_command = control_data
+            
+            # Add to buffer with synchronization
+            self._add_synchronized_data('control', control_data.tolist(), timestamp)
 
     def state_changed_ros(self, axis, value):
         # 发布新的位置
@@ -633,10 +775,125 @@ class MpcDebugInterface(QWidget):
         self.joint_effort_buffer.append([msg.effort[1], msg.effort[0]])
         if len(self.joint_effort_buffer) > max_buffer_size:
             self.joint_effort_buffer.pop(0)  # 删除最旧的值
+        
+        # Update joint control buffer if control_command is available
+        if hasattr(self, 'control_command') and len(self.control_command) >= 2:
+            self.joint_control_buffer.append(self.control_command[-2:])
+            if len(self.joint_control_buffer) > max_buffer_size:
+                self.joint_control_buffer.pop(0)
+    
+    def odom_callback(self, msg):
+        """Callback for position and orientation data"""
+        if not self.using_ros:
+            return
             
-        self.joint_control_buffer.append(self.control_command[-2:])
-        if len(self.joint_control_buffer) > max_buffer_size:
-            self.joint_control_buffer.pop(0)
+        timestamp = msg.header.stamp.to_sec()
+        
+        # Extract position
+        position = [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]
+        
+        # Extract orientation
+        orientation = [msg.pose.orientation.x, msg.pose.orientation.y, 
+                      msg.pose.orientation.z, msg.pose.orientation.w]
+        
+        # Update real-time state
+        self.real_time_state[0:3] = position
+        self.real_time_state[3:7] = orientation
+        
+        # Add to buffers with synchronization
+        self._add_synchronized_data('position', position, timestamp)
+        self._add_synchronized_data('orientation', orientation, timestamp)
+    
+    def vel_callback(self, msg):
+        """Callback for velocity data"""
+        if not self.using_ros:
+            return
+            
+        timestamp = msg.header.stamp.to_sec()
+        
+        # Extract linear velocity (body frame)
+        linear_vel = [msg.twist.linear.x, msg.twist.linear.y, msg.twist.linear.z]
+        
+        # Extract angular velocity (body frame)
+        angular_vel = [msg.twist.angular.x, msg.twist.angular.y, msg.twist.angular.z]
+        
+        # Update real-time state
+        self.real_time_state[7:10] = linear_vel
+        self.real_time_state[10:13] = angular_vel
+        
+        # Add to buffers with synchronization
+        self._add_synchronized_data('linear_velocity', linear_vel, timestamp)
+        self._add_synchronized_data('angular_velocity', angular_vel, timestamp)
+    
+    def _add_synchronized_data(self, data_type, data, timestamp):
+        """Add data with timestamp synchronization"""
+        # Add timestamp if not exists
+        if timestamp not in self.real_time_data['timestamps']:
+            self.real_time_data['timestamps'].append(timestamp)
+            # Add placeholder data for other types if they don't exist
+            for key in ['position', 'orientation', 'linear_velocity', 'angular_velocity', 'control']:
+                if key not in self.real_time_data:
+                    self.real_time_data[key] = []
+                if len(self.real_time_data[key]) < len(self.real_time_data['timestamps']):
+                    # Add placeholder data
+                    if key == 'position':
+                        placeholder = [0.0, 0.0, 0.0]
+                    elif key == 'orientation':
+                        placeholder = [0.0, 0.0, 0.0, 1.0]
+                    elif key == 'linear_velocity':
+                        placeholder = [0.0, 0.0, 0.0]
+                    elif key == 'angular_velocity':
+                        placeholder = [0.0, 0.0, 0.0]
+                    elif key == 'control':
+                        placeholder = [0.0, 0.0, 0.0, 0.0]
+                    else:
+                        placeholder = []
+                    self.real_time_data[key].append(placeholder)
+        
+        # Find the index for this timestamp
+        try:
+            idx = self.real_time_data['timestamps'].index(timestamp)
+            # Update the data at this index
+            if len(self.real_time_data[data_type]) <= idx:
+                # Extend the list if needed
+                while len(self.real_time_data[data_type]) <= idx:
+                    if data_type == 'position':
+                        self.real_time_data[data_type].append([0.0, 0.0, 0.0])
+                    elif data_type == 'orientation':
+                        self.real_time_data[data_type].append([0.0, 0.0, 0.0, 1.0])
+                    elif data_type == 'linear_velocity':
+                        self.real_time_data[data_type].append([0.0, 0.0, 0.0])
+                    elif data_type == 'angular_velocity':
+                        self.real_time_data[data_type].append([0.0, 0.0, 0.0])
+                    elif data_type == 'control':
+                        self.real_time_data[data_type].append([0.0, 0.0, 0.0, 0.0])
+            self.real_time_data[data_type][idx] = data
+        except ValueError:
+            # Timestamp not found, add new entry
+            self.real_time_data[data_type].append(data)
+        
+        # Maintain buffer size
+        if len(self.real_time_data['timestamps']) > self.buffer_size:
+            self.real_time_data['timestamps'].pop(0)
+            for key in self.real_time_data:
+                if key != 'timestamps' and len(self.real_time_data[key]) > 0:
+                    self.real_time_data[key].pop(0)
+    
+    def imu_callback(self, msg):
+        """Callback for IMU data (alternative source for angular velocity)"""
+        if not self.using_ros:
+            return
+            
+        # Extract angular velocity from IMU
+        angular_vel = [msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z]
+        
+        # Update real-time state if velocity data is not available
+        if len(self.real_time_data['angular_velocity']) == 0:
+            self.real_time_state[10:13] = angular_vel
+            self.real_time_data['angular_velocity'].append(angular_vel)
+            
+            if len(self.real_time_data['angular_velocity']) > self.buffer_size:
+                self.real_time_data['angular_velocity'].pop(0)
     #endregion
 
     #region --------------QT without ROS--------------------------------
@@ -663,7 +920,7 @@ class MpcDebugInterface(QWidget):
         slider.setMinimum(int(min_val * 100))
         slider.setMaximum(int(max_val * 100))
         slider.setValue(0)
-        slider.setFixedHeight(40)
+        slider.setFixedHeight(100)
         slider.setFixedWidth(30)
         slider.setStyleSheet("""
             QSlider::groove:vertical {
@@ -718,6 +975,15 @@ class MpcDebugInterface(QWidget):
         """处理滑块值变化"""
         actual_value = value / 100.0
         
+        if self.using_ros:
+            # In ROS mode, only update display values, don't modify state
+            # State comes from ROS topics
+            self.state_labels[name].blockSignals(True)
+            self.state_labels[name].setText(f'{actual_value:.2f}')
+            self.state_labels[name].blockSignals(False)
+            return
+        
+        # Non-ROS mode: original logic
         # 获取当前时间对应的参考状态
         time_index = int(self.mpc_ref_time / self.dt_traj_opt)
         time_index = min(time_index, len(self.state_ref) - 1)
@@ -854,6 +1120,11 @@ class MpcDebugInterface(QWidget):
         self.time_label.setText(f'{value} ms')
         self.mpc_ref_time = int(value)   # 单位为ms
         
+        if self.using_ros:
+            # In ROS mode, don't reset sliders as state comes from ROS topics
+            return
+        
+        # Non-ROS mode: reset sliders
         # 重置所有滑块到零位置，这样偏移量会重置
         # self.reset_sliders()
         self.set_to_reference()
@@ -915,28 +1186,115 @@ class MpcDebugInterface(QWidget):
 
     #region --------------plot--------------------------------  
     def update_plot(self):
-        # 更新状态图
-        state_predict = np.array(self.mpc_controller.solver.xs)
-        state_ref = np.array(self.mpc_controller.state_ref)
-        self.update_state_plot(state_predict, state_ref)
-        self.update_attitude_plot(state_predict, state_ref)
-        self.update_linear_velocity_plot(state_predict, state_ref)
-        self.update_angular_velocity_plot(state_predict, state_ref)
+        if self.using_ros:
+            # ROS mode: use real-time data from topics
+            self.update_plot_ros()
+        else:
+            # Non-ROS mode: use MPC prediction data
+            # 更新状态图
+            state_predict = np.array(self.mpc_controller.solver.xs)
+            state_ref = np.array(self.mpc_controller.state_ref)
+            self.update_state_plot(state_predict, state_ref)
+            self.update_attitude_plot(state_predict, state_ref)
+            self.update_linear_velocity_plot(state_predict, state_ref)
+            self.update_angular_velocity_plot(state_predict, state_ref)
+            
+            # update control plot
+            control_predict = np.array(self.mpc_controller.solver.us_squash)
+            control_ref = np.array(self.traj_solver.us_squash)
+            self.update_control_plot(control_predict, control_ref)
+            
+            if self.plot_thrust_torque:
+                self.update_thrust_torque_plot(control_predict, control_ref)
+            
+            # update solving time plot
+            self.update_solving_time_plot()
+            
+            # update arm plot
+            self.update_arm_plot(state_predict, state_ref, control_predict, control_ref)
+    
+    def update_plot_ros(self):
+        """Update plots using real-time data from ROS topics"""
+        # Check if we have enough data
+        if len(self.real_time_data['timestamps']) < 2:
+            return
+            
+        # Convert data to numpy arrays and ensure they have the same length
+        timestamps = np.array(self.real_time_data['timestamps'])
+        min_length = len(timestamps)
         
-        # update control plot
-        control_predict = np.array(self.mpc_controller.solver.us_squash)
-        control_ref = np.array(self.traj_solver.us_squash)
-        self.update_control_plot(control_predict, control_ref)
+        # Get data arrays and ensure they have the same length
+        position_data = np.array(self.real_time_data['position'])
+        if len(position_data) > min_length:
+            position_data = position_data[:min_length]
+        elif len(position_data) < min_length:
+            # Pad with zeros if too short
+            padding = np.zeros((min_length - len(position_data), 3))
+            position_data = np.vstack([position_data, padding]) if len(position_data) > 0 else np.zeros((min_length, 3))
+            
+        orientation_data = np.array(self.real_time_data['orientation'])
+        if len(orientation_data) > min_length:
+            orientation_data = orientation_data[:min_length]
+        elif len(orientation_data) < min_length:
+            padding = np.zeros((min_length - len(orientation_data), 4))
+            padding[:, 3] = 1.0  # w component = 1
+            orientation_data = np.vstack([orientation_data, padding]) if len(orientation_data) > 0 else np.column_stack([np.zeros((min_length, 3)), np.ones(min_length)])
+            
+        linear_vel_data = np.array(self.real_time_data['linear_velocity'])
+        if len(linear_vel_data) > min_length:
+            linear_vel_data = linear_vel_data[:min_length]
+        elif len(linear_vel_data) < min_length:
+            padding = np.zeros((min_length - len(linear_vel_data), 3))
+            linear_vel_data = np.vstack([linear_vel_data, padding]) if len(linear_vel_data) > 0 else np.zeros((min_length, 3))
+            
+        angular_vel_data = np.array(self.real_time_data['angular_velocity'])
+        if len(angular_vel_data) > min_length:
+            angular_vel_data = angular_vel_data[:min_length]
+        elif len(angular_vel_data) < min_length:
+            padding = np.zeros((min_length - len(angular_vel_data), 3))
+            angular_vel_data = np.vstack([angular_vel_data, padding]) if len(angular_vel_data) > 0 else np.zeros((min_length, 3))
         
-        if self.plot_thrust_torque:
-            self.update_thrust_torque_plot(control_predict, control_ref)
+        # Handle control data
+        control_data = None
+        if self.real_time_data['control']:
+            control_data = np.array(self.real_time_data['control'])
+            if len(control_data) > min_length:
+                control_data = control_data[:min_length]
+            elif len(control_data) < min_length:
+                padding = np.zeros((min_length - len(control_data), 4))
+                control_data = np.vstack([control_data, padding]) if len(control_data) > 0 else np.zeros((min_length, 4))
         
-        # update solving time plot
+        # Calculate relative time for plotting (last 10 seconds)
+        current_time = timestamps[-1]
+        start_time = max(current_time - 10.0, timestamps[0])  # Show last 10 seconds
+        time_mask = timestamps >= start_time
+        
+        relative_time = timestamps[time_mask] - start_time
+        position_data = position_data[time_mask]
+        orientation_data = orientation_data[time_mask]
+        linear_vel_data = linear_vel_data[time_mask]
+        angular_vel_data = angular_vel_data[time_mask]
+        if control_data is not None:
+            control_data = control_data[time_mask]
+        
+        # Update plots with real-time data
+        self.update_state_plot_ros(relative_time, position_data)
+        self.update_attitude_plot_ros(relative_time, orientation_data)
+        self.update_linear_velocity_plot_ros(relative_time, linear_vel_data)
+        self.update_angular_velocity_plot_ros(relative_time, angular_vel_data)
+        
+        if control_data is not None:
+            self.update_control_plot_ros(relative_time, control_data)
+            
+        if self.plot_thrust_torque and control_data is not None:
+            self.update_thrust_torque_plot_ros(relative_time, control_data)
+        
+        # Update solving time plot
         self.update_solving_time_plot()
         
-        # update arm plot
-        self.update_arm_plot(state_predict, state_ref, control_predict, control_ref)
-        
+        # Update arm plot
+        self.update_arm_plot_ros(relative_time)
+
     def update_arm_plot(self, state_predict, state_ref, control_predict=None, control_ref=None):
         if self.arm_enabled:
             joint_position = np.array(self.joint_position_buffer)
@@ -1165,6 +1523,158 @@ class MpcDebugInterface(QWidget):
         # 计算predict的总扭矩
         
     
+    def update_state_plot_ros(self, time_data, position_data):
+        """Update position plot with real-time data"""
+        self.ax_state.clear()
+        self.ax_state.set_title('Position (Real-time)')
+        self.ax_state.set_xlabel('Time (s)')
+        self.ax_state.set_ylabel('Position (m)')
+        
+        if len(position_data) > 0:
+            self.ax_state.plot(time_data, position_data[:, 0], label='X', color='red', linewidth=2)
+            self.ax_state.plot(time_data, position_data[:, 1], label='Y', color='green', linewidth=2)
+            self.ax_state.plot(time_data, position_data[:, 2], label='Z', color='blue', linewidth=2)
+        
+        self.ax_state.legend()
+        self.ax_state.grid(True)
+    
+    def update_attitude_plot_ros(self, time_data, orientation_data):
+        """Update attitude plot with real-time data"""
+        self.ax_attitude.clear()
+        self.ax_attitude.set_title('Attitude (Real-time)')
+        self.ax_attitude.set_xlabel('Time (s)')
+        self.ax_attitude.set_ylabel('Angle (deg)')
+        
+        if len(orientation_data) > 0:
+            # Convert quaternions to euler angles
+            euler_data = np.array([R.from_quat(q).as_euler('xyz', degrees=True) 
+                                  for q in orientation_data])
+            
+            self.ax_attitude.plot(time_data, euler_data[:, 0], label='Roll', color='red', linewidth=2)
+            self.ax_attitude.plot(time_data, euler_data[:, 1], label='Pitch', color='green', linewidth=2)
+            self.ax_attitude.plot(time_data, euler_data[:, 2], label='Yaw', color='blue', linewidth=2)
+        
+        self.ax_attitude.legend()
+        self.ax_attitude.grid(True)
+    
+    def update_linear_velocity_plot_ros(self, time_data, linear_vel_data):
+        """Update linear velocity plot with real-time data"""
+        self.ax_linear_velocity.clear()
+        self.ax_linear_velocity.set_title('Linear Velocity (Real-time)')
+        self.ax_linear_velocity.set_xlabel('Time (s)')
+        self.ax_linear_velocity.set_ylabel('Velocity (m/s)')
+        
+        if len(linear_vel_data) > 0:
+            self.ax_linear_velocity.plot(time_data, linear_vel_data[:, 0], label='X', color='red', linewidth=2)
+            self.ax_linear_velocity.plot(time_data, linear_vel_data[:, 1], label='Y', color='green', linewidth=2)
+            self.ax_linear_velocity.plot(time_data, linear_vel_data[:, 2], label='Z', color='blue', linewidth=2)
+        
+        self.ax_linear_velocity.legend()
+        self.ax_linear_velocity.grid(True)
+    
+    def update_angular_velocity_plot_ros(self, time_data, angular_vel_data):
+        """Update angular velocity plot with real-time data"""
+        self.ax_angular_velocity.clear()
+        self.ax_angular_velocity.set_title('Angular Velocity (Real-time)')
+        self.ax_angular_velocity.set_xlabel('Time (s)')
+        self.ax_angular_velocity.set_ylabel('Velocity (rad/s)')
+        
+        if len(angular_vel_data) > 0:
+            self.ax_angular_velocity.plot(time_data, angular_vel_data[:, 0], label='X', color='red', linewidth=2)
+            self.ax_angular_velocity.plot(time_data, angular_vel_data[:, 1], label='Y', color='green', linewidth=2)
+            self.ax_angular_velocity.plot(time_data, angular_vel_data[:, 2], label='Z', color='blue', linewidth=2)
+        
+        self.ax_angular_velocity.legend()
+        self.ax_angular_velocity.grid(True)
+    
+    def update_control_plot_ros(self, time_data, control_data):
+        """Update control plot with real-time data"""
+        self.ax_control.clear()
+        self.ax_control.set_title('Control (Real-time)')
+        self.ax_control.set_xlabel('Time (s)')
+        self.ax_control.set_ylabel('Control')
+        
+        if len(control_data) > 0:
+            colors = ['red', 'green', 'blue', 'purple', 'orange', 'brown', 'pink', 'gray']
+            control_num = min(control_data.shape[1], len(colors))
+            
+            for i in range(control_num):
+                self.ax_control.plot(time_data, control_data[:, i], 
+                                   label=f'Control_{i}', color=colors[i], linewidth=2)
+        
+        self.ax_control.legend()
+        self.ax_control.grid(True)
+    
+    def update_thrust_torque_plot_ros(self, time_data, control_data):
+        """Update thrust and torque plot with real-time data"""
+        self.ax_thrust.clear()
+        self.ax_thrust.set_title('Thrust (Real-time)')
+        self.ax_thrust.set_xlabel('Time (s)')
+        self.ax_thrust.set_ylabel('Thrust (N)')
+        
+        self.ax_torque.clear()
+        self.ax_torque.set_title('Torque (Real-time)')
+        self.ax_torque.set_xlabel('Time (s)')
+        self.ax_torque.set_ylabel('Torque (Nm)')
+        
+        if len(control_data) > 0 and hasattr(self, 'mpc_controller'):
+            # Calculate thrust and torque from control data
+            tau_f = self.mpc_controller.platform_params.tau_f
+            total_thrust_torque = thrustToForceTorqueAll_array(control_data, tau_f)
+            
+            # Plot thrust
+            self.ax_thrust.plot(time_data, total_thrust_torque[:, 2], label='Thrust', color='red', linewidth=2)
+            self.ax_thrust.legend()
+            self.ax_thrust.grid(True)
+            
+            # Plot torque
+            colors = ['red', 'green', 'blue']
+            for i in range(3):
+                self.ax_torque.plot(time_data, total_thrust_torque[:, i+3], 
+                                  label=f'Torque_{i}', color=colors[i], linewidth=2)
+            self.ax_torque.legend()
+            self.ax_torque.grid(True)
+    
+    def update_arm_plot_ros(self, time_data):
+        """Update arm plots with real-time data"""
+        if not self.arm_enabled:
+            return
+            
+        # Get joint data from buffers
+        joint_position = np.array(self.joint_position_buffer) if self.joint_position_buffer else None
+        joint_velocity = np.array(self.joint_velocity_buffer) if self.joint_velocity_buffer else None
+        joint_effort = np.array(self.joint_effort_buffer) if self.joint_effort_buffer else None
+        joint_control = np.array(self.joint_control_buffer) if self.joint_control_buffer else None
+        
+        # Calculate joint time history
+        if joint_position is not None:
+            freq_state_update = 62  # 62Hz
+            joint_time_history = np.arange(-len(joint_position), 0) / freq_state_update
+            
+            self.update_joint_history_plot_ros(self.ax_joint_position, 'Joint Position (Real-time)', 
+                                             joint_time_history, joint_position, 1.5, 'Position (rad)')
+            self.update_joint_history_plot_ros(self.ax_joint_velocity, 'Joint Velocity (Real-time)', 
+                                             joint_time_history, joint_velocity, 4.0, 'Velocity (rad/s)')
+            self.update_joint_history_plot_ros(self.ax_joint_effort, 'Joint Effort (Real-time)', 
+                                             joint_time_history, joint_effort, 2.0, 'Effort (Nm)')
+            self.update_joint_history_plot_ros(self.ax_joint_control, 'Joint Control (Real-time)', 
+                                             joint_time_history, joint_control, 0.3, 'Control (Nm)')
+    
+    def update_joint_history_plot_ros(self, ax, title, time_data, data, y_lim, y_label):
+        """Update joint history plot with real-time data"""
+        ax.clear()
+        ax.set_title(title)
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel(y_label)
+        
+        if data is not None and len(data) > 0:
+            ax.plot(time_data, data[:, 0], label='Joint_1', color='black', linewidth=2)
+            ax.plot(time_data, data[:, 1], label='Joint_2', color='yellow', linewidth=2)
+        
+        ax.legend()
+        ax.set_ylim(-y_lim, y_lim)
+        ax.grid(True)
+
     #endregion
     
     def set_to_reference_button_clicked(self):
@@ -1283,14 +1793,16 @@ class MpcDebugInterface(QWidget):
 if __name__ == '__main__':
     import sys
     
+    # Check command line arguments
+    using_ros = '--ros' in sys.argv
+    
     # Settings
-    using_ros = False
     mpc_name = 'rail'
-    mpc_yaml_path = '/home/helei/catkin_eagle_mpc/src/eagle_mpc_debugger/config/yaml'
+    mpc_yaml_path = 'config/yaml'
     
     robot_name = 's500_uam'
-    trajectory_name = 'catch_vicon'
-    dt_traj_opt = 10  # ms
+    trajectory_name = 'catch_vicon_offset'
+    dt_traj_opt = 50  # ms
     useSquash = True
     
     if using_ros:
