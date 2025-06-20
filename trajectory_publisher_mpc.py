@@ -11,6 +11,8 @@ import time
 import math
 import threading
 import queue
+import platform
+import os
 from nav_msgs.msg import Odometry, Path
 from geometry_msgs.msg import PoseStamped
 from geometry_msgs.msg import TwistStamped
@@ -50,6 +52,31 @@ class TrajectoryPublisher:
         # Initialize ROS node
         rospy.init_node('trajectory_publisher_mpc', anonymous=False, log_level=rospy.INFO)
         
+        # First detect the environment
+        self.env_info = self.detect_environment()
+        
+        # Set the parameters according to the environment
+        if self.env_info['is_jetson']:
+            # running on Jetson
+            self.control_rate = rospy.get_param('~control_rate', 50.0)
+            self.odom_source = rospy.get_param('~odom_source', 'mavros')
+            self.use_simulation = rospy.get_param('~use_simulation', False)
+            
+            self.publish_planned_trajectory_enabled = rospy.get_param('~publish_planned_trajectory', False)
+            self.publish_wholebody_state_enabled = rospy.get_param('~publish_wholebody_state', False)
+            self.publish_reference_trajectory_enabled = rospy.get_param('~publish_reference_trajectory', False)
+            rospy.logwarn("Jetson detected - forcing use_simulation to False")
+        else:
+            # running on PC
+            self.control_rate = rospy.get_param('~control_rate', 50.0)
+            self.odom_source = rospy.get_param('~odom_source', 'gazebo')
+            self.use_simulation = rospy.get_param('~use_simulation', True)
+            
+            self.publish_planned_trajectory_enabled = rospy.get_param('~publish_planned_trajectory', True)
+            self.publish_wholebody_state_enabled = rospy.get_param('~publish_wholebody_state', True)
+            self.publish_reference_trajectory_enabled = rospy.get_param('~publish_reference_trajectory', True)
+            rospy.logwarn("PC detected - forcing use_simulation to True")
+        
         # Dynamic reconfigure server
         self.enable_l1_control = False
         self.using_controller_v1 = False
@@ -57,14 +84,12 @@ class TrajectoryPublisher:
 
         # Get parameters
         self.robot_name = rospy.get_param('~robot_name', 's500_uam')     # s500, s500_uam, hexacopter370_flying_arm_3
-        self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon_real')   # displacement, catch_vicon
+        self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon_offset')   # displacement, catch_vicon
         self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 50)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
-        self.use_simulation = rospy.get_param('~use_simulation', False)   #  if true, publish arm control command for ros_control
         self.yaml_path = rospy.get_param('~yaml_path', 'config/yaml')
-        self.control_rate = rospy.get_param('~control_rate', 50.0)  # Hz
         
-        self.odom_source = rospy.get_param('~odom_source', 'mavros')  # mavros, gazebo  
+        self.odom_source = rospy.get_param('~odom_source', 'gazebo')  # mavros, gazebo  
         
         self.control_mode = rospy.get_param('~control_mode', 'MPC')  # MPC, Geometric, PX4, MPC_L1
         self.arm_enabled = rospy.get_param('~arm_enabled', True)
@@ -136,6 +161,18 @@ class TrajectoryPublisher:
         
         
         self.partialTrajectoryPub = WholeBodyTrajectoryPublisher('whole_body_partial_trajectory_current',
+                                                                     self.mpc_controller.robot_model,
+                                                                     self.mpc_controller.platform_params,
+                                                                     frame_id="world")
+        
+        # Add publisher for complete planned trajectory
+        self.plannedTrajectoryPub = WholeBodyTrajectoryPublisher('whole_body_planned_trajectory',
+                                                                     self.mpc_controller.robot_model,
+                                                                     self.mpc_controller.platform_params,
+                                                                     frame_id="world")
+        
+        # Add publisher for reference trajectory
+        self.referenceTrajectoryPub = WholeBodyTrajectoryPublisher('whole_body_reference_trajectory',
                                                                      self.mpc_controller.robot_model,
                                                                      self.mpc_controller.platform_params,
                                                                      frame_id="world")
@@ -285,12 +322,17 @@ class TrajectoryPublisher:
         rospy.loginfo(f"Arm joint limits: {self.arm_joint_limits}")
         rospy.loginfo(f"Arm joint velocity limits: {self.arm_joint_velocity_limits}")
         
+        rospy.loginfo("Trajectory publishing parameters:")
+        rospy.loginfo(f"Publish planned trajectory: {self.publish_planned_trajectory_enabled}")
+        rospy.loginfo(f"Publish wholebody state: {self.publish_wholebody_state_enabled}")
+        rospy.loginfo(f"Publish reference trajectory: {self.publish_reference_trajectory_enabled}")
+        
         rospy.loginfo("Trajectory publisher initialized")
         
     def init_mpc_controller(self):
         # create mpc controller to get tau_f
         mpc_name = "rail"
-        mpc_yaml = '{}/mpc/{}_mpc_real.yaml'.format(self.yaml_path, self.robot_name)
+        mpc_yaml = '{}/mpc/{}_mpc.yaml'.format(self.yaml_path, self.robot_name)
         
         # Initialize trajectory tracking MPC
         self.trajectory_mpc = create_mpc_controller(
@@ -501,10 +543,20 @@ class TrajectoryPublisher:
             
             if self.arm_enabled:
                 self.publish_arm_control_command()
-                # self.publish_gripper_control_command()
                 
             # 4. Publish debug info
             self.publish_mpc_l1_debug_data()
+            
+            # 5. Publish planned trajectory
+            if self.publish_planned_trajectory_enabled:
+                self.publish_planned_trajectory()
+            
+            # 6. Publish reference trajectory (only once at the beginning)
+            if (self.publish_reference_trajectory_enabled and 
+                self.trajectory_started and 
+                not hasattr(self, 'reference_trajectory_published')):
+                self.publish_reference_trajectory()
+                self.reference_trajectory_published = True
             
             t3 = time.time()
             
@@ -513,8 +565,9 @@ class TrajectoryPublisher:
             rospy.logwarn("Invalid control mode")
             
         # Publish whole body state
-        # self.publish_wholebody_state_target()
-        # self.publish_wholebody_state_current()
+        if self.publish_wholebody_state_enabled:
+            self.publish_wholebody_state_target()
+            self.publish_wholebody_state_current()
 
     def get_mpc_command(self):
         """Get MPC control command."""
@@ -808,12 +861,18 @@ class TrajectoryPublisher:
         if self.trajectory_started and not self.traj_finished:
             if current_time >= self.grasp_start_time and not self.is_grasping:
                 # Close gripper at grasp time
+                if self.use_simulation:
+                    self.joint3_pub.publish(Float64(self.gripper_close_position))
+                    self.joint4_pub.publish(Float64(self.gripper_close_position))
                 self.gripper_position_cmd = self.gripper_close_position_real
                 gripper_velocity = self.gripper_close_velocity_real
                 self.is_grasping = True
                 rospy.loginfo("Gripper closed at grasp time")
             elif current_time < self.grasp_start_time:
                 # Keep gripper open before grasp time
+                if self.use_simulation:
+                    self.joint3_pub.publish(Float64(self.gripper_open_position))
+                    self.joint4_pub.publish(Float64(self.gripper_open_position))
                 self.gripper_position_cmd = self.gripper_open_position_real
                 gripper_velocity = 0
                 self.is_grasping = False
@@ -860,43 +919,6 @@ class TrajectoryPublisher:
             # Control arm joints
             self.joint1_pub.publish(Float64(joint_msg.position[0]))
             self.joint2_pub.publish(Float64(joint_msg.position[1]))
-
-    def publish_gripper_control_command(self):
-        '''
-        description: publish gripper control command
-        return {*}
-        '''
-        current_time = rospy.Time.now()
-        
-        joint_msg = JointState()
-        joint_msg.header.stamp = rospy.Time.now()
-        joint_msg.name = ['joint_3']
-        
-        if self.trajectory_started and not self.traj_finished:  # only publish gripper control command when trajectory is running
-            if current_time >= self.grasp_start_time and not self.is_grasping:
-                # Close gripper at grasp time
-                if self.use_simulation:
-                    self.joint3_pub.publish(Float64(self.gripper_close_position))
-                    self.joint4_pub.publish(Float64(self.gripper_close_position))
-                else:
-                    joint_msg.position = [self.gripper_close_position_real]
-                    joint_msg.velocity = [0.0]
-                    joint_msg.effort = [0.0]
-                    self.arm_control_pub.publish(joint_msg)
-                self.is_grasping = True
-                rospy.loginfo("Gripper closed at grasp time")
-            elif current_time < self.grasp_start_time:
-                # Keep gripper open before grasp time
-                if self.use_simulation:
-                    self.joint3_pub.publish(Float64(self.gripper_open_position))
-                    self.joint4_pub.publish(Float64(self.gripper_open_position))
-                else:
-                    joint_msg.position = [self.gripper_open_position_real]
-                    joint_msg.velocity = [0.0]
-                    joint_msg.effort = [0.0]
-                    self.arm_control_pub.publish(joint_msg)
-                self.is_grasping = False
-                rospy.loginfo_throttle(1.0, "Gripper open, waiting for grasp time")
               
     def publish_mpc_control_command(self, u_mpc, u_ad, u_tracking):
         '''
@@ -1497,6 +1519,76 @@ class TrajectoryPublisher:
         except Exception as e:
             rospy.logerr(f"Error in state limiting: {str(e)}")
             return state  # return original state if error occurs
+
+    def publish_planned_trajectory(self):
+        """Publish the complete planned trajectory from MPC solver"""
+        if self.mpc_controller and hasattr(self.mpc_controller.solver, 'xs'):
+            # Get planned states from MPC solver
+            planned_states = self.mpc_controller.solver.xs
+            nq = self.mpc_controller.robot_model.nq
+            
+            # Prepare trajectory data
+            qs, vs, ts = [], [], []
+            dt = self.dt_traj_opt / 1000.0  # Convert to seconds
+            
+            for i, x in enumerate(planned_states):
+                qs.append(x[:nq])  # Position states
+                vs.append(x[nq:])  # Velocity states
+                ts.append(i * dt)  # Time stamps
+            
+            # Publish the complete planned trajectory
+            if len(qs) > 0:
+                self.plannedTrajectoryPub.publish(ts, qs, vs)
+                rospy.logdebug(f"Published planned trajectory with {len(qs)} points")
+        else:
+            rospy.logwarn("No planned trajectory available from MPC solver")
+
+    def publish_reference_trajectory(self):
+        """Publish the reference trajectory (original optimized trajectory)"""
+        if hasattr(self, 'traj_state_ref') and len(self.traj_state_ref) > 0:
+            nq = self.mpc_controller.robot_model.nq
+            
+            # Prepare trajectory data
+            qs, vs, ts = [], [], []
+            dt = self.dt_traj_opt / 1000.0  # Convert to seconds
+            
+            for i, x in enumerate(self.traj_state_ref):
+                qs.append(x[:nq])  # Position states
+                vs.append(x[nq:])  # Velocity states
+                ts.append(i * dt)  # Time stamps
+            
+            # Publish the reference trajectory
+            if len(qs) > 0:
+                self.referenceTrajectoryPub.publish(ts, qs, vs)
+                rospy.logdebug(f"Published reference trajectory with {len(qs)} points")
+        else:
+            rospy.logwarn("No reference trajectory available")
+
+    def detect_environment(self):
+        """Auto detect the running environment"""
+        
+        # 检测是否在Jetson上运行
+        is_jetson = False
+        if os.path.exists('/etc/nv_tegra_release'):
+            is_jetson = True
+        elif 'aarch64' in platform.machine() and 'tegra' in platform.platform().lower():
+            is_jetson = True
+        
+        # 关键逻辑：检测到Jetson就自动设置为非仿真
+        if is_jetson:
+            is_simulation = False
+            rospy.loginfo("Detected Jetson environment - automatically set to real flight mode")
+        else:
+            # 在PC上，使用参数设置或默认为仿真
+            is_simulation = rospy.get_param('~use_simulation', True)
+            rospy.loginfo("Detected PC environment - using simulation mode")
+        
+        return {
+            'is_jetson': is_jetson,
+            'is_simulation': is_simulation,
+            'architecture': platform.machine(),
+            'platform': platform.platform()
+        }
 
 if __name__ == '__main__':
     try:

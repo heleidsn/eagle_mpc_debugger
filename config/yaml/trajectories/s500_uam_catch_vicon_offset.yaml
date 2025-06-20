@@ -4,7 +4,7 @@ trajectory:
     urdf: "models/urdf/s500_uam_simple.urdf"
     follow: "config/yaml/multicopter/s500.yaml"
 
-  initial_state: [-1.5, 0, 1.5, 0, 0, 0, 1, -1.2, -0.6, 0, 0, 0, 0, 0, 0, 0, 0]
+  initial_state: [-1.5, -0.5, 1.5, 0, 0, 0, 1, -1.2, -0.6, 0, 0, 0, 0, 0, 0, 0, 0]
 
   stages:
     - name: "approach"
@@ -14,7 +14,7 @@ trajectory:
         - name: "state_reg"
           type: "ResidualModelState"
           weight: 1
-          reference: [0, 0, 1.1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+          reference: [0, -0.5, 1.1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
           activation: "ActivationModelWeightedQuad"
           weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 
@@ -39,7 +39,7 @@ trajectory:
         - name: "state_quadrotor"
           type: "ResidualModelState"
           weight: 1
-          reference: [0, 0, 1.1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]  # note the reference attitude using quaternion
+          reference: [0, -0.5, 1.1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]  # note the reference attitude using quaternion
           activation: "ActivationModelWeightedQuad"
           weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 
@@ -57,7 +57,7 @@ trajectory:
         - name: "state_reg"
           type: "ResidualModelState"
           weight: 1e-2
-          reference: [0, 0, 1.2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+          reference: [0, -0.5, 1.2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
           activation: "ActivationModelWeightedQuad"
           weights: [1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0]
 
@@ -80,7 +80,7 @@ trajectory:
           type: "ResidualModelFrameTranslation"
           weight: 1000
           link_name: "gripper_link"
-          position: [0.0, 0, 0.8]
+          position: [0.0, -0.5, 0.8]
 
         - name: "motion_ee"
           type: "ResidualModelFrameVelocity"
@@ -98,7 +98,7 @@ trajectory:
         - name: "state_reg"
           type: "ResidualModelState"
           weight: 1
-          reference: [0, 0, 1.5, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
+          reference: [0, -0.5, 1.5, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
           activation: "ActivationModelWeightedQuad"
           weights: [1, 1, 1, 1, 1, 1, 10, 10, 1, 1, 1, 1, 1, 1, 10, 10]
 
@@ -132,7 +132,7 @@ trajectory:
         - name: "state_all"
           type: "ResidualModelState"
           weight: 1000
-          reference: [1.5, 0, 1.5, 0, 0, 0, 1, -1.2, -0.6, 0, 0, 0, 0, 0, 0, 0, 0]
+          reference: [1.5, -0.5, 1.5, 0, 0, 0, 1, -1.2, -0.6, 0, 0, 0, 0, 0, 0, 0, 0]
           activation: "ActivationModelWeightedQuad"
           weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 
@@ -164,5 +164,4 @@ trajectory:
           activation: "ActivationModelWeightedQuad"
           weights: [1, 1, 1, 1, 100, 100]
 
-      
       

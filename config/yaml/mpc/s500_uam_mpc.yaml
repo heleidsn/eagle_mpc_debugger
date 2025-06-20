@@ -22,8 +22,8 @@ mpc_controller:
   carrot_state_limits_u_bound: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
   carrot_state_limits_l_bound: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
-  rail_weight: 10
-  rail_activation_weights: [100, 100, 100, 1, 1, 1, 10, 10, 1, 1, 1, 1, 1, 1, 10, 10]   # need to add some weights for arm joints
+  rail_weight: 50
+  rail_activation_weights: [20, 20, 50, 1, 1, 1, 10, 10, 1, 1, 1, 1, 1, 1, 10, 10]   # need to add some weights for arm joints
   rail_control_weight: 5
 
   control_reference: [5, 5, 5, 5, 0, 0]
@@ -31,8 +31,8 @@ mpc_controller:
   # State limits parameters for rail-mpc
   rail_state_limits_weight: 1000
   rail_state_limits_act_weights: [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-  rail_state_limits_u_bound: [0, 0, 0, 0, 0, 0, 1.9, 1.9, 2, 2, 2, 1, 1, 1, 3, 3]
-  rail_state_limits_l_bound: [0, 0, 0, 0, 0, 0, -1.9, -1.9, -2, -2, -2, -1, -1, -1, -3, -3]
+  rail_state_limits_u_bound: [0, 0, 0, 0, 0, 0, 1.9, 1.9, 0.5, 0.5, 0.5, 1, 1, 1, 3, 3]
+  rail_state_limits_l_bound: [0, 0, 0, 0, 0, 0, -1.9, -1.9, -0.5, -0.5, -0.5, -1, -1, -1, -3, -3]
 
   weighted_alpha: 3.0
   weighted_beta: 0.01
