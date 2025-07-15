@@ -66,3 +66,19 @@ Issues and Pull Requests are welcome.
 ## License
 
 MIT License
+
+## Arm Control
+
+The default max arm state publish rate is about 62Hz, which cannot support high frequency tasks especially torque control. To increase the state publish rate, you have to change the usb `latency_time` from `16ms` (default) to `1ms`.
+
+```bash
+ # cat /sys/bus/usb-serial/devices/ttyUSB0/latency_timer
+ 16
+ # echo 1 > /sys/bus/usb-serial/devices/ttyUSB0/latency_timer
+ # cat /sys/bus/usb-serial/devices/ttyUSB0/latency_timer
+ 1
+```
+
+Now you can increase the frequency to max `1000Hz` with baud rate `3000000`.
+
+ref: https://emanual.robotis.com/docs/en/parts/interface/u2d2/#linux

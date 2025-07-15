@@ -250,12 +250,12 @@
       <mass
         value="0.056776" />
       <inertia
-        ixx="1.5689E-05"
+        ixx="1.5689E-03"
         ixy="-1.0155E-16"
         ixz="-5.2428E-15"
-        iyy="1.3617E-05"
+        iyy="1.3617E-03"
         iyz="-1.6017E-09"
-        izz="8.7857E-06" />
+        izz="8.7857E-03" />
     </inertial>
     <visual>
       <origin
@@ -301,12 +301,12 @@
       <mass
         value="0.065663" />
       <inertia
-        ixx="1.3006E-05"
+        ixx="1.3006E-04"
         ixy="2.5553E-07"
         ixz="4.4082E-09"
-        iyy="1.4985E-05"
+        iyy="1.4985E-04"
         iyz="-6.0777E-07"
-        izz="1.6054E-05" />
+        izz="1.6054E-04" />
     </inertial>
     <visual>
       <origin

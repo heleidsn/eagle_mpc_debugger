@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2024-09-07 17:26:46
-LastEditTime: 2025-06-13 16:31:09
+LastEditTime: 2025-07-15 13:07:44
 Description: L1 adaptive controller with 9 state variables
 Version 3: Used for full actuation
 0916： fixed the bug in adaptive_law_new, change tau_body=u_b + u_ad_all + self.sig_hat_b
@@ -31,7 +31,6 @@ class L1AdaptiveControllerAll:
         self.dt = dt
         
         self.as_matrix_coef   = As_coef  # Hurwitz matrix
-        self.filter_time_coef = filter_time_constant  # 0.005s
         
         self.using_vel_disturbance = False
         self.using_full_state = False         # choose whether to use full state or not
@@ -56,7 +55,7 @@ class L1AdaptiveControllerAll:
         
         # tunning parameters
         self.a_s = np.ones(self.state_dim_euler) * self.as_matrix_coef #! Hurwitz matrix
-        self.filter_time_const = np.ones(self.filter_num) * self.filter_time_coef
+        self.filter_time_const = filter_time_constant
         
         # Pre-compute matrices for optimization
         self.A_s = np.diag(self.a_s)  # diagonal Hurwitz matrix
@@ -118,210 +117,6 @@ class L1AdaptiveControllerAll:
         self.tracking_error = self.z_ref - self.z_real
         self.tracking_error_angle =  self.tracking_error[:self.control_dim]  # 角度误差
         self.tracking_error_velocity = self.tracking_error[self.control_dim:]  # 速度误差
-    
-    def update_z_hat_all(self):
-        '''
-        description: update z_hat using pinocchio model
-                     different from L1AdaptiveControllerNew, the z_hat is calculated using pinocchio model, similar to the dynamic model
-        return {*}
-        ''' 
-        #! 方法1：使用积分模型进行预测 无法加入 self.A_s @ self.z_tilde
-          
-        #! 重点 使用四元数进行积分
-        # 假设你已经有了当前状态q和速度v，以及控制输入u
-        q = self.current_state[:self.robot_model.nq]    # state
-        v = self.current_state[self.robot_model.nq:]    # velocity
-        u = self.u_mpc + self.u_ad + self.sig_hat[self.control_dim:]  # 假设只用u_b进行控制
-        dt = self.dt
-
-        # 创建模型和数据
-        model = self.robot_model
-        data = self.robot_model_data
-        
-        if self.flag_using_z_ref:
-            A_mul_z_tilde = self.A_s @ self.z_tilde_ref
-        else:
-            A_mul_z_tilde = self.A_s @ self.z_tilde
-
-        # 计算加速度
-        a = pin.aba(model, data, q, v, u) + A_mul_z_tilde[self.control_dim:]  # 只用到后面的维度
-
-        # 提取当前的线速度和角速度
-        # linear_velocity_body = v[:3]  # 机体坐标系下的线速度
-        # angular_velocity = v[3:]  # 角速度
-        
-        if self.using_z_real:
-            linear_velocity_body_hat = self.z_real[self.control_dim:self.control_dim+3].copy()  # 机体坐标系下的线速度
-            angular_velocity_hat = self.z_real[self.control_dim+3:].copy()  # 角速度
-        else:
-            linear_velocity_body_hat = self.z_hat[self.control_dim:self.control_dim+3].copy()  # 机体坐标系下的线速度
-            angular_velocity_hat = self.z_hat[self.control_dim+3:].copy()  # 角速度
-
-        # 更新线速度和角速度
-        linear_velocity_next_body = linear_velocity_body_hat + a[:3] * dt  # 更新机体坐标系下的线速度
-        angular_velocity_next = angular_velocity_hat + a[3:] * dt  # 更新角速度 (包含arm)
-        
-        # 给速度环也加上干扰
-        linear_velocity_next_body_dist = linear_velocity_next_body + A_mul_z_tilde[:3]
-        angular_velocity_next_dist = angular_velocity_next + A_mul_z_tilde[3:self.control_dim]  # include arm
-        
-        # 选择是否使用速度环的干扰补偿
-        if self.using_vel_disturbance:
-            linear_velocity_final = linear_velocity_next_body_dist
-            angular_velocity_final = angular_velocity_next_dist
-        else:
-            linear_velocity_final = linear_velocity_next_body
-            angular_velocity_final = angular_velocity_next
-        
-        # 更新位置和姿态
-        quat = q[3:7]  # 当前四元数
-        rotation = R.from_quat(quat)  # 创建旋转对象
-        omega = angular_velocity_final[:3]  # 更新后的角速度
-        delta_rotation = R.from_rotvec(omega * dt)  # 计算旋转增量
-        new_rotation = rotation * delta_rotation  # 更新旋转
-        new_quat = new_rotation.as_quat()  # 转换回四元数
-
-        # 将机体坐标系下的线速度转换到世界坐标系
-        linear_velocity_next_world = rotation.apply(linear_velocity_final)  # 转换到世界坐标系
-        
-        # 更新位置
-        position = q[:3]  # 当前的位置
-        position_next = position + linear_velocity_next_world * dt  # 更新位置
-        
-        if self.use_arm:
-            # 更新arm位置
-            arm_position = q[7:10]
-            arm_position_next = arm_position + angular_velocity_final[3:] * dt
-
-            # 组合新的状态
-            q_next = np.hstack((position_next, new_quat, arm_position_next))  # 新的状态
-            v_next = np.hstack((linear_velocity_final, angular_velocity_final))  # 新的速度，注意都是在机体坐标系下定义
-        else:
-            # 组合新的状态
-            q_next = np.hstack((position_next, new_quat))
-            v_next = np.hstack((linear_velocity_final, angular_velocity_final))
-
-        # 现在q_next和v_next是下一步的状态和速度
-        self.z_hat = self.get_state_angle_single_rad(np.hstack((q_next, v_next)))
-
-    def rk4_integration(self, q, v, u, dt, A_mul_z_tilde):
-        '''
-        description: 使用RK4方法更新状态
-        return: 更新后的q和v
-        '''
-        def state_derivative(q, v, u):
-            # 计算加速度
-            a = pin.aba(self.robot_model, self.robot_model_data, q, v, u) + A_mul_z_tilde[9:0]
-            
-            linear_velocity_body_hat = self.z_hat[9:12].copy()  # 机体坐标系下的线速度
-            angular_velocity_hat = self.z_hat[12:].copy()  # 角速度
-            
-            # 更新线速度和角速度
-            linear_velocity_next_body = linear_velocity_body_hat + a[:3] * dt  # 更新机体坐标系下的线速度
-            angular_velocity_next = angular_velocity_hat + a[3:] * dt  # 更新角速度 (包含arm)
-            
-            # 给速度环也加上干扰
-            linear_velocity_next_body_dist = linear_velocity_next_body + A_mul_z_tilde[:3]
-            angular_velocity_next_dist = angular_velocity_next + A_mul_z_tilde[3:9]
-            
-            v = np.hstack([linear_velocity_body_hat, angular_velocity_hat])
-            
-            return v, a  # 返回速度和加速度
-        
-        def get_next_state(q, linear_velocity_next_body_dist, angular_velocity_next_dist):
-            # 更新位置和姿态
-            # 使用四元数进行姿态更新
-            quat = q[3:7]  # 当前四元数
-            rotation = R.from_quat(quat)  # 创建旋转对象
-            omega = angular_velocity_next_dist[:3]  # 更新后的角速度
-            delta_rotation = R.from_rotvec(omega * dt)  # 计算旋转增量
-            new_rotation = rotation * delta_rotation  # 更新旋转
-            new_quat = new_rotation.as_quat()  # 转换回四元数
-
-            # 将机体坐标系下的线速度转换到世界坐标系
-            linear_velocity_next_world = rotation.apply(linear_velocity_next_body_dist)  # 转换到世界坐标系
-            
-            # 更新arm位置
-            arm_position = q[7:10]
-            arm_position_next = arm_position + angular_velocity_next_dist[3:] * dt
-
-            # 更新位置
-            position = q[:3]  # 当前的位置
-            position_next = position + linear_velocity_next_world * dt  # 更新位置
-
-            # 组合新的状态
-            q_next = np.hstack((position_next, new_quat, arm_position_next))  # 新的状态
-            v_next = np.hstack((linear_velocity_next_body_dist, angular_velocity_next_dist))  # 新的速度，注意都是在机体坐标系下定义
-            
-            return q_next, v_next
-
-        # 计算RK4步骤
-        k1_v, k1_a = state_derivative(q, v, u)
-        k1_q = get_next_state(q, k1_v, k1_a, dt)   #  这里得到的
-
-        k2_v, k2_a = state_derivative(q + 0.5 * dt * k1_q, v + 0.5 * dt * k1_a, u)
-        # k2_q = v + 0.5 * dt * k1_a
-        k2_q = get_next_state(q, k2_v, k2_a, dt)
-
-        k3_v, k3_a = state_derivative(q + 0.5 * dt * k2_q, v + 0.5 * dt * k2_a, u)
-        k3_q = get_next_state(q, k3_v, k3_a, dt)
-
-        k4_v, k4_a = state_derivative(q + dt * k3_q, v + dt * k3_a, u)
-        # k4_q = v + dt * k3_a
-        
-        # 1. 利用中间状态得到一个新的导数，包含速度和加速度两个回路
-        a_new = (k1_a + 2*k2_a + 2*k3_a + k4_a)/6
-        v_new = (k1_v + 2*k2_v + 2*k3_v + k4_v)/6
-        
-        # 2. 利用新的导数和dt得到位置和速度
-        q_next, v_next = get_next_state(q, v_new, a_new, dt)
-
-        return q_next, v_next 
-    
-    def update_z_hat(self):
-        '''
-        description: 
-        return {*}
-        ''' 
-        if self.using_full_state:
-            self.update_z_hat_all()
-        else:
-            self.update_z_hat_vel()   # update z_hat only for velocity estimation
-            
-    def update_sig_hat(self):
-        '''
-        description: 更新对于扰动的估计
-        return {*}
-        '''
-        if self.using_full_state:
-            self.update_sig_hat_all_v2()
-        else:
-            self.update_sig_hat_vel()
-    
-    def update_sig_hat_vel(self):
-        '''
-        description: 更新对于扰动的估计，只使用速度进行估计
-        return {*}
-        '''
-        # 1. get inertia matrix        
-        q = self.current_state[:self.robot_model.nq]
-        model = self.robot_model
-        data = self.robot_model_data
-        M = pin.crba(model, data, q)  # get inertia matrix
-        
-        # 2. get rotation matrix to transform the disturbance to body frame
-        
-        # 3. calculate sigma_hat (body frame)
-        B_bar_inv = M.copy()
-        PHI = np.matmul(LA.inv(self.A_s), (self.expm_A_s_dt - np.identity(self.state_dim_euler)))
-        PHI_inv = LA.inv(PHI)
-        mu  = np.matmul(self.expm_A_s_dt, self.z_tilde)
-        PHI_inv_mul_mu = np.matmul(PHI_inv, mu)
-        # sigma_hat  = -np.matmul(B_bar_inv, PHI_inv_mul_mu)  # 奇怪，为什么z_hat - z 要乘以B_bar，最后两列才是扰动呀
-        
-        sigma_hat = -0.0 * self.z_tilde
-        
-        self.sig_hat = sigma_hat.copy()
             
     def update_z_hat_vel(self):
         '''
@@ -332,6 +127,14 @@ class L1AdaptiveControllerAll:
         # tau_body = self.u_mpc + self.u_ad + self.sig_hat[self.control_dim:] + self.u_tracking   # 假设只用u_b进行控制
         
         tau_body = self.u_mpc + self.u_ad + self.sig_hat[self.control_dim:]
+        # # tau_body = self.u_mpc
+        # print('--------------------------------')
+        # print('u_mpc   : ', self.u_mpc)
+        # print('u_ad    : ', self.u_ad)
+        # print('sig_hat : ', self.sig_hat[self.control_dim:])
+        # print('tau_body: ', tau_body)
+        # print('dt      : ', self.dt)
+        # print('--------------------------------')
         
         z_hat_prev = self.z_hat.copy()
         
@@ -347,75 +150,22 @@ class L1AdaptiveControllerAll:
         #     z_hat_dot_vel = pin.aba(model, data, q, v, u) + (self.A_s @ self.z_tilde)[self.control_dim:]
         z_hat_dot_without_disturb = pin.aba(model, data, q, v, tau_body)   # get a using the current state
         z_hat_dot_disturb = self.A_s[self.control_dim:, self.control_dim:] @ self.z_tilde[self.control_dim:]  # get a using the current state
-        z_hat_dot_vel = z_hat_dot_without_disturb + z_hat_dot_disturb
+        z_hat_dot_vel = z_hat_dot_without_disturb.copy() + z_hat_dot_disturb.copy()
         
-        # update z_hat
-        # z_hat_new = z_hat_prev.copy()
-        # z_hat_new[self.control_dim:] = z_hat_prev[self.control_dim:] + z_hat_dot_vel * dt  # only update the velocity part
-        # z_hat_new[self.control_dim:] = self.z_real[self.control_dim:] + z_hat_dot_vel * dt  # only update the velocity part
+        # print('--------------------------------')
+        # print('z_hat_dot_wo_disturb: ', z_hat_dot_without_disturb[-2:])
+        # print('z_hat_dot_disturb   : ', z_hat_dot_disturb[-2:])
+        # print('z_hat_dot_vel       : ', z_hat_dot_vel[-2:])
         
         # self.z_hat = z_hat_new.copy()    # in body frame
         if self.using_z_real:
             self.z_hat[self.control_dim:] = self.z_real[self.control_dim:] + self.dt * z_hat_dot_vel.copy()
         else:
-            self.z_hat[self.control_dim:] = self.z_hat[self.control_dim:] + self.dt * z_hat_dot_vel.copy()
-    
-    def update_sig_hat_all_v2(self):
-        '''
-        description: 更新对于扰动的估计，由于对矩阵进行了增广，
-        return {*}
-        '''
-        # 1. get inertia matrix        
-        q = self.current_state[:self.robot_model.nq]
-        t0 = time.time()
-        M = pin.crba(self.robot_model, self.robot_model_data, q)  # get inertia matrix according to the current state
-        t1 = time.time()
-
-        # 3. calculate sigma_hat (body frame)
-        #! 对B_bar_inv进行增广
-        M_aug = np.zeros((self.state_dim_euler, self.state_dim_euler))
-        M_aug[:self.control_dim, :self.control_dim] = np.diag(np.ones(self.control_dim))
-        M_aug[-self.control_dim:, -self.control_dim:] = M.copy()
-
-        B_bar_inv = M_aug.copy()
-        
-        #! 将以下计算改为18维
-        t2 = time.time()
-        PHI = np.matmul(LA.inv(self.A_s), (self.expm_A_s_dt - np.identity(self.state_dim_euler)))
-        # PHI = np.matmul(LA.inv(self.A_s), self.expm_A_s_dt)
-        # PHI = self.A_s
-        
-        t3 = time.time()
-        PHI_inv = LA.inv(PHI)
-        
-        t4 = time.time()
-        
-        mu  = np.matmul(self.expm_A_s_dt, self.z_tilde)
-        PHI_inv_mul_mu = np.matmul(PHI_inv, mu)
-        
-        t5 = time.time()
-        weight = np.matmul(PHI_inv, self.expm_A_s_dt)
-        weight = np.matmul(B_bar_inv, weight)
-        weight = np.diag(weight)  # Extract diagonal elements
-
-        # sigma_hat_disturb  = -np.matmul(B_bar_inv, PHI_inv_mul_mu)  # sigma_hat is related to z_tilde
-
-        # self.sig_hat = sigma_hat_disturb.copy()
-        
-        
-        # weight = np.array([0, 0, 0, 0, 0, 0, 0, 0, 100, 100, 50, 1, 1, 1, 0, 0])
-        self.sig_hat = -1 * weight * self.z_tilde.copy()  # 这里的sigma_hat是一个增广矩阵，包含了速度和位置的扰动
-        t6 = time.time()
-        
-        # self.sig_hat = sigma_hat_disturb.copy()
-        
-        # calculation time
-        # rospy.loginfo(f"crba time: {(t1-t0)*1000:.3f} ms")
-        # rospy.loginfo(f"crba time: {(t2-t1)*1000:.3f} ms")
-        # rospy.loginfo(f"crba time: {(t3-t2)*1000:.3f} ms")
-        # rospy.loginfo(f"crba time: {(t4-t3)*1000:.3f} ms")
-        # rospy.loginfo(f"crba time: {(t5-t4)*1000:.3f} ms")
-        # rospy.loginfo(f"crba time: {(t6-t5)*1000:.3f} ms")
+            self.z_hat[self.control_dim:] = z_hat_prev[self.control_dim:].copy() + self.dt * z_hat_dot_vel.copy()
+            # print('z_hat: ', self.z_hat[self.control_dim:])
+            
+        # limit the z_hat
+        # self.z_hat = np.clip(self.z_hat, -2, 2)
         
     def update_sig_hat_all_v2_new(self):
         """Optimized version that uses pre-computed matrices and diagonal structure"""
@@ -437,15 +187,21 @@ class L1AdaptiveControllerAll:
         
         t4 = time.time()
         sigma_hat_disturb = -np.matmul(M_aug, PHI_inv_mul_mu)
+        
+        # print('mu: ', mu)
+        # print('PHI_inv_mul_mu: ', PHI_inv_mul_mu)
+        # print('sigma_hat_disturb: ', sigma_hat_disturb)
 
         # Use direct weight multiplication instead of matrix operations
-        weight = np.array([0, 0, 0, 0, 0, 0, 0, 0, 100, 100, 50, 1, 1, 1, 0, 0])
+        weight = np.array([0, 0, 0, 0, 0, 0, 0, 0, 100, 100, 50, 1, 1, 1, 0.2, 0.1])
         self.sig_hat = -1 * weight * self.z_tilde.copy()
-        # self.sig_hat = sigma_hat_disturb
+        # self.sig_hat = sigma_hat_disturb.copy()
+        
+        # add constrain to sig_hat
+        self.sig_hat = np.clip(self.sig_hat, -1, 1)
 
         t5 = time.time()
         # rospy.loginfo(f"timing (ms): crba: {(t1-t0)*1000:.3f}  aug: {(t2-t1)*1000:.3f}  phi_mul: {(t4-t2)*1000:.3f}  sigma_hat: {(t5-t4)*1000:.3f}")
-        self.sig_hat = sigma_hat_disturb.copy()
     
     def update_u_ad(self):
         '''
@@ -478,7 +234,7 @@ class L1AdaptiveControllerAll:
         flag_using_limit = True
         if flag_using_limit:
             if self.use_arm:
-                min_values = np.array([0, 0, -10, -1, -1, -1, 0, 0])
+                min_values = np.array([0, 0, -10, -1, -1, -1, -1.0, -1.0])
             else:
                 min_values = np.array([0, 0, -10, -1, -1, -1])
             max_values = -min_values

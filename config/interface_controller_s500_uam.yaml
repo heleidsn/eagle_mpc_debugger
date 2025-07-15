@@ -5,9 +5,9 @@
 
 # # --------------------------------------------------------------------------- # #
 # GLOBAL OPERATION PARAMETERS
-loop_rate: 200                    # desired rate for joint state updates. actual rate may be less depending on number
+loop_rate: 500                    # desired rate for joint state updates. actual rate may be less depending on number
                                   # of dynamixels connected and port baud rate.
-control_mode: position            # control mode, either 'position', 'velocity', or 'effort'
+control_mode: velocity            # control mode, either 'position', 'velocity', or 'effort'
 disable_torque_on_shutdown: true  # with this enabled the motors will switch off when the controller closes
 ignore_input_velocity: false      # ignore input velocity commands in position mode (no profile velocity)
 diagnostics_rate: 1               # rate to publish diagnostic information
@@ -25,7 +25,7 @@ ports:
   # PORT LIST
   - name: Port_1               # name for this port in config
     device: /dev/ttyUSB0       # serial device this port will communicate on
-    baudrate: 4500000          # baudrate in use
+    baudrate: 3000000          # baudrate in use
     use_legacy_protocol: false # wether to use new 2.0 protocol (false) or legacy 1.0 protocol (true)
     group_read_enabled: true   # specify whether to use group comms for reading
     group_write_enabled: true  # specify whether to use group comms for writing
@@ -57,14 +57,14 @@ ports:
         # This servo doesn't have any optional values defined, the global defaults will be used
         #
 
-      - id: 2       # for end effector 1
-        joint_name: joint_3
-        zero_pos: 2860
-        min_pos: 2860
-        max_pos: 3400
+      # - id: 2       # for end effector 1
+      #   joint_name: joint_3
+      #   zero_pos: 2860
+      #   min_pos: 2860
+      #   max_pos: 3400
 
-        max_vel: 1.2          # maximum joint speed (rad/s) (in position or velocity control)
-        torque_limit: 5.0      # maximum motor torque for all modes, given as a fraction of rated max (0-1)
+      #   max_vel: 1.2          # maximum joint speed (rad/s) (in position or velocity control)
+      #   torque_limit: 5.0      # maximum motor torque for all modes, given as a fraction of rated max (0-1)
 
       # - id: 3          # for end effector 2 (soft)
       #   joint_name: joint_4

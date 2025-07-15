@@ -23,7 +23,7 @@ mpc_controller:
   carrot_state_limits_l_bound: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
   rail_weight: 50
-  rail_activation_weights: [20, 20, 50, 1, 1, 1, 10, 10, 1, 1, 1, 1, 1, 1, 1, 1]   # need to add some weights for arm joints
+  rail_activation_weights: [20, 20, 50, 1, 1, 1, 10, 10, 1, 1, 1, 1, 1, 1, 10, 10]   # need to add some weights for arm joints
   rail_control_weight: 5
 
   control_reference: [5, 5, 5, 5, 0, 0]

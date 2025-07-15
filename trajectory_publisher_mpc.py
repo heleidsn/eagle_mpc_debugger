@@ -52,6 +52,9 @@ class TrajectoryPublisher:
         # Initialize ROS node
         rospy.init_node('trajectory_publisher_mpc', anonymous=False, log_level=rospy.INFO)
         
+        # set numpy print options
+        np.set_printoptions(precision=4, suppress=True)
+        
         # First detect the environment
         self.env_info = self.detect_environment()
         
@@ -70,11 +73,11 @@ class TrajectoryPublisher:
             # running on PC
             self.control_rate = rospy.get_param('~control_rate', 50.0)
             self.odom_source = rospy.get_param('~odom_source', 'gazebo')
-            self.use_simulation = rospy.get_param('~use_simulation', True)
+            self.use_simulation = rospy.get_param('~use_simulation', False)
             
-            self.publish_planned_trajectory_enabled = rospy.get_param('~publish_planned_trajectory', True)
-            self.publish_wholebody_state_enabled = rospy.get_param('~publish_wholebody_state', True)
-            self.publish_reference_trajectory_enabled = rospy.get_param('~publish_reference_trajectory', True)
+            self.publish_planned_trajectory_enabled = rospy.get_param('~publish_planned_trajectory', False)
+            self.publish_wholebody_state_enabled = rospy.get_param('~publish_wholebody_state', False)
+            self.publish_reference_trajectory_enabled = rospy.get_param('~publish_reference_trajectory', False)
             rospy.logwarn("PC detected - forcing use_simulation to True")
         
         # Dynamic reconfigure server
@@ -93,7 +96,7 @@ class TrajectoryPublisher:
         
         self.control_mode = rospy.get_param('~control_mode', 'MPC')  # MPC, Geometric, PX4, MPC_L1
         self.arm_enabled = rospy.get_param('~arm_enabled', True)
-        self.arm_control_mode = rospy.get_param('~arm_control_mode', 'position')  # position, position_velocity, position_velocity_effort, effort
+        self.arm_control_mode = rospy.get_param('~arm_control_mode', 'velocity')  # position, velocity, position_velocity, position_velocity_effort, effort
         
         self.max_thrust = rospy.get_param('~max_thrust', 8.0664 * 4)
         
@@ -105,7 +108,7 @@ class TrajectoryPublisher:
         # for L1 controller
         self.l1_version = rospy.get_param('~l1_version', 'v2')  # v1, v2, v3
         self.As_coef = rospy.get_param('~As_coef', -1)
-        self.filter_time_constant = rospy.get_param('~filter_time_constant', 0.4)
+        self.filter_time_constant = rospy.get_param('~filter_time_constant', [0.4, 0.4, 0.001])
         
         self.mpc_iter_num = 0
         self.mpc_start_cost = 0.0
@@ -225,6 +228,19 @@ class TrajectoryPublisher:
             angular=Vector3(x=0.0, y=0.0, z=0.0)
         )
         
+        # Add publishers for timing statistics
+        self.timing_stats_pub = rospy.Publisher('/mpc/timing_stats', Float32, queue_size=10)
+        self.mpc_timing_pub = rospy.Publisher('/mpc/mpc_timing', Float32, queue_size=10)
+        self.l1_timing_pub = rospy.Publisher('/mpc/l1_timing', Float32, queue_size=10)
+        self.mpc_avg_timing_pub = rospy.Publisher('/mpc/mpc_avg_timing', Float32, queue_size=10)
+        self.l1_avg_timing_pub = rospy.Publisher('/mpc/l1_avg_timing', Float32, queue_size=10)
+
+        # Add timing tracking variables
+        self.mpc_times = deque(maxlen=100)  # Store last 100 MPC solve times
+        self.l1_times = deque(maxlen=100)   # Store last 100 L1 computation times
+        self.mpc_avg_time = 0.0
+        self.l1_avg_time = 0.0
+        
         # --------------------------------------timer--------------------------------------
         # Timer 1: for publishing trajectory
         self.trajectory_started = False
@@ -234,11 +250,6 @@ class TrajectoryPublisher:
         
         # timer 2: 1 Hz state check to start MPC controller
         self.mpc_status_timer = rospy.Timer(rospy.Duration(1), self.mpc_status_time_callback)
-        
-        # Low pass filter parameters for joint effort
-        self.filter_time_constant_arm_control = 1  # seconds
-        self.filtered_effort = np.zeros(2)  # Store filtered effort values
-        self.last_filter_time = rospy.Time.now()
         
         # Grasping related variables
         self.grasp_position = np.array([0.0, 0.0, 0.85])  # Fixed target position for grasping
@@ -383,14 +394,14 @@ class TrajectoryPublisher:
                 dt=dt_controller, 
                 robot_model=robot_model, 
                 As_coef=self.As_coef,
-                filter_time_constant=self.filter_time_constant
+                filter_time_constant=self.filter_time_constant[0]
             )
         elif self.l1_version == 'v1':
             self.l1_controller = L1AdaptiveController_V1(
                 dt=dt_controller, 
                 robot_model=robot_model, 
                 As_coef=self.As_coef,
-                filter_time_constant=self.filter_time_constant
+                filter_time_constant=self.filter_time_constant[0]
             )
         elif self.l1_version == 'v2':
             self.l1_controller = L1AdaptiveControllerAll(
@@ -560,7 +571,45 @@ class TrajectoryPublisher:
             
             t3 = time.time()
             
-            rospy.loginfo_throttle(1.0, f"mpc time: {(t1-t0)*1000:.2f} ms l1 time: {(t2-t1)*1000:.2f} publish time: {(t3-t2)*1000:.2f} ms")
+            # Track timing statistics
+            mpc_time = (t1 - t0) * 1000.0  # Convert to milliseconds
+            l1_time = (t2 - t1) * 1000.0   # Convert to milliseconds
+            
+            # Store times in deques
+            self.mpc_times.append(mpc_time)
+            self.l1_times.append(l1_time)
+            
+            # Calculate averages
+            if len(self.mpc_times) > 0:
+                self.mpc_avg_time = sum(self.mpc_times) / len(self.mpc_times)
+            if len(self.l1_times) > 0:
+                self.l1_avg_time = sum(self.l1_times) / len(self.l1_times)
+            
+            # Publish timing statistics
+            timing_msg = Float32()
+            timing_msg.data = self.mpc_avg_time  # Use MPC average time as the main metric
+            self.timing_stats_pub.publish(timing_msg)
+            
+            # Publish individual timing data
+            mpc_timing_msg = Float32()
+            mpc_timing_msg.data = mpc_time
+            self.mpc_timing_pub.publish(mpc_timing_msg)
+            
+            l1_timing_msg = Float32()
+            l1_timing_msg.data = l1_time
+            self.l1_timing_pub.publish(l1_timing_msg)
+            
+            # Publish average timing data
+            mpc_avg_timing_msg = Float32()
+            mpc_avg_timing_msg.data = self.mpc_avg_time
+            self.mpc_avg_timing_pub.publish(mpc_avg_timing_msg)
+            
+            l1_avg_timing_msg = Float32()
+            l1_avg_timing_msg.data = self.l1_avg_time
+            self.l1_avg_timing_pub.publish(l1_avg_timing_msg)
+            
+            rospy.loginfo_throttle(1.0, f"mpc time: {mpc_time:.2f} ms l1 time: {l1_time:.2f} ms publish time: {(t3-t2)*1000:.2f} ms")
+            rospy.loginfo_throttle(1.0, f"MPC avg: {self.mpc_avg_time:.2f} ms L1 avg: {self.l1_avg_time:.2f} ms")
         else:
             rospy.logwarn("Invalid control mode")
             
@@ -813,7 +862,7 @@ class TrajectoryPublisher:
         t2 = time.time()
         
         # 1. Update state predictor
-        self.l1_controller.update_z_hat()
+        self.l1_controller.update_z_hat_vel()
         t3 = time.time()
         
         # 2. Update state predictor error
@@ -842,15 +891,18 @@ class TrajectoryPublisher:
         '''        
         joint_msg = JointState()
         joint_msg.header.stamp = rospy.Time.now()
-        joint_msg.name = ['joint_1', 'joint_2', 'joint_3']
+        
+        flag_arm_test = False
+        
+        joint_msg.name = ['joint_1', 'joint_2']
         
         # get reference state
         ref_state = self.traj_state_ref[self.traj_ref_index]
         ref_control = self.traj_solver.us[min(self.traj_ref_index, len(self.traj_solver.us)-1)]
         
-        # mpc_planned_state = self.mpc_controller.solver.xs[0]
-        # mpc_planned_state_next = self.mpc_controller.solver.xs[1]
-        # ref_state = mpc_planned_state_next
+        mpc_planned_state = self.mpc_controller.solver.xs[0]
+        mpc_planned_state_next = self.mpc_controller.solver.xs[1]
+        ref_state = mpc_planned_state_next
         
         current_time = rospy.Time.now()
         
@@ -879,28 +931,29 @@ class TrajectoryPublisher:
                 rospy.loginfo_throttle(1.0, "Gripper open, waiting for grasp time")
         
         if self.arm_control_mode == 'position':
-            joint_msg.position = [ref_state[7], ref_state[8], self.gripper_position_cmd]
-            joint_msg.velocity = [0.0, 0.0, gripper_velocity]
-            joint_msg.effort = [0.0, 0.0, 0.0]
+            joint_msg.position = [ref_state[7], ref_state[8]]
+            joint_msg.velocity = [0.0, 0.0]
+            joint_msg.effort = [0.0, 0.0]
         elif self.arm_control_mode == 'position_velocity':
-            joint_msg.position = [ref_state[7], ref_state[8], self.gripper_position_cmd]
-            joint_msg.velocity = [ref_state[-2], ref_state[-1], gripper_velocity]
-            joint_msg.effort = [0.0, 0.0, 0.0]
+            joint_msg.position = [ref_state[7], ref_state[8]]
+            joint_msg.velocity = [ref_state[-2], ref_state[-1]]
+            joint_msg.effort = [0.0, 0.0]
+        elif self.arm_control_mode == 'velocity':
+            joint_msg.position = [0.0, 0.0]
+            joint_msg.velocity = [ref_state[-2], ref_state[-1]]
+            joint_msg.effort = [0.0, 0.0]
         elif self.arm_control_mode == 'effort':
-            joint_msg.position = [0.0, 0.0, 0.0]
-            joint_msg.velocity = [0.0, 0.0, 0.0]
+            joint_msg.position = [0.0, 0.0]
+            joint_msg.velocity = [0.0, 0.0]
+            # input effort for dynamixel_interface API is A not torque, we need to convert torque to current in A
+            # a = 0.55221504
+            a = 0.5
+            b = 0.0
             
-            # Calculate time step for filter
-            current_time = rospy.Time.now()
-            dt = (current_time - self.last_filter_time).to_sec()
-            self.last_filter_time = current_time
+            torque_in_Nm = np.array([self.control_command[-2] + self.l1_controller.u_ad[-2], self.control_command[-1] + self.l1_controller.u_ad[-1]])
+            raw_effort_in_ampere = np.array([a * torque_in_Nm[-2] + b, a * torque_in_Nm[-1] + b])
             
-            # Apply low pass filter to effort command
-            alpha = dt / (self.filter_time_constant_arm_control + dt)  # Filter coefficient
-            raw_effort = np.array([self.control_command[-2], self.control_command[-1]])
-            self.filtered_effort = alpha * raw_effort + (1 - alpha) * self.filtered_effort
-            
-            joint_msg.effort = self.filtered_effort.tolist()
+            joint_msg.effort = raw_effort_in_ampere.tolist()
             
         # add constrain to joint position
         joint_msg.position[0] = np.clip(joint_msg.position[0], -1.3, 1.3)
@@ -932,14 +985,15 @@ class TrajectoryPublisher:
         # get collected thrust command
         if self.control_command_mpc is not None:
             self.control_command = self.control_command_mpc.copy()
+            # print('control_command: ', self.control_command)
         
         # get planned state
-        self.state_ref = self.mpc_controller.solver.xs[1]
+        self.state_mpc_next_time_step = self.mpc_controller.solver.xs[1]
         
         # get body rate command from MPC
-        self.roll_rate_ref_next_step = self.state_ref[self.mpc_controller.robot_model.nq + 3]
-        self.pitch_rate_ref_next_step = self.state_ref[self.mpc_controller.robot_model.nq + 4]
-        self.yaw_rate_ref_next_step = self.state_ref[self.mpc_controller.robot_model.nq + 5]
+        self.roll_rate_ref_next_step = self.state_mpc_next_time_step[self.mpc_controller.robot_model.nq + 3]
+        self.pitch_rate_ref_next_step = self.state_mpc_next_time_step[self.mpc_controller.robot_model.nq + 4]
+        self.yaw_rate_ref_next_step = self.state_mpc_next_time_step[self.mpc_controller.robot_model.nq + 5]
         
         # get additional body rate control command
         model = self.mpc_controller.robot_model
@@ -1058,14 +1112,14 @@ class TrajectoryPublisher:
         euler_ref = euler_from_quaternion(quat_ref)
         state_array_ref_new = np.hstack((state_ref[0:3], euler_ref, state_ref[7:]))
         
-        state_ref_next = self.state_ref.copy()
+        state_ref_next = self.state_mpc_next_time_step.copy()
         euler_ref_next = euler_from_quaternion(state_ref_next[3:7])
         state_array_ref_next = np.hstack((state_ref_next[0:3], euler_ref_next, state_ref_next[7:]))
         
-        debug_msg.state = state_array_new
-        debug_msg.state_ref = state_array_ref_new
+        debug_msg.state = state_array_new                  # current state
+        debug_msg.state_ref = state_array_ref_new          # planned state
         debug_msg.state_error = state_array_ref_new - state_array_new
-        debug_msg.state_ref_next = state_array_ref_next # state next reference
+        debug_msg.state_ref_next = state_array_ref_next    # state next reference
         
         # MPC performance info
         debug_msg.mpc_time_step = self.mpc_ref_index
