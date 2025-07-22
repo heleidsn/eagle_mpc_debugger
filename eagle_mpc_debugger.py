@@ -2,7 +2,7 @@
 '''
 Author: Lei He
 Date: 2025-02-19 11:40:31
-LastEditTime: 2025-06-20 14:51:18
+LastEditTime: 2025-07-22 13:54:46
 Description: MPC Debug Interface, useful for debugging your MPC controller before deploying it to the real robot
 Github: https://github.com/heleidsn
 '''
@@ -54,9 +54,9 @@ class MpcDebugInterface(QWidget):
         self.use_squash = True
         self.dt_traj_opt = dt_traj_opt  # ms
         self.yaml_path = rospy.get_param('~yaml_path', 'config/yaml')
-        self.arm_enabled = rospy.get_param('~arm_enabled', False)
+        self.arm_enabled = rospy.get_param('~arm_enabled', True)
         
-        # 动态分配，初始化为None，等mpc_controller初始化后再分配具体维度
+        # Dynamic allocation, initialized as None, will be allocated specific dimensions after mpc_controller initialization
         if self.robot_name == 's500_uam':
             self.real_time_state = np.zeros(17)
             self.control_command = np.zeros(6)
@@ -67,7 +67,7 @@ class MpcDebugInterface(QWidget):
             raise ValueError(f"Unsupported robot name: {self.robot_name}")
         
         # numpy print options
-        np.set_printoptions(formatter={'float': lambda x: f"{x:>4.2f}"})  # 固定 6 位小数
+        np.set_printoptions(formatter={'float': lambda x: f"{x:>4.2f}"})  # Fixed 6 decimal places
         
         # setting
         self.plot_thrust_torque = True
@@ -172,7 +172,7 @@ class MpcDebugInterface(QWidget):
         """)
         
         # Current mass display
-        self.current_mass_label = QLabel("Current Mass: 1.5 kg")  # 默认质量
+        self.current_mass_label = QLabel("Current Mass: 1.5 kg")  # Default mass
         self.current_mass_label.setStyleSheet("""
             QLabel {
                 font-size: 14px;
@@ -203,7 +203,7 @@ class MpcDebugInterface(QWidget):
             'Orientation (deg)': ['roll', 'pitch', 'yaw'],
             'Linear Velocity (m/s)': ['vx', 'vy', 'vz'],
             'Angular Velocity (deg/s)': ['wx', 'wy', 'wz'],
-            'Joint Position (rad)': ['joint1', 'joint2']  # 添加关节位置组
+            'Joint Position (rad)': ['joint1', 'joint2']  # Add joint position group
         }
         
         # Create sliders and labels
@@ -275,7 +275,7 @@ class MpcDebugInterface(QWidget):
         state_layout.setContentsMargins(10, 10, 10, 10)
         
         # Plot display: position, attitude, linear velocity, angular velocity
-        self.figure = Figure(figsize=(15, 20), dpi=90)  # 添加dpi参数
+        self.figure = Figure(figsize=(15, 20), dpi=90)  # Add dpi parameter
         # Set spacing between subplots
         self.figure.subplots_adjust(
             left=0.08,    # Left margin
@@ -283,11 +283,11 @@ class MpcDebugInterface(QWidget):
             bottom=0.08,  # Bottom margin
             top=0.95,     # Top margin
             wspace=0.25,  # Horizontal spacing between subplots
-            hspace=0.35   # Vertical spacing between subplots，增加垂直间距
+            hspace=0.35   # Vertical spacing between subplots, increase vertical spacing
         )
         self.canvas = FigureCanvas(self.figure)
-        self.canvas.setMinimumHeight(800)  # 设置最小高度
-        # self.canvas.setMinimumWidth(600)   # 设置最小宽度
+        self.canvas.setMinimumHeight(800)  # Set minimum height
+        # self.canvas.setMinimumWidth(600)   # Set minimum width
         
         if self.plot_thrust_torque:
             plot_row_num = 4
@@ -334,7 +334,7 @@ class MpcDebugInterface(QWidget):
         # Add to main layout
         self.layout.addLayout(time_layout, stretch=1)
         self.layout.addLayout(state_layout, stretch=1)
-        self.layout.addWidget(self.canvas, stretch=20)  # 给canvas更大的比例
+        self.layout.addWidget(self.canvas, stretch=20)  # Give canvas larger proportion
         self.setLayout(self.layout)
       
         # Data storage
@@ -429,6 +429,9 @@ class MpcDebugInterface(QWidget):
             self.timer_plot.start(50)  # 20Hz update for real-time display
             
             rospy.loginfo("ROS mode initialized - all data will be fetched from ROS topics")
+            
+            # Clean up buffers after a short delay to ensure consistency
+            QtCore.QTimer.singleShot(3000, self.cleanup_joint_buffers)
         
         else:
             self.mpc_rate = 100.0  # Hz
@@ -436,21 +439,31 @@ class MpcDebugInterface(QWidget):
             self.mpc_timer.timeout.connect(self.mpc_running_callback)
             self.mpc_timer.start(int(1000/self.mpc_rate))
         
-        # 在类的__init__方法中添加一个字典来存储偏移量的基准值
-        # 初始化偏移量为零数组
+        # Add a dictionary in the __init__ method to store the baseline values for offsets
+        # Initialize offset as zero array
         self.state_offset = np.zeros_like(self.state)
         
-        # 创建一个映射字典，用于快速查找状态量的索引
+        # Create a mapping dictionary for quick lookup of state indices
         self.state_indices = {
-            'X': 0, 'Y': 1, 'Z': 2,                    # 位置
-            'roll': 3, 'pitch': 4, 'yaw': 5,          # 姿态(用于临时存储欧拉角)
-            'vx': 7, 'vy': 8, 'vz': 9,                # 线速度
-            'wx': 10, 'wy': 11, 'wz': 12,             # 角速度
-            'joint1': 7, 'joint2': 8                   # 关节位置
+            'X': 0, 'Y': 1, 'Z': 2,                    # Position
+            'roll': 3, 'pitch': 4, 'yaw': 5,          # Attitude (for temporary storage of Euler angles)
+            'vx': 7, 'vy': 8, 'vz': 9,                # Linear velocity
+            'wx': 10, 'wy': 11, 'wz': 12,             # Angular velocity
+            'joint1': 7, 'joint2': 8                   # Joint position
         }
         
-        # 在__init__方法的最后
-        # self.setMinimumSize(1200, 1500)  # 设置窗口最小大小
+        # Joint name mapping configuration
+        self.joint_names = {
+            'joint_1': 'joint1',  # Joint 1 name
+            'joint_2': 'joint2'   # Joint 2 name
+        }
+        
+        # Data update frequency tracking
+        self.joint_data_timestamps = []  # For calculating actual update frequency
+        self.joint_freq_estimate = 50.0  # Default estimated frequency, will be dynamically updated
+        
+        # At the end of __init__ method
+        # self.setMinimumSize(1200, 1500)  # Set window minimum size
     
     #region --------------MPC related-------------------------------    
     def load_trajectory(self):
@@ -520,7 +533,7 @@ class MpcDebugInterface(QWidget):
         self.speed_command = np.zeros(self.mpc_controller.platform_params.n_rotors)
         self.total_thrust = 0.0
 
-        # 动态分配real_time_state和control_command的维度
+        # Dynamically allocate dimensions for real_time_state and control_command
         nx = getattr(self.mpc_controller.robot_model, 'nx', 13)
         nu = getattr(self.mpc_controller.robot_model, 'nu', 4)
         self.real_time_state = np.zeros(nx)
@@ -546,7 +559,7 @@ class MpcDebugInterface(QWidget):
 
         self.solving_time = (time_end - time_start).to_sec()
         
-        # 记录求解时间
+        # Record solving time
         self.mpc_solve_time_history.append(self.solving_time)
         if len(self.mpc_solve_time_history) > 100:
             self.mpc_solve_time_history.pop(0)
@@ -734,7 +747,7 @@ class MpcDebugInterface(QWidget):
             self._add_synchronized_data('control', control_data.tolist(), timestamp)
 
     def state_changed_ros(self, axis, value):
-        # 发布新的位置
+        # Publish new position
         pose = PoseStamped()
         pose.header.stamp = rospy.Time.now()
         pose.header.frame_id = "world"
@@ -750,7 +763,7 @@ class MpcDebugInterface(QWidget):
         
         self.pose_pub.publish(pose)
         
-        # 更新显示的值
+        # Update displayed value
         self.state_labels[axis].setText(f'{value:.2f}')
 
     def mav_state_callback(self, msg):
@@ -759,28 +772,62 @@ class MpcDebugInterface(QWidget):
     def arm_state_callback(self, msg):
         self.arm_state = msg
         
-        # update self.state
-        self.state[7:9] = [msg.position[1], msg.position[0]] # TODO: don't know why it is reversed
-        self.state[-2:] = [msg.velocity[1], msg.velocity[0]]
+        # Extract joint data using helper function
+        joint_data = self.extract_joint_data(msg)
+        
+        if joint_data is None:
+            return  # Skip processing if joint data extraction failed
+        
+        # update self.state (joint_1 and joint_2)
+        self.state[7:9] = joint_data['position']
+        self.state[-2:] = joint_data['velocity']
+        
+        # Update real-time data buffers for joint data
+        if self.using_ros:
+            timestamp = msg.header.stamp.to_sec()
+            
+            # Update frequency estimate
+            self.update_joint_frequency_estimate(timestamp)
+            
+            # Add to real-time_data buffers
+            self._add_synchronized_data('joint_position', joint_data['position'], timestamp)
+            self._add_synchronized_data('joint_velocity', joint_data['velocity'], timestamp)
+            self._add_synchronized_data('joint_effort', joint_data['effort'], timestamp)
+            
+            # Debug: Print joint data info (only every 10th message to avoid spam)
+            if hasattr(self, '_joint_msg_count'):
+                self._joint_msg_count += 1
+            else:
+                self._joint_msg_count = 0
+                
+            if self._joint_msg_count % 10 == 0:
+                rospy.logdebug(f"Joint data: pos={joint_data['position']}, vel={joint_data['velocity']}, effort={joint_data['effort']}")
+                rospy.logdebug(f"Real-time data sizes: joint_pos={len(self.real_time_data['joint_position'])}, timestamps={len(self.real_time_data['timestamps'])}")
+                rospy.logdebug(f"Estimated joint frequency: {self.joint_freq_estimate:.1f} Hz")
         
         max_buffer_size = 100
         self.joint_position_buffer.append(self.state[7:9])
         if len(self.joint_position_buffer) > max_buffer_size:
-            self.joint_position_buffer.pop(0)  # 删除最旧的值
+            self.joint_position_buffer.pop(0)  # Remove oldest value
             
         self.joint_velocity_buffer.append(self.state[-2:])
         if len(self.joint_velocity_buffer) > max_buffer_size:
-            self.joint_velocity_buffer.pop(0)  # 删除最旧的值
+            self.joint_velocity_buffer.pop(0)  # Remove oldest value
             
-        self.joint_effort_buffer.append([msg.effort[1], msg.effort[0]])
+        self.joint_effort_buffer.append(joint_data['effort'])
         if len(self.joint_effort_buffer) > max_buffer_size:
-            self.joint_effort_buffer.pop(0)  # 删除最旧的值
+            self.joint_effort_buffer.pop(0)  # Remove oldest value
         
         # Update joint control buffer if control_command is available
         if hasattr(self, 'control_command') and len(self.control_command) >= 2:
-            self.joint_control_buffer.append(self.control_command[-2:])
-            if len(self.joint_control_buffer) > max_buffer_size:
-                self.joint_control_buffer.pop(0)
+            # Ensure control_command has at least 2 elements for joint control
+            joint_control_data = self.control_command[-2:]  # Get last 2 elements
+            if len(joint_control_data) == 2:  # Double check we have exactly 2 elements
+                self.joint_control_buffer.append(joint_control_data)
+                if len(self.joint_control_buffer) > max_buffer_size:
+                    self.joint_control_buffer.pop(0)
+            else:
+                rospy.logwarn(f"Invalid control_command length: {len(self.control_command)}, expected at least 2")
     
     def odom_callback(self, msg):
         """Callback for position and orientation data"""
@@ -831,7 +878,7 @@ class MpcDebugInterface(QWidget):
         if timestamp not in self.real_time_data['timestamps']:
             self.real_time_data['timestamps'].append(timestamp)
             # Add placeholder data for other types if they don't exist
-            for key in ['position', 'orientation', 'linear_velocity', 'angular_velocity', 'control']:
+            for key in ['position', 'orientation', 'linear_velocity', 'angular_velocity', 'control', 'joint_position', 'joint_velocity', 'joint_effort']:
                 if key not in self.real_time_data:
                     self.real_time_data[key] = []
                 if len(self.real_time_data[key]) < len(self.real_time_data['timestamps']):
@@ -846,6 +893,8 @@ class MpcDebugInterface(QWidget):
                         placeholder = [0.0, 0.0, 0.0]
                     elif key == 'control':
                         placeholder = [0.0, 0.0, 0.0, 0.0]
+                    elif key in ['joint_position', 'joint_velocity', 'joint_effort']:
+                        placeholder = [0.0, 0.0]  # 2 joints
                     else:
                         placeholder = []
                     self.real_time_data[key].append(placeholder)
@@ -867,6 +916,8 @@ class MpcDebugInterface(QWidget):
                         self.real_time_data[data_type].append([0.0, 0.0, 0.0])
                     elif data_type == 'control':
                         self.real_time_data[data_type].append([0.0, 0.0, 0.0, 0.0])
+                    elif data_type in ['joint_position', 'joint_velocity', 'joint_effort']:
+                        self.real_time_data[data_type].append([0.0, 0.0])
             self.real_time_data[data_type][idx] = data
         except ValueError:
             # Timestamp not found, add new entry
@@ -902,7 +953,7 @@ class MpcDebugInterface(QWidget):
         layout.setSpacing(8)
         layout.setAlignment(QtCore.Qt.AlignCenter)
         
-        # 标题标签
+        # Title label
         title_label = QLabel(name)
         title_label.setAlignment(QtCore.Qt.AlignCenter)
         title_label.setFixedWidth(80)
@@ -915,7 +966,7 @@ class MpcDebugInterface(QWidget):
         """)
         layout.addWidget(title_label, 0, QtCore.Qt.AlignCenter)
         
-        # 滑块
+        # Slider
         slider = QSlider(QtCore.Qt.Vertical)
         slider.setMinimum(int(min_val * 100))
         slider.setMaximum(int(max_val * 100))
@@ -939,7 +990,7 @@ class MpcDebugInterface(QWidget):
         slider.valueChanged.connect(lambda v: self.slider_value_changed(name, v))
         layout.addWidget(slider, 0, QtCore.Qt.AlignCenter)
         
-        # 值输入框
+        # Value input box
         value_input = QtWidgets.QLineEdit('0.00')
         value_input.setAlignment(QtCore.Qt.AlignCenter)
         value_input.setFixedWidth(100)
@@ -957,22 +1008,22 @@ class MpcDebugInterface(QWidget):
                 background: white;
             }
         """)
-        # 添加输入验证器
+        # Add input validator
         validator = QtGui.QDoubleValidator(min_val, max_val, 2)
         validator.setNotation(QtGui.QDoubleValidator.StandardNotation)
         value_input.setValidator(validator)
-        # 连接输入框的信号
+        # Connect input box signals
         value_input.editingFinished.connect(lambda: self.value_input_changed(name))
         layout.addWidget(value_input, 0, QtCore.Qt.AlignCenter)
         
-        # 存储滑块和标签的引用
+        # Store references to slider and label
         self.state_sliders[name] = slider
         self.state_labels[name] = value_input
         
         return layout
     
     def slider_value_changed(self, name, value):
-        """处理滑块值变化"""
+        """Handle slider value changes"""
         actual_value = value / 100.0
         
         if self.using_ros:
@@ -984,12 +1035,12 @@ class MpcDebugInterface(QWidget):
             return
         
         # Non-ROS mode: original logic
-        # 获取当前时间对应的参考状态
+        # Get reference state corresponding to current time
         time_index = int(self.mpc_ref_time / self.dt_traj_opt)
         time_index = min(time_index, len(self.state_ref) - 1)
         ref_state = self.state_ref[time_index]
         
-        # 更新偏移量和状态
+        # Update offset and state
         if name in ['X', 'Y', 'Z']:
             idx = self.state_indices[name]
             self.state_offset[idx] = actual_value
@@ -997,9 +1048,9 @@ class MpcDebugInterface(QWidget):
             
         elif name in ['roll', 'pitch', 'yaw']:
             idx = self.state_indices[name]
-            # 存储欧拉角偏移量
+            # Store Euler angle offset
             self.state_offset[idx] = actual_value
-            # 计算新的姿态
+            # Calculate new attitude
             euler_ref = R.from_quat(ref_state[3:7]).as_euler('xyz', degrees=True)
             euler_new = euler_ref.copy()
             euler_new[idx-3] = euler_ref[idx-3] + actual_value
@@ -1020,38 +1071,38 @@ class MpcDebugInterface(QWidget):
             self.state_offset[idx] = actual_value
             self.state[idx] = ref_state[idx] + actual_value
         
-        # 更新显示值
+        # Update display value
         self.state_labels[name].blockSignals(True)
         self.state_labels[name].setText(f'{actual_value:.2f}')
         self.state_labels[name].blockSignals(False)
 
     def value_input_changed(self, name):
-        """处理输入框值变化"""
+        """Handle input box value changes"""
         try:
-            # 获取输入框的值
+            # Get input box value
             text_value = self.state_labels[name].text()
             value = float(text_value)
-            # 更新滑块，但不触发滑块的信号
+            # Update slider without triggering slider signal
             self.state_sliders[name].blockSignals(True)
             self.state_sliders[name].setValue(int(value * 100))
             self.state_sliders[name].blockSignals(False)
-            # 更新状态
+            # Update state
             self.state_changed_input(name, value)
         except ValueError:
-            # 如果输入无效，恢复到滑块的值
+            # If input is invalid, restore to slider value
             slider_value = self.state_sliders[name].value() / 100.0
             self.state_labels[name].setText(f'{slider_value:.2f}')
 
     def state_changed_input(self, axis, value, is_offset=False):
         print("state changed: ", axis, value)
         
-        # 获取当前四元数
+        # Get current quaternion
         current_quat = self.state[3:7]
-        # 转换为欧拉角
+        # Convert to Euler angles
         euler = R.from_quat(current_quat).as_euler('xyz', degrees=True)
         
         if is_offset:
-            # 使用偏移量更新状态
+            # Update state using offset
             if 'X' in axis:
                 self.state[0] += value
             elif 'Y' in axis:
@@ -1083,7 +1134,7 @@ class MpcDebugInterface(QWidget):
             elif 'wz' in axis:
                 self.state[12] += np.radians(value)
         else:
-            # 原来的绝对值更新逻辑
+            # Original absolute value update logic
             if 'X' in axis:
                 self.state[0] = value
             elif 'Y' in axis:
@@ -1091,15 +1142,15 @@ class MpcDebugInterface(QWidget):
             elif 'Z' in axis:
                 self.state[2] = value
             elif 'roll' in axis:
-                euler[0] = value  # value已经是度数
+                euler[0] = value  # value is already in degrees
                 quat = R.from_euler('xyz', euler, degrees=True).as_quat()
                 self.state[3:7] = quat
             elif 'pitch' in axis:
-                euler[1] = value  # value已经是度数
+                euler[1] = value  # value is already in degrees
                 quat = R.from_euler('xyz', euler, degrees=True).as_quat()
                 self.state[3:7] = quat
             elif 'yaw' in axis:
-                euler[2] = value  # value已经是度数
+                euler[2] = value  # value is already in degrees
                 quat = R.from_euler('xyz', euler, degrees=True).as_quat()
                 self.state[3:7] = quat
             elif 'vx' in axis:
@@ -1109,23 +1160,23 @@ class MpcDebugInterface(QWidget):
             elif 'vz' in axis:
                 self.state[9] = value
             elif 'wx' in axis:
-                self.state[10] = np.radians(value)  # 转换为弧度
+                self.state[10] = np.radians(value)  # Convert to radians
             elif 'wy' in axis:
-                self.state[11] = np.radians(value)  # 转换为弧度
+                self.state[11] = np.radians(value)  # Convert to radians
             elif 'wz' in axis:
-                self.state[12] = np.radians(value)  # 转换为弧度
+                self.state[12] = np.radians(value)  # Convert to radians
         
     def time_changed(self, value):
         
         self.time_label.setText(f'{value} ms')
-        self.mpc_ref_time = int(value)   # 单位为ms
+        self.mpc_ref_time = int(value)   # Unit is ms
         
         if self.using_ros:
             # In ROS mode, don't reset sliders as state comes from ROS topics
             return
         
         # Non-ROS mode: reset sliders
-        # 重置所有滑块到零位置，这样偏移量会重置
+        # Reset all sliders to zero position, so offset will be reset
         # self.reset_sliders()
         self.set_to_reference()
 
@@ -1143,33 +1194,33 @@ class MpcDebugInterface(QWidget):
         time_end = time.time()
         self.solving_time = time_end - time_start
         
-        # 记录求解时间
+        # Record solving time
         self.mpc_solve_time_history.append(self.solving_time)
         if len(self.mpc_solve_time_history) > 100:
             self.mpc_solve_time_history.pop(0)
         
-        # 在不使用ROS的情况下更新arm相关的buffer
+        # Update arm-related buffers when not using ROS
         if not self.using_ros:
-            # 获取当前状态和控制输入
+            # Get current state and control input
             state_predict = np.array(self.mpc_controller.solver.xs)
             control_predict = np.array(self.mpc_controller.solver.us_squash)
             
-            # 更新joint position buffer
+            # Update joint position buffer
             self.joint_position_buffer.append(state_predict[0, 7:9])
             if len(self.joint_position_buffer) > 100:
                 self.joint_position_buffer.pop(0)
             
-            # 更新joint velocity buffer
+            # Update joint velocity buffer
             self.joint_velocity_buffer.append(state_predict[0, -2:])
             if len(self.joint_velocity_buffer) > 100:
                 self.joint_velocity_buffer.pop(0)
             
-            # 更新joint control buffer
+            # Update joint control buffer
             self.joint_control_buffer.append(control_predict[0, -2:])
             if len(self.joint_control_buffer) > 100:
                 self.joint_control_buffer.pop(0)
             
-            # 对于joint effort，使用控制输入作为effort
+            # For joint effort, use control input as effort
             self.joint_effort_buffer.append(control_predict[0, -2:])
             if len(self.joint_effort_buffer) > 100:
                 self.joint_effort_buffer.pop(0)
@@ -1191,7 +1242,7 @@ class MpcDebugInterface(QWidget):
             self.update_plot_ros()
         else:
             # Non-ROS mode: use MPC prediction data
-            # 更新状态图
+            # Update state plot
             state_predict = np.array(self.mpc_controller.solver.xs)
             state_ref = np.array(self.mpc_controller.state_ref)
             self.update_state_plot(state_predict, state_ref)
@@ -1264,6 +1315,34 @@ class MpcDebugInterface(QWidget):
                 padding = np.zeros((min_length - len(control_data), 4))
                 control_data = np.vstack([control_data, padding]) if len(control_data) > 0 else np.zeros((min_length, 4))
         
+        # Handle joint data
+        joint_position_data = None
+        joint_velocity_data = None
+        joint_effort_data = None
+        if self.real_time_data['joint_position']:
+            joint_position_data = np.array(self.real_time_data['joint_position'])
+            if len(joint_position_data) > min_length:
+                joint_position_data = joint_position_data[:min_length]
+            elif len(joint_position_data) < min_length:
+                padding = np.zeros((min_length - len(joint_position_data), 2))
+                joint_position_data = np.vstack([joint_position_data, padding]) if len(joint_position_data) > 0 else np.zeros((min_length, 2))
+                
+        if self.real_time_data['joint_velocity']:
+            joint_velocity_data = np.array(self.real_time_data['joint_velocity'])
+            if len(joint_velocity_data) > min_length:
+                joint_velocity_data = joint_velocity_data[:min_length]
+            elif len(joint_velocity_data) < min_length:
+                padding = np.zeros((min_length - len(joint_velocity_data), 2))
+                joint_velocity_data = np.vstack([joint_velocity_data, padding]) if len(joint_velocity_data) > 0 else np.zeros((min_length, 2))
+                
+        if self.real_time_data['joint_effort']:
+            joint_effort_data = np.array(self.real_time_data['joint_effort'])
+            if len(joint_effort_data) > min_length:
+                joint_effort_data = joint_effort_data[:min_length]
+            elif len(joint_effort_data) < min_length:
+                padding = np.zeros((min_length - len(joint_effort_data), 2))
+                joint_effort_data = np.vstack([joint_effort_data, padding]) if len(joint_effort_data) > 0 else np.zeros((min_length, 2))
+        
         # Calculate relative time for plotting (last 10 seconds)
         current_time = timestamps[-1]
         start_time = max(current_time - 10.0, timestamps[0])  # Show last 10 seconds
@@ -1276,6 +1355,12 @@ class MpcDebugInterface(QWidget):
         angular_vel_data = angular_vel_data[time_mask]
         if control_data is not None:
             control_data = control_data[time_mask]
+        if joint_position_data is not None:
+            joint_position_data = joint_position_data[time_mask]
+        if joint_velocity_data is not None:
+            joint_velocity_data = joint_velocity_data[time_mask]
+        if joint_effort_data is not None:
+            joint_effort_data = joint_effort_data[time_mask]
         
         # Update plots with real-time data
         self.update_state_plot_ros(relative_time, position_data)
@@ -1292,9 +1377,9 @@ class MpcDebugInterface(QWidget):
         # Update solving time plot
         self.update_solving_time_plot()
         
-        # Update arm plot
-        self.update_arm_plot_ros(relative_time)
-
+        # Update arm plot with real-time joint data
+        self.update_arm_plot_ros(relative_time, joint_position_data, joint_velocity_data, joint_effort_data)
+    
     def update_arm_plot(self, state_predict, state_ref, control_predict=None, control_ref=None):
         if self.arm_enabled:
             joint_position = np.array(self.joint_position_buffer)
@@ -1316,7 +1401,8 @@ class MpcDebugInterface(QWidget):
         ax.set_ylabel(y_label) 
         
         if data is not None:
-            freq_state_update = 62 # 62Hz
+            # Use estimated frequency instead of hardcoded 62Hz
+            freq_state_update = self.joint_freq_estimate if hasattr(self, 'joint_freq_estimate') else 50.0
             time_history = np.arange(-len(data), 0) / freq_state_update 
             ax.plot(time_history, data[:,0], label='Joint_1', color='black')
             ax.plot(time_history, data[:,1], label='Joint_2', color='yellow')
@@ -1635,28 +1721,85 @@ class MpcDebugInterface(QWidget):
             self.ax_torque.legend()
             self.ax_torque.grid(True)
     
-    def update_arm_plot_ros(self, time_data):
+    def update_arm_plot_ros(self, time_data, joint_position_data=None, joint_velocity_data=None, joint_effort_data=None):
         """Update arm plots with real-time data"""
         if not self.arm_enabled:
             return
             
-        # Get joint data from buffers
-        joint_position = np.array(self.joint_position_buffer) if self.joint_position_buffer else None
-        joint_velocity = np.array(self.joint_velocity_buffer) if self.joint_velocity_buffer else None
-        joint_effort = np.array(self.joint_effort_buffer) if self.joint_effort_buffer else None
-        joint_control = np.array(self.joint_control_buffer) if self.joint_control_buffer else None
-        
-        # Calculate joint time history
-        if joint_position is not None:
-            freq_state_update = 62  # 62Hz
-            joint_time_history = np.arange(-len(joint_position), 0) / freq_state_update
-            
+        # Use real-time data if available, otherwise fall back to buffer data
+        if joint_position_data is not None and len(joint_position_data) > 0:
+            # Use real-time data from real_time_data
             self.update_joint_history_plot_ros(self.ax_joint_position, 'Joint Position (Real-time)', 
-                                             joint_time_history, joint_position, 1.5, 'Position (rad)')
+                                             time_data, joint_position_data, 1.5, 'Position (rad)')
+        else:
+            # Fall back to buffer data
+            joint_position = None
+            if self.joint_position_buffer:
+                if all(len(item) == 2 for item in self.joint_position_buffer):
+                    joint_position = np.array(self.joint_position_buffer)
+                else:
+                    rospy.logwarn("Joint position buffer contains inconsistent data lengths")
+            
+            if joint_position is not None:
+                # Use estimated frequency instead of hardcoded 62Hz
+                freq_state_update = self.joint_freq_estimate if hasattr(self, 'joint_freq_estimate') else 50.0
+                joint_time_history = np.arange(-len(joint_position), 0) / freq_state_update
+                self.update_joint_history_plot_ros(self.ax_joint_position, 'Joint Position (Buffer)', 
+                                                 joint_time_history, joint_position, 1.5, 'Position (rad)')
+        
+        if joint_velocity_data is not None and len(joint_velocity_data) > 0:
+            # Use real-time data from real_time_data
             self.update_joint_history_plot_ros(self.ax_joint_velocity, 'Joint Velocity (Real-time)', 
-                                             joint_time_history, joint_velocity, 4.0, 'Velocity (rad/s)')
+                                             time_data, joint_velocity_data, 4.0, 'Velocity (rad/s)')
+        else:
+            # Fall back to buffer data
+            joint_velocity = None
+            if self.joint_velocity_buffer:
+                if all(len(item) == 2 for item in self.joint_velocity_buffer):
+                    joint_velocity = np.array(self.joint_velocity_buffer)
+                else:
+                    rospy.logwarn("Joint velocity buffer contains inconsistent data lengths")
+            
+            if joint_velocity is not None:
+                # Use estimated frequency instead of hardcoded 62Hz
+                freq_state_update = self.joint_freq_estimate if hasattr(self, 'joint_freq_estimate') else 50.0
+                joint_time_history = np.arange(-len(joint_velocity), 0) / freq_state_update
+                self.update_joint_history_plot_ros(self.ax_joint_velocity, 'Joint Velocity (Buffer)', 
+                                                 joint_time_history, joint_velocity, 4.0, 'Velocity (rad/s)')
+        
+        if joint_effort_data is not None and len(joint_effort_data) > 0:
+            # Use real-time data from real_time_data
             self.update_joint_history_plot_ros(self.ax_joint_effort, 'Joint Effort (Real-time)', 
-                                             joint_time_history, joint_effort, 2.0, 'Effort (Nm)')
+                                             time_data, joint_effort_data, 2.0, 'Effort (Nm)')
+        else:
+            # Fall back to buffer data
+            joint_effort = None
+            if self.joint_effort_buffer:
+                if all(len(item) == 2 for item in self.joint_effort_buffer):
+                    joint_effort = np.array(self.joint_effort_buffer)
+                else:
+                    rospy.logwarn("Joint effort buffer contains inconsistent data lengths")
+            
+            if joint_effort is not None:
+                # Use estimated frequency instead of hardcoded 62Hz
+                freq_state_update = self.joint_freq_estimate if hasattr(self, 'joint_freq_estimate') else 50.0
+                joint_time_history = np.arange(-len(joint_effort), 0) / freq_state_update
+                self.update_joint_history_plot_ros(self.ax_joint_effort, 'Joint Effort (Buffer)', 
+                                                 joint_time_history, joint_effort, 2.0, 'Effort (Nm)')
+        
+        # Joint control - always use buffer data as it comes from control_command
+        joint_control = None
+        if self.joint_control_buffer:
+            # Check if all elements have the same length (should be 2 for joint_1 and joint_2)
+            if all(len(item) == 2 for item in self.joint_control_buffer):
+                joint_control = np.array(self.joint_control_buffer)
+            else:
+                rospy.logwarn("Joint control buffer contains inconsistent data lengths, skipping control plot")
+        
+        if joint_control is not None:
+            # Use estimated frequency instead of hardcoded 62Hz
+            freq_state_update = self.joint_freq_estimate if hasattr(self, 'joint_freq_estimate') else 50.0
+            joint_time_history = np.arange(-len(joint_control), 0) / freq_state_update
             self.update_joint_history_plot_ros(self.ax_joint_control, 'Joint Control (Real-time)', 
                                              joint_time_history, joint_control, 0.3, 'Control (Nm)')
     
@@ -1789,19 +1932,229 @@ class MpcDebugInterface(QWidget):
         except ValueError:
             QtWidgets.QMessageBox.warning(self, "Invalid Input", "Please enter a valid number!")
 
+    def check_topic_connections(self):
+        """Check if ROS topics are publishing data"""
+        if not self.using_ros:
+            return
+            
+        rospy.loginfo("Checking ROS topic connections...")
+        
+        # Check if topics have publishers
+        topics_to_check = [
+            '/debug/mpc_state',
+            '/debug/mpc_control', 
+            '/mavros/local_position/pose',
+            '/mavros/local_position/velocity_local',
+            '/mavros/imu/data',
+            '/joint_states'
+        ]
+        
+        for topic in topics_to_check:
+            try:
+                # Get topic info
+                topic_info = rospy.get_published_topics()
+                topic_found = any(topic in t[0] for t in topic_info)
+                
+                if topic_found:
+                    rospy.loginfo(f"✓ Topic {topic} is available")
+                else:
+                    rospy.logwarn(f"✗ Topic {topic} is NOT available")
+            except Exception as e:
+                rospy.logwarn(f"Error checking topic {topic}: {e}")
+        
+        # Print current data buffer status
+        rospy.loginfo(f"Current data buffer status:")
+        rospy.loginfo(f"  Timestamps: {len(self.real_time_data['timestamps'])}")
+        rospy.loginfo(f"  Position: {len(self.real_time_data['position'])}")
+        rospy.loginfo(f"  Orientation: {len(self.real_time_data['orientation'])}")
+        rospy.loginfo(f"  Linear velocity: {len(self.real_time_data['linear_velocity'])}")
+        rospy.loginfo(f"  Angular velocity: {len(self.real_time_data['angular_velocity'])}")
+        rospy.loginfo(f"  Control: {len(self.real_time_data['control'])}")
+        
+        # Schedule another check in 5 seconds
+        QtCore.QTimer.singleShot(5000, self.check_topic_connections)
+    
+    def extract_joint_data(self, msg):
+        """Extract joint data from JointState message by name"""
+        joint_data = {
+            'position': [0.0, 0.0],
+            'velocity': [0.0, 0.0], 
+            'effort': [0.0, 0.0]
+        }
+        
+        # Get joint indices by name
+        joint_indices = {}
+        for i, name in enumerate(msg.name):
+            if name in self.joint_names:
+                joint_indices[name] = i
+        
+        # Check if we found the required joints
+        if len(joint_indices) < 2:
+            rospy.logwarn(f"Required joints not found. Available joints: {msg.name}")
+            rospy.logwarn(f"Looking for: {list(self.joint_names.keys())}")
+            return None
+        
+        # Extract data for joint_1 and joint_2
+        if 'joint_1' in joint_indices and 'joint_2' in joint_indices:
+            joint_1_idx = joint_indices['joint_1']
+            joint_2_idx = joint_indices['joint_2']
+            
+            joint_data['position'] = [msg.position[joint_1_idx], msg.position[joint_2_idx]]
+            joint_data['velocity'] = [msg.velocity[joint_1_idx], msg.velocity[joint_2_idx]]
+            joint_data['effort'] = [msg.effort[joint_1_idx], msg.effort[joint_2_idx]]
+            
+            return joint_data
+        else:
+            rospy.logwarn(f"Missing required joints. Found: {list(joint_indices.keys())}")
+            return None
+    
+    def cleanup_joint_buffers(self):
+        """Clean up joint buffers to ensure data consistency"""
+        # Clean up position buffer
+        if self.joint_position_buffer:
+            self.joint_position_buffer = [item for item in self.joint_position_buffer if len(item) == 2]
+        
+        # Clean up velocity buffer
+        if self.joint_velocity_buffer:
+            self.joint_velocity_buffer = [item for item in self.joint_velocity_buffer if len(item) == 2]
+        
+        # Clean up effort buffer
+        if self.joint_effort_buffer:
+            self.joint_effort_buffer = [item for item in self.joint_effort_buffer if len(item) == 2]
+        
+        # Clean up control buffer
+        if self.joint_control_buffer:
+            self.joint_control_buffer = [item for item in self.joint_control_buffer if len(item) == 2]
+        
+        rospy.loginfo("Joint buffers cleaned up for data consistency")
+    
+    def update_joint_frequency_estimate(self, timestamp):
+        """Update the estimated joint data frequency based on actual timestamps"""
+        self.joint_data_timestamps.append(timestamp)
+        
+        # Keep only the last 100 timestamps for frequency calculation
+        if len(self.joint_data_timestamps) > 100:
+            self.joint_data_timestamps.pop(0)
+        
+        # Calculate frequency if we have enough data points
+        if len(self.joint_data_timestamps) >= 10:
+            time_diffs = np.diff(self.joint_data_timestamps)
+            if len(time_diffs) > 0:
+                avg_interval = np.mean(time_diffs)
+                if avg_interval > 0:
+                    new_freq = 1.0 / avg_interval
+                    # Smooth the frequency estimate
+                    self.joint_freq_estimate = 0.9 * self.joint_freq_estimate + 0.1 * new_freq
+                    
+                    # # Log frequency estimate periodically
+                    # if len(self.joint_data_timestamps) % 50 == 0:
+                    #     rospy.loginfo(f"Estimated joint data frequency: {self.joint_freq_estimate:.2f} Hz")
+
+    def cleanup_and_exit(self):
+        """Clean up resources and exit gracefully"""
+        print("Cleaning up resources...")
+        
+        # Stop all timers
+        if hasattr(self, 'mpc_timer') and self.mpc_timer:
+            self.mpc_timer.stop()
+            print("Stopped MPC timer")
+        
+        if hasattr(self, 'timer_plot') and self.timer_plot:
+            self.timer_plot.stop()
+            print("Stopped plot timer")
+        
+        if hasattr(self, 'plot_timer') and self.plot_timer:
+            self.plot_timer.stop()
+            print("Stopped plot timer")
+        
+        if hasattr(self, 'check_timer') and self.check_timer:
+            self.check_timer.stop()
+            print("Stopped check timer")
+        
+        # Close ROS connections if using ROS
+        if self.using_ros:
+            try:
+                # Unregister subscribers
+                if hasattr(self, 'state_sub'):
+                    self.state_sub.unregister()
+                if hasattr(self, 'control_sub'):
+                    self.control_sub.unregister()
+                if hasattr(self, 'mav_state_sub'):
+                    self.mav_state_sub.unregister()
+                if hasattr(self, 'arm_state_sub'):
+                    self.arm_state_sub.unregister()
+                if hasattr(self, 'odom_sub'):
+                    self.odom_sub.unregister()
+                if hasattr(self, 'vel_sub'):
+                    self.vel_sub.unregister()
+                if hasattr(self, 'imu_sub'):
+                    self.imu_sub.unregister()
+                
+                # Close publishers
+                if hasattr(self, 'state_pub'):
+                    self.state_pub.unregister()
+                if hasattr(self, 'control_pub'):
+                    self.control_pub.unregister()
+                if hasattr(self, 'rate_pub'):
+                    self.rate_pub.unregister()
+                if hasattr(self, 'pose_pub'):
+                    self.pose_pub.unregister()
+                if hasattr(self, 'mpc_state_pub'):
+                    self.mpc_state_pub.unregister()
+                if hasattr(self, 'mpc_control_pub'):
+                    self.mpc_control_pub.unregister()
+                if hasattr(self, 'solving_time_pub'):
+                    self.solving_time_pub.unregister()
+                if hasattr(self, 'attitude_pub'):
+                    self.attitude_pub.unregister()
+                
+                print("Closed ROS connections")
+            except Exception as e:
+                print(f"Error closing ROS connections: {e}")
+        
+        # Close matplotlib figures
+        try:
+            import matplotlib.pyplot as plt
+            plt.close('all')
+            print("Closed matplotlib figures")
+        except Exception as e:
+            print(f"Error closing matplotlib figures: {e}")
+        
+        print("Cleanup completed")
+
+    def closeEvent(self, event):
+        """Handle window close event"""
+        print("Window closing, cleaning up resources...")
+        self.cleanup_and_exit()
+        event.accept()
+
 
 if __name__ == '__main__':
     import sys
+    import signal
+    
+    # Signal handler for graceful shutdown
+    def signal_handler(sig, frame):
+        print('\nReceived Ctrl+C, shutting down gracefully...')
+        if 'app' in globals():
+            app.quit()
+        if 'window' in globals():
+            window.cleanup_and_exit()
+        sys.exit(0)
+    
+    # Register signal handler
+    signal.signal(signal.SIGINT, signal_handler)
     
     # Check command line arguments
-    using_ros = '--ros' in sys.argv
+    # using_ros = '--ros' in sys.argv
+    using_ros = False
     
     # Settings
     mpc_name = 'rail'
     mpc_yaml_path = 'config/yaml'
     
     robot_name = 's500_uam'
-    trajectory_name = 'catch_vicon_offset'
+    trajectory_name = 'arm_test'
     dt_traj_opt = 50  # ms
     useSquash = True
     
@@ -1812,4 +2165,12 @@ if __name__ == '__main__':
     window = MpcDebugInterface(using_ros=using_ros, mpc_name=mpc_name, mpc_yaml_path=mpc_yaml_path, robot_name=robot_name, trajectory_name=trajectory_name, dt_traj_opt=dt_traj_opt, useSquash=useSquash)
     window.show()
     
-    sys.exit(app.exec_()) 
+    # Enable Ctrl+C handling in Qt
+    app.setQuitOnLastWindowClosed(True)
+    
+    try:
+        sys.exit(app.exec_())
+    except KeyboardInterrupt:
+        print('\nReceived Ctrl+C, shutting down gracefully...')
+        window.cleanup_and_exit()
+        sys.exit(0) 

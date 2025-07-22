@@ -2,7 +2,7 @@
 '''
 Author: Lei He
 Date: 2024-03-19
-Description: Test script for arm joint1 step response
+Description: Test script for arm joint1 step response with multiple control modes
 '''
 
 import rospy
@@ -22,9 +22,21 @@ class ArmStepResponseTest:
         
         # Get parameters
         self.test_duration = rospy.get_param('~test_duration', 10.0)  # seconds
-        self.step_amplitude = rospy.get_param('~step_amplitude', 0.05)  # Nm
+        self.step_amplitude = rospy.get_param('~step_amplitude', 0.5)  # rad for position, Nm for effort
         self.sampling_rate = rospy.get_param('~sampling_rate', 100.0)  # Hz
         self.switch_interval = rospy.get_param('~switch_interval', 2.0)  # seconds
+        self.control_mode = rospy.get_param('~control_mode', 'position')  # 'position', 'position_velocity', 'effort'
+        
+        # Position control specific parameters
+        self.target_position = rospy.get_param('~target_position', 0.0)  # Target position for position control modes
+        self.use_relative_position = rospy.get_param('~use_relative_position', True)  # Whether to use relative position from initial
+        
+        # Validate control mode
+        valid_modes = ['position', 'position_velocity', 'effort']
+        if self.control_mode not in valid_modes:
+            rospy.logerr(f"Invalid control mode: {self.control_mode}. Valid modes: {valid_modes}")
+            rospy.signal_shutdown("Invalid control mode")
+            return
         
         # Initialize data storage using deque with maxlen
         max_samples = int(self.test_duration * self.sampling_rate)
@@ -44,17 +56,29 @@ class ArmStepResponseTest:
         self.start_time = None
         self.last_switch_time = None
         self.current_amplitude = self.step_amplitude  # Start with positive amplitude
+        self.initial_position = None  # Store initial position for position control
         
         # Create timer for control loop
         self.control_timer = rospy.Timer(rospy.Duration(1.0/self.sampling_rate), self.control_callback)
         
         rospy.loginfo("Arm step response test initialized")
-        rospy.loginfo(f"Test parameters: duration={self.test_duration}s, amplitude={self.step_amplitude}Nm, switch_interval={self.switch_interval}s")
+        rospy.loginfo(f"Test parameters: duration={self.test_duration}s, amplitude={self.step_amplitude}, switch_interval={self.switch_interval}s")
+        rospy.loginfo(f"Control mode: {self.control_mode}")
+        if self.control_mode in ['position', 'position_velocity']:
+            if self.use_relative_position:
+                rospy.loginfo(f"Position control: using relative position with amplitude {self.step_amplitude} rad")
+            else:
+                rospy.loginfo(f"Position control: using absolute target position {self.target_position} rad")
         
     def arm_state_callback(self, msg):
         """Callback for joint states"""
         if not self.test_started or self.test_finished:
             return
+            
+        # Store initial position on first callback
+        if self.initial_position is None:
+            self.initial_position = msg.position[-1]
+            rospy.loginfo(f"Initial position: {self.initial_position}")
             
         # Get current time
         current_time = (rospy.Time.now() - self.start_time).to_sec()
@@ -64,7 +88,20 @@ class ArmStepResponseTest:
         self.position_data.append(msg.position[-1])  # joint1 position
         self.velocity_data.append(msg.velocity[-1])  # joint1 velocity
         self.effort_data.append(msg.effort[-1])      # joint1 effort
-        self.command_data.append(self.current_amplitude * 1000)  # Store current command
+        
+        # Store command based on control mode
+        if self.control_mode == 'position':
+            if self.use_relative_position:
+                self.command_data.append(self.initial_position + self.current_amplitude)
+            else:
+                self.command_data.append(self.target_position + self.current_amplitude)
+        elif self.control_mode == 'position_velocity':
+            if self.use_relative_position:
+                self.command_data.append(self.initial_position + self.current_amplitude)
+            else:
+                self.command_data.append(self.target_position + self.current_amplitude)
+        else:  # effort control
+            self.command_data.append(self.current_amplitude * 1000)  # Convert to mNm for display
         
         # Check if test duration is reached
         if current_time >= self.test_duration:
@@ -95,10 +132,32 @@ class ArmStepResponseTest:
         joint_msg.header.stamp = rospy.Time.now()
         joint_msg.name = ['joint_1', 'joint_2']
         
-        # Set effort command
-        joint_msg.position = [0.0, 0.0]
-        joint_msg.velocity = [0.0, 0.0]
-        joint_msg.effort = [self.current_amplitude, 0.0]  # Step command for joint1
+        # Set command based on control mode
+        if self.control_mode == 'position':
+            # Position control: set position command
+            if self.use_relative_position:
+                target_position = self.initial_position + self.current_amplitude if self.initial_position is not None else self.current_amplitude
+            else:
+                target_position = self.target_position + self.current_amplitude
+            joint_msg.position = [target_position, 0.0]
+            joint_msg.velocity = [0.0, 0.0]
+            joint_msg.effort = [0.0, 0.0]
+            
+        elif self.control_mode == 'position_velocity':
+            # Position-velocity control: set position and velocity commands
+            if self.use_relative_position:
+                target_position = self.initial_position + self.current_amplitude if self.initial_position is not None else self.current_amplitude
+            else:
+                target_position = self.target_position + self.current_amplitude
+            joint_msg.position = [target_position, 0.0]
+            joint_msg.velocity = [0.0, 0.0]  # Zero velocity command
+            joint_msg.effort = [0.0, 0.0]
+            
+        else:  # effort control
+            # Effort control: set effort command
+            joint_msg.position = [0.0, 0.0]
+            joint_msg.velocity = [0.0, 0.0]
+            joint_msg.effort = [self.current_amplitude, 0.0]  # Step command for joint1
         
         # Publish command
         self.arm_control_pub.publish(joint_msg)
@@ -144,7 +203,7 @@ class ArmStepResponseTest:
         ))
         
         np.savetxt(
-            os.path.join(data_dir, f'step_response_{timestamp}.csv'),
+            os.path.join(data_dir, f'step_response_{self.control_mode}_{timestamp}.csv'),
             data,
             delimiter=',',
             header='time,position,velocity,effort,command',
@@ -152,41 +211,61 @@ class ArmStepResponseTest:
         )
         
         # Generate plots
-        plt.figure(figsize=(12, 8))
+        plt.figure(figsize=(12, 10))
         
         # Position plot
-        plt.subplot(311)
+        plt.subplot(411)
         plt.plot(time_array, position_array, 'b-', label='Position')
+        if self.control_mode in ['position', 'position_velocity']:
+            plt.plot(time_array, command_array, 'k--', label='Command')
         plt.grid(True)
         plt.ylabel('Position (rad)')
         plt.legend()
+        plt.title(f'Step Response Test - {self.control_mode.capitalize()} Control')
         
         # Velocity plot
-        plt.subplot(312)
+        plt.subplot(412)
         plt.plot(time_array, velocity_array, 'g-', label='Velocity')
         plt.grid(True)
         plt.ylabel('Velocity (rad/s)')
         plt.legend()
         
         # Effort plot
-        plt.subplot(313)
+        plt.subplot(413)
         plt.plot(time_array, effort_array, 'r-', label='Effort')
-        plt.plot(time_array, command_array, 'k--', label='Command')
+        if self.control_mode == 'effort':
+            plt.plot(time_array, command_array, 'k--', label='Command')
         plt.grid(True)
-        plt.xlabel('Time (s)')
         plt.ylabel('Effort (Nm)')
         plt.legend()
         
+        # Error plot (for position control modes)
+        plt.subplot(414)
+        if self.control_mode in ['position', 'position_velocity']:
+            error_array = position_array - command_array
+            plt.plot(time_array, error_array, 'm-', label='Position Error')
+            plt.ylabel('Error (rad)')
+        else:
+            # For effort control, show position vs time
+            plt.plot(time_array, position_array, 'c-', label='Position Response')
+            plt.ylabel('Position (rad)')
+        plt.grid(True)
+        plt.xlabel('Time (s)')
+        plt.legend()
+        
         # Add vertical lines to show command switches
-        for t in time_array[::int(self.switch_interval * self.sampling_rate)]:
-            plt.axvline(x=t, color='gray', linestyle='--', alpha=0.3)
+        for i in range(1, 4):  # Add to first 3 subplots
+            plt.subplot(4, 1, i)
+            for t in time_array[::int(self.switch_interval * self.sampling_rate)]:
+                plt.axvline(x=t, color='gray', linestyle='--', alpha=0.3)
         
         # Save plot
         plt.tight_layout()
-        plt.savefig(os.path.join(data_dir, f'step_response_{timestamp}.png'))
+        plt.savefig(os.path.join(data_dir, f'step_response_{self.control_mode}_{timestamp}.png'))
         plt.close()
         
         rospy.loginfo(f"Test data and plots saved to {data_dir}")
+        rospy.loginfo(f"Control mode: {self.control_mode}")
         rospy.loginfo(f"Data points collected: {min_length}")
         rospy.loginfo(f"Command range: [{min(command_array):.3f}, {max(command_array):.3f}]")
         

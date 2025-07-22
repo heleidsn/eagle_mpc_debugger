@@ -37,6 +37,26 @@ class SystemController:
         self.planning_process = None
         self.gepetto_process = None
         
+    def _stop_process_safely(self, process, process_name="Process"):
+        """Safely stop a process with timeout and fallback to force kill"""
+        if process:
+            try:
+                # First try graceful termination
+                process.terminate()
+                
+                # Wait for process to terminate (max 5 seconds)
+                try:
+                    process.wait(timeout=5)
+                    return True, f"{process_name} stopped successfully"
+                except subprocess.TimeoutExpired:
+                    # If graceful termination fails, force kill
+                    process.kill()
+                    process.wait(timeout=2)
+                    return True, f"{process_name} force killed"
+            except Exception as e:
+                return False, f"Failed to stop {process_name}: {str(e)}"
+        return True, f"{process_name} was not running"
+        
     def launch_system(self, config):
         """Launch the system with the given configuration"""
         try:
@@ -53,10 +73,9 @@ class SystemController:
     def stop_system(self):
         """Stop the running system"""
         try:
-            if self.launch_process:
-                self.launch_process.terminate()
-                self.launch_process = None
-            return True, "System stopped successfully"
+            success, message = self._stop_process_safely(self.launch_process, "System")
+            self.launch_process = None
+            return success, message
         except Exception as e:
             return False, str(e)
             
@@ -96,10 +115,14 @@ class SystemController:
     def stop_planning(self):
         """Stop the running planning process"""
         try:
-            if self.planning_process:
-                self.planning_process.terminate()
-                self.planning_process = None
-            return True, "Planning process stopped"
+            success, message = self._stop_process_safely(self.planning_process, "Planning process")
+            self.planning_process = None
+            
+            # Also kill any related Python processes
+            kill_cmd = "pkill -9 -f 'python.*run_planning'"
+            subprocess.run(kill_cmd, shell=True, stderr=subprocess.PIPE)
+            
+            return success, message
         except Exception as e:
             return False, str(e)
 
@@ -119,9 +142,8 @@ class SystemController:
         """Stop the running gepetto-gui process and all related processes"""
         try:
             # Kill the main gepetto-gui process if it exists
-            if self.gepetto_process:
-                self.gepetto_process.terminate()
-                self.gepetto_process = None
+            success, message = self._stop_process_safely(self.gepetto_process, "Gepetto-GUI")
+            self.gepetto_process = None
 
             # Kill all gepetto-related processes
             kill_cmd = "killall -9 gepetto-gui gepetto-viewer gepetto-viewer-server gepetto-viewer-corba"
@@ -193,17 +215,40 @@ class ROSCoreController:
         try:
             if self.roscore_process:
                 # Kill the roscore process and its children
-                parent = psutil.Process(self.roscore_process.pid)
-                children = parent.children(recursive=True)
-                for child in children:
-                    child.terminate()
-                parent.terminate()
+                try:
+                    parent = psutil.Process(self.roscore_process.pid)
+                    children = parent.children(recursive=True)
+                    for child in children:
+                        child.terminate()
+                    parent.terminate()
+                    
+                    # Wait for processes to terminate
+                    for child in children:
+                        try:
+                            child.wait(timeout=3)
+                        except psutil.TimeoutExpired:
+                            child.kill()
+                    try:
+                        parent.wait(timeout=3)
+                    except psutil.TimeoutExpired:
+                        parent.kill()
+                        
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass  # Process already terminated or access denied
+                    
                 self.roscore_process = None
                 
             # Also kill any remaining roscore processes
             for proc in psutil.process_iter(['pid', 'name']):
-                if 'roscore' in proc.info['name'].lower():
-                    proc.terminate()
+                try:
+                    if 'roscore' in proc.info['name'].lower():
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=2)
+                        except psutil.TimeoutExpired:
+                            proc.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
                     
             return True, "roscore stopped successfully"
         except Exception as e:
@@ -621,12 +666,25 @@ class EagleMPCDebuggerGUI(QMainWindow):
             
     def stop_planning(self):
         """Stop the running planning process"""
-        success, message = self.system_controller.stop_planning()
-        if success:
-            self.log_message("Planning process stopped")
-        else:
-            self.log_message(f"Failed to stop planning: {message}")
-            QMessageBox.critical(self, "Error", message)
+        try:
+            success, message = self.system_controller.stop_planning()
+            if success:
+                self.log_message("Planning process stopped")
+            else:
+                self.log_message(f"Failed to stop planning: {message}")
+                
+            # Also kill any related Python processes that might be running planning
+            kill_cmd = "pkill -9 -f 'python.*run_planning'"
+            subprocess.run(kill_cmd, shell=True, stderr=subprocess.PIPE)
+            
+            # Kill any remaining ROS nodes related to planning
+            kill_ros_cmd = "rosnode kill /run_planning"
+            subprocess.run(kill_ros_cmd, shell=True, stderr=subprocess.PIPE)
+            
+        except Exception as e:
+            error_msg = f"Failed to stop planning: {str(e)}"
+            self.log_message(error_msg)
+            QMessageBox.critical(self, "Error", error_msg)
             
     def launch_system(self):
         """Launch the system with current configuration"""
@@ -795,7 +853,17 @@ class EagleMPCDebuggerGUI(QMainWindow):
         try:
             # Kill the main simulation process if it exists
             if hasattr(self, 'simulation_process') and self.simulation_process:
+                # First try graceful termination
                 self.simulation_process.terminate()
+                
+                # Wait for process to terminate (max 5 seconds)
+                try:
+                    self.simulation_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    # If graceful termination fails, force kill
+                    self.simulation_process.kill()
+                    self.simulation_process.wait(timeout=2)
+                
                 self.simulation_process = None
 
             # Kill all related ROS nodes
@@ -872,9 +940,30 @@ class EagleMPCDebuggerGUI(QMainWindow):
         """Stop the MPC controller"""
         try:
             if hasattr(self, 'mpc_controller_process') and self.mpc_controller_process:
+                # First try graceful termination
                 self.mpc_controller_process.terminate()
+                
+                # Wait for process to terminate (max 5 seconds)
+                try:
+                    self.mpc_controller_process.wait(timeout=5)
+                    self.log_message("MPC controller stopped successfully")
+                except subprocess.TimeoutExpired:
+                    # If graceful termination fails, force kill
+                    self.log_message("Graceful termination failed, forcing kill...")
+                    self.mpc_controller_process.kill()
+                    self.mpc_controller_process.wait(timeout=2)
+                    self.log_message("MPC controller force killed")
+                
                 self.mpc_controller_process = None
-                self.log_message("MPC controller stopped successfully")
+                
+                # Also kill any related Python processes that might be running MPC
+                kill_cmd = "pkill -9 -f 'python.*trajectory_publisher_mpc'"
+                subprocess.run(kill_cmd, shell=True, stderr=subprocess.PIPE)
+                
+                # Kill any remaining ROS nodes related to MPC
+                kill_ros_cmd = "rosnode kill /trajectory_publisher_mpc"
+                subprocess.run(kill_ros_cmd, shell=True, stderr=subprocess.PIPE)
+                
         except Exception as e:
             error_msg = f"Failed to stop MPC controller: {str(e)}"
             self.log_message(error_msg)
