@@ -63,6 +63,13 @@
   <exec_depend>rqt_reconfigure</exec_depend>
   <depend>python3-pyqt5</depend>
   <depend>python3-yaml</depend>
+  <exec_depend>controller_manager</exec_depend>
+  <exec_depend>controller_manager_msgs</exec_depend>
+  <exec_depend>position_controllers</exec_depend>
+  <exec_depend>velocity_controllers</exec_depend>
+  <exec_depend>effort_controllers</exec_depend>
+  <exec_depend>joint_state_controller</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
 
 
   <!-- The export tag contains other, unspecified, tags -->

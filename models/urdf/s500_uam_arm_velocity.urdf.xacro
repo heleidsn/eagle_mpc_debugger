@@ -60,7 +60,7 @@
     <parent link="base_link"/>
     <child link="link_1"/>
     <axis xyz="0 1 0"/>
-    <limit lower="-1.57" upper="1.57" effort="10" velocity="1"/>
+    <limit lower="-1.57" upper="1.57" effort="2" velocity="1"/>
   </joint>
 
   <!-- Link 2 -->
@@ -90,7 +90,7 @@
     <parent link="link_1"/>
     <child link="link_2"/>
     <axis xyz="0 1 0"/>
-    <limit lower="-1.57" upper="1.57" effort="10" velocity="1"/>
+    <limit lower="-1.57" upper="1.57" effort="2" velocity="1"/>
   </joint>
 
   <!-- Link 3 (Gripper Left Finger) -->
@@ -120,7 +120,7 @@
     <parent link="link_2"/>
     <child link="link_3"/>
     <axis xyz="0 1 0"/>
-    <limit lower="-1.57" upper="1.57" effort="10" velocity="1"/>
+    <limit lower="-1.57" upper="1.57" effort="2" velocity="1"/>
   </joint>
 
   <!-- Link 4 (Gripper Right Finger - mimic) -->
@@ -150,29 +150,25 @@
     <parent link="link_2"/>
     <child link="link_4"/>
     <axis xyz="0 1 0"/>
-    <limit lower="-1.57" upper="1.57" effort="10" velocity="1"/>
+    <limit lower="-1.57" upper="1.57" effort="2" velocity="1"/>
   </joint>
 
   <!-- Transmissions for ros_control -->
   <transmission name="joint_1_trans">
     <type>transmission_interface/SimpleTransmission</type>
     <joint name="joint_1">
-      <hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface>
+      <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
     </joint>
     <actuator name="joint_1_motor">
-      <hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface>
-      <mechanicalReduction>1.0</mechanicalReduction>
     </actuator>
   </transmission>
 
   <transmission name="joint_2_trans">
     <type>transmission_interface/SimpleTransmission</type>
     <joint name="joint_2">
-      <hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface>
+      <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
     </joint>
     <actuator name="joint_2_motor">
-      <hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface>
-      <mechanicalReduction>1.0</mechanicalReduction>
     </actuator>
   </transmission>
 
@@ -182,8 +178,6 @@
       <hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface>
     </joint>
     <actuator name="joint_3_motor">
-      <hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface>
-      <mechanicalReduction>1.0</mechanicalReduction>
     </actuator>
   </transmission>
 
@@ -193,8 +187,6 @@
       <hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface>
     </joint>
     <actuator name="joint_4_motor">
-      <hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface>
-      <mechanicalReduction>1.0</mechanicalReduction>
     </actuator>
   </transmission>
   <gazebo>

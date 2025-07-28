@@ -1,0 +1,473 @@
+<sdf version='1.7'>
+  <world name='default'>
+    <light name='sun' type='directional'>
+      <cast_shadows>1</cast_shadows>
+      <pose>0 0 10 0 -0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <attenuation>
+        <range>1000</range>
+        <constant>0.9</constant>
+        <linear>0.01</linear>
+        <quadratic>0.001</quadratic>
+      </attenuation>
+      <direction>-0.5 0.1 -0.9</direction>
+      <spot>
+        <inner_angle>0</inner_angle>
+        <outer_angle>0</outer_angle>
+        <falloff>0</falloff>
+      </spot>
+    </light>
+    <model name='ground_plane'>
+      <static>1</static>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>65535</collide_bitmask>
+              <ode/>
+            </contact>
+            <friction>
+              <ode>
+                <mu>100</mu>
+                <mu2>50</mu2>
+              </ode>
+              <torsional>
+                <ode/>
+              </torsional>
+            </friction>
+            <bounce/>
+          </surface>
+          <max_contacts>10</max_contacts>
+        </collision>
+        <visual name='visual'>
+          <cast_shadows>0</cast_shadows>
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+          <material>
+            <script>
+              <uri>file://media/materials/scripts/gazebo.material</uri>
+              <name>Gazebo/Grey</name>
+            </script>
+          </material>
+        </visual>
+        <self_collide>0</self_collide>
+        <enable_wind>0</enable_wind>
+        <kinematic>0</kinematic>
+      </link>
+    </model>
+    <gravity>0 0 -9.8</gravity>
+    <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
+    <atmosphere type='adiabatic'/>
+    <physics type='ode'>
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1</real_time_factor>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+    <scene>
+      <ambient>0.4 0.4 0.4 1</ambient>
+      <background>0.7 0.7 0.7 1</background>
+      <shadows>1</shadows>
+    </scene>
+    <wind/>
+    <spherical_coordinates>
+      <surface_model>EARTH_WGS84</surface_model>
+      <latitude_deg>0</latitude_deg>
+      <longitude_deg>0</longitude_deg>
+      <elevation>0</elevation>
+      <heading_deg>0</heading_deg>
+    </spherical_coordinates>
+    <!-- <state world_name='default'>
+      <sim_time>749 934000000</sim_time>
+      <real_time>99 424567569</real_time>
+      <wall_time>1751970098 669734372</wall_time>
+      <iterations>99319</iterations>
+      <model name='beer'>
+        <pose>-0 -0.12 0.83 -1.5708 -1.50229 -1.8e-05</pose>
+        <scale>1 1 1</scale>
+        <link name='link'>
+          <pose>2e-06 -0.005 0.83 -1.5708 -1.50229 -1.8e-05</pose>
+          <velocity>0 0 0 0 -0 0</velocity>
+          <acceleration>-0 -2.3e-05 -1.1e-05 0.000409 -0 0</acceleration>
+          <wrench>-0 -9e-06 -4e-06 0 -0 0</wrench>
+        </link>
+      </model>
+      <model name='cafe_table'>
+        <pose>0 0 0 0 -0 0</pose>
+        <scale>1 1 1</scale>
+        <link name='link'>
+          <pose>0 0 0 0 -0 0</pose>
+          <velocity>0 0 0 0 -0 0</velocity>
+          <acceleration>0 0 0 0 -0 0</acceleration>
+          <wrench>0 0 0 0 -0 0</wrench>
+        </link>
+      </model>
+      <model name='ground_plane'>
+        <pose>0 0 0 0 -0 0</pose>
+        <scale>1 1 1</scale>
+        <link name='link'>
+          <pose>0 0 0 0 -0 0</pose>
+          <velocity>0 0 0 0 -0 0</velocity>
+          <acceleration>0 0 0 0 -0 0</acceleration>
+          <wrench>0 0 0 0 -0 0</wrench>
+        </link>
+      </model>
+      <model name='s500_uam'>
+        <pose>-1.5027 6.6e-05 0.174911 -0.000345 1.2e-05 0.001187</pose>
+        <scale>1 1 1</scale>
+        <link name='/imu_link'>
+          <pose>-1.5027 7.2e-05 0.194911 -0.000345 1.2e-05 0.001187</pose>
+          <velocity>1e-06 1e-06 0 -6e-06 4e-06 0</velocity>
+          <acceleration>0 0 0 0 -0 0</acceleration>
+          <wrench>0 0 0 0 -0 0</wrench>
+        </link>
+        <link name='arm_cam_link'>
+          <pose>-1.31017 0.000265 0.088911 -3.14006 -1.34436 3.14129</pose>
+          <velocity>0 1e-06 -0 -6e-06 5e-06 0</velocity>
+          <acceleration>-0.000325 -3e-06 -0.000226 1e-06 -0.003824 -4e-06</acceleration>
+          <wrench>-0 -0 -0 0 -0 0</wrench>
+        </link>
+        <link name='base_link'>
+          <pose>-1.5027 6.6e-05 0.174911 -0.000345 1.2e-05 0.001187</pose>
+          <velocity>1e-06 1e-06 0 -6e-06 4e-06 0</velocity>
+          <acceleration>0 0 0 -0.001616 -0 0.000946</acceleration>
+          <wrench>0 0 0 0 -0 0</wrench>
+        </link>
+        <link name='gps0::link'>
+          <pose>-1.4527 0.000139 0.21491 -0.000345 1.2e-05 0.001187</pose>
+          <velocity>1e-06 1e-06 -0 -6e-06 4e-06 0</velocity>
+          <acceleration>0 0 0 0 -0 0</acceleration>
+          <wrench>0 0 0 0 -0 0</wrench>
+        </link>
+        <link name='link_1'>
+          <pose>-1.502 4.1e-05 0.102161 -0.000949 -1.198 0.002073</pose>
+          <velocity>0 1e-06 0 -6e-06 0 0</velocity>
+          <acceleration>-0.000183 -1e-06 -0.000469 1.23215 0.004329 1.20053</acceleration>
+          <wrench>-1e-05 -0 -2.7e-05 0 -0 0</wrench>
+        </link>
+        <link name='link_2'>
+          <pose>-1.40957 0.000139 0.066011 -3.14006 -1.34436 3.14129</pose>
+          <velocity>0 0 0 -6e-06 5e-06 0</velocity>
+          <acceleration>-0.000301 -3e-06 -0.000337 2.97036 1.39836 -1.24454</acceleration>
+          <wrench>-2e-05 -0 -2.2e-05 0 -0 0</wrench>
+        </link>
+        <link name='link_3'>
+          <pose>-1.32695 0.00024 0.073758 3.14081 1.11061 0.000487</pose>
+          <velocity>0 0 -0 -6e-06 0.00038 0</velocity>
+          <acceleration>-0.001762 -1.1e-05 -0.017021 -2.64941 0.330021 -2.40339</acceleration>
+          <wrench>-2.1e-05 -0 -0.000207 0 -0 0</wrench>
+        </link>
+        <link name='link_4'>
+          <pose>-1.33189 0.000241 0.095196 -0.009465 -1.53436 0.010647</pose>
+          <velocity>1e-06 1e-06 -0 -5e-06 -0.000382 0</velocity>
+          <acceleration>-0.010289 -9e-06 0.017307 2.15428 -0.448537 0.139177</acceleration>
+          <wrench>-0.00013 -0 0.000218 0 -0 0</wrench>
+        </link>
+        <link name='rgbd_camera_link'>
+          <pose>-1.4061 0.000183 0.181909 -0.000488 0.785012 0.000842</pose>
+          <velocity>1e-06 1e-06 -0 -6e-06 4e-06 0</velocity>
+          <acceleration>0 0 0 0 -0 0</acceleration>
+          <wrench>0 0 0 0 -0 0</wrench>
+        </link>
+        <link name='rotor_0'>
+          <pose>-1.3315 -0.170707 0.244968 -0.000345 1.2e-05 6.2e-05</pose>
+          <velocity>1e-06 1e-06 0 -6e-06 4e-06 0</velocity>
+          <acceleration>0 0 -0 0 -0 0</acceleration>
+          <wrench>0 0 -0 0 -0 0</wrench>
+        </link>
+        <link name='rotor_1'>
+          <pose>-1.6739 0.170887 0.244854 -0.000345 1.2e-05 6.2e-05</pose>
+          <velocity>1e-06 1e-06 -0 -6e-06 4e-06 0</velocity>
+          <acceleration>-0 -0 0 0 -0 0</acceleration>
+          <wrench>-0 -0 0 0 -0 0</wrench>
+        </link>
+        <link name='rotor_2'>
+          <pose>-1.3319 0.171293 0.244849 -0.000345 1.2e-05 6.2e-05</pose>
+          <velocity>1e-06 1e-06 -1e-06 -6e-06 4e-06 0</velocity>
+          <acceleration>-0 0 0 0 -0 0</acceleration>
+          <wrench>-0 0 0 0 -0 0</wrench>
+        </link>
+        <link name='rotor_3'>
+          <pose>-1.6735 -0.171113 0.244972 -0.000345 1.2e-05 6.2e-05</pose>
+          <velocity>1e-06 1e-06 2e-06 -6e-06 4e-06 0</velocity>
+          <acceleration>0 -0 -0 0 -0 0</acceleration>
+          <wrench>0 -0 -0 0 -0 0</wrench>
+        </link>
+      </model>
+      <model name='unit_box'>
+        <pose>-1.5 -1.78689 0.5 0 -0 0</pose>
+        <scale>1 1 1</scale>
+        <link name='link'>
+          <pose>-1.5 -1.78689 0.5 0 -0 0</pose>
+          <velocity>0 0 0 0 -0 0</velocity>
+          <acceleration>-0.004709 -9.78112 9.78158 0.712677 -0.009414 -4.3e-05</acceleration>
+          <wrench>-0.004709 -9.78112 9.78158 0 -0 0</wrench>
+        </link>
+      </model>
+      <light name='sun'>
+        <pose>0 0 10 0 -0 0</pose>
+      </light>
+    </state> -->
+    <gui fullscreen='0'>
+      <camera name='user_camera'>
+        <pose>-6.6627 -5.3902 5.57121 0 0.544 0.647997</pose>
+        <view_controller>orbit</view_controller>
+        <projection_type>perspective</projection_type>
+      </camera>
+    </gui>
+    <model name='beer'>
+      <link name='link'>
+        <pose>0 0 0.8 -1.57 0 0</pose>
+        <inertial>
+          <mass>0.39</mass>
+          <inertia>
+            <ixx>0.00058</ixx>
+            <ixy>0</ixy>
+            <ixz>0</ixz>
+            <iyy>0.00058</iyy>
+            <iyz>0</iyz>
+            <izz>0.00019</izz>
+          </inertia>
+          <pose>0 0 0 0 -0 0</pose>
+        </inertial>
+        <collision name='collision'>
+          <geometry>
+            <cylinder>
+              <radius>0.055</radius>
+              <length>0.23</length>
+            </cylinder>
+          </geometry>
+          <max_contacts>10</max_contacts>
+          <surface>
+            <contact>
+              <ode/>
+            </contact>
+            <bounce/>
+            <friction>
+              <torsional>
+                <ode/>
+              </torsional>
+              <ode/>
+            </friction>
+          </surface>
+        </collision>
+        <visual name='visual'>
+          <geometry>
+            <cylinder>
+              <radius>0.055</radius>
+              <length>0.23</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <script>
+              <uri>model://beer/materials/scripts</uri>
+              <uri>model://beer/materials/textures</uri>
+              <name>Beer/Diffuse</name>
+            </script>
+          </material>
+        </visual>
+        <self_collide>0</self_collide>
+        <enable_wind>0</enable_wind>
+        <kinematic>0</kinematic>
+      </link>
+      <pose>0 0 0 0 0 0</pose>
+    </model>
+    <model name='cafe_table'>
+      <static>1</static>
+      <link name='link'>
+        <collision name='surface'>
+          <pose>0 0 0.755 0 -0 0</pose>
+          <geometry>
+            <box>
+              <size>0.913 0.913 0.04</size>
+            </box>
+          </geometry>
+          <max_contacts>10</max_contacts>
+          <surface>
+            <contact>
+              <ode/>
+            </contact>
+            <bounce/>
+            <friction>
+              <torsional>
+                <ode/>
+              </torsional>
+              <ode/>
+            </friction>
+          </surface>
+        </collision>
+        <collision name='column'>
+          <pose>0 0 0.37 0 -0 0</pose>
+          <geometry>
+            <box>
+              <size>0.042 0.042 0.74</size>
+            </box>
+          </geometry>
+          <max_contacts>10</max_contacts>
+          <surface>
+            <contact>
+              <ode/>
+            </contact>
+            <bounce/>
+            <friction>
+              <torsional>
+                <ode/>
+              </torsional>
+              <ode/>
+            </friction>
+          </surface>
+        </collision>
+        <collision name='base'>
+          <pose>0 0 0.02 0 -0 0</pose>
+          <geometry>
+            <box>
+              <size>0.56 0.56 0.04</size>
+            </box>
+          </geometry>
+          <max_contacts>10</max_contacts>
+          <surface>
+            <contact>
+              <ode/>
+            </contact>
+            <bounce/>
+            <friction>
+              <torsional>
+                <ode/>
+              </torsional>
+              <ode/>
+            </friction>
+          </surface>
+        </collision>
+        <visual name='visual'>
+          <geometry>
+            <mesh>
+              <uri>model://cafe_table/meshes/cafe_table.dae</uri>
+            </mesh>
+          </geometry>
+        </visual>
+        <self_collide>0</self_collide>
+        <enable_wind>0</enable_wind>
+        <kinematic>0</kinematic>
+      </link>
+      <pose>0.0 0.0 0 0 0 0</pose>
+    </model>
+    <model name='unit_box_1'>
+      <static>1</static>
+      <pose>-1.5 0.17 0.1 0 -0 0</pose>
+      <link name='link'>
+        <inertial>
+          <mass>1</mass>
+          <inertia>
+            <ixx>0.166667</ixx>
+            <ixy>0</ixy>
+            <ixz>0</ixz>
+            <iyy>0.166667</iyy>
+            <iyz>0</iyz>
+            <izz>0.166667</izz>
+          </inertia>
+          <pose>0 0 0 0 -0 0</pose>
+        </inertial>
+        <collision name='collision'>
+          <geometry>
+            <box>
+              <size>0.2 0.2 0.2</size>
+            </box>
+          </geometry>
+          <max_contacts>10</max_contacts>
+          <surface>
+            <contact>
+              <ode/>
+            </contact>
+            <bounce/>
+            <friction>
+              <torsional>
+                <ode/>
+              </torsional>
+              <ode/>
+            </friction>
+          </surface>
+        </collision>
+        <visual name='visual'>
+          <geometry>
+            <box>
+              <size>0.2 0.2 0.2</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <name>Gazebo/Grey</name>
+              <uri>file://media/materials/scripts/gazebo.material</uri>
+            </script>
+          </material>
+        </visual>
+        <self_collide>0</self_collide>
+        <enable_wind>0</enable_wind>
+        <kinematic>0</kinematic>
+      </link>
+    </model>
+    <model name='unit_box_2'>
+      <static>1</static>
+      <pose>-1.5 -0.17 0.1 0 -0 0</pose>
+      <link name='link'>
+        <inertial>
+          <mass>1</mass>
+          <inertia>
+            <ixx>0.166667</ixx>
+            <ixy>0</ixy>
+            <ixz>0</ixz>
+            <iyy>0.166667</iyy>
+            <iyz>0</iyz>
+            <izz>0.166667</izz>
+          </inertia>
+          <pose>0 0 0 0 -0 0</pose>
+        </inertial>
+        <collision name='collision'>
+          <geometry>
+            <box>
+              <size>0.2 0.2 0.2</size>
+            </box>
+          </geometry>
+          <max_contacts>10</max_contacts>
+          <surface>
+            <contact>
+              <ode/>
+            </contact>
+            <bounce/>
+            <friction>
+              <torsional>
+                <ode/>
+              </torsional>
+              <ode/>
+            </friction>
+          </surface>
+        </collision>
+        <visual name='visual'>
+          <geometry>
+            <box>
+              <size>0.2 0.2 0.2</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <name>Gazebo/Grey</name>
+              <uri>file://media/materials/scripts/gazebo.material</uri>
+            </script>
+          </material>
+        </visual>
+        <self_collide>0</self_collide>
+        <enable_wind>0</enable_wind>
+        <kinematic>0</kinematic>
+      </link>
+    </model>
+  </world>
+</sdf>

@@ -1,13 +1,13 @@
 <?xml version="1.0"?>
 <launch>
-    <!-- MAVROS posix SITL environment launch script -->
-    <!-- launches MAVROS, PX4 SITL, Gazebo environment, and spawns vehicle -->
-    <!-- vehicle model and world -->
     <arg name="vehicle" default="s500_uam"/>
-    <arg name="world_name" default="empty"/>
+    <arg name="world_name" default="table_beer_with_stand"/>
+    <arg name="use_camera" default="false"/>
+    <arg name="arm_control_mode" default="effort"/>
     
     <arg name="world" default="$(find eagle_mpc_debugger)/worlds/$(arg world_name).world"/>
-    <arg name="sdf" default="$(find eagle_mpc_debugger)/models/sdf/s500_uam/s500_uam.sdf"/>
+    <arg name="sdf" default="$(find eagle_mpc_debugger)/models/sdf/s500_uam/s500_uam_camera.sdf"/>
+    <arg name="sdf_no_camera" default="$(find eagle_mpc_debugger)/models/sdf/s500_uam/s500_uam.sdf"/>
 
     <!-- gazebo configs -->
     <arg name="gui" default="true"/>
@@ -32,7 +32,8 @@
     <!-- Gazebo sim add arm initial position-->
     <arg name="x" default="-1.5"/>
     <arg name="y" default="0"/>
-    <arg name="z" default="0"/>
+    <arg name="z" default="0.35" if="$(eval arg('world_name') == 'table_beer_with_stand')"/>
+    <arg name="z" default="0" unless="$(eval arg('world_name') == 'table_beer_with_stand')"/>
     <arg name="joint_1_pos" default="-1.2"/>
     <arg name="joint_2_pos" default="-0.6"/>
     <arg name="joint_3_pos" default="0.0"/>
@@ -46,30 +47,30 @@
         <arg name="respawn_gazebo" value="$(arg respawn_gazebo)"/>
     </include>
     <!-- gazebo model -->
-    <node name="$(anon vehicle_spawn)" pkg="gazebo_ros" type="spawn_model" output="screen" args="-sdf -file $(arg sdf) -model $(arg vehicle) -x $(arg x) -y $(arg y) -z $(arg z) -J joint_1 $(arg joint_1_pos) -J joint_2 $(arg joint_2_pos) -J joint_3 $(arg joint_3_pos) -J joint_4 $(arg joint_4_pos)" />
+    <arg name="sdf_file" value="$(arg sdf)" if="$(arg use_camera)"/>
+    <arg name="sdf_file" value="$(arg sdf_no_camera)" unless="$(arg use_camera)"/>
+    <node name="$(anon vehicle_spawn)" pkg="gazebo_ros" type="spawn_model" output="screen" args="-sdf -file $(arg sdf_file) -model $(arg vehicle) -x $(arg x) -y $(arg y) -z $(arg z) -J joint_1 $(arg joint_1_pos) -J joint_2 $(arg joint_2_pos) -J joint_3 $(arg joint_3_pos) -J joint_4 $(arg joint_4_pos)" />
 
     <include file="$(find mavros)/launch/px4.launch">
-        <!-- GCS link is provided by SITL -->
         <arg name="gcs_url" value=""/>
         <arg name="fcu_url" value="$(arg fcu_url)"/>
         <arg name="respawn_mavros" value="$(arg respawn_mavros)"/>
     </include>
 
     <!-- robot description -->
-    <param name="arm_controller/robot_description"
-         command="$(find xacro)/xacro $(find eagle_mpc_debugger)/models/urdf/s500_uam_arm.urdf.xacro"/>
+    <param name="robot_description" command="$(find xacro)/xacro $(find eagle_mpc_debugger)/models/urdf/s500_uam_arm_$(arg arm_control_mode).urdf.xacro"/>
 
     <!-- arm controller -->
-    <rosparam ns="arm_controller" file="$(find eagle_mpc_debugger)/config/arm_controllers.yaml" command="load"/>
+    <rosparam ns="arm_controller" file="$(find eagle_mpc_debugger)/config/arm_controllers_$(arg arm_control_mode).yaml" command="load"/>
 
     <!-- Spawn controllers with correct namespace and controller manager -->
     <node name="spawn_arm_controllers" pkg="controller_manager" type="spawner" output="screen"
         args="
         joint_state_controller
-        joint_1_position_controller
-        joint_2_position_controller
-        joint_3_position_controller
-        joint_4_position_controller
+        joint_1_controller
+        joint_2_controller
+        joint_3_controller
+        joint_4_controller
         "
         ns="arm_controller"
         respawn="false">
