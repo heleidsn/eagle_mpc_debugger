@@ -275,7 +275,7 @@ class MPCDisplayGUI(QMainWindow):
     def init_ui(self):
         """Initialize the user interface"""
         self.setWindowTitle('MPC ROS Data Display')
-        self.setGeometry(100, 100, 1800, 1400)
+        self.setGeometry(100, 100, 2800, 1400)
         
         # Create central widget
         central_widget = QWidget()
@@ -429,7 +429,7 @@ class MPCDisplayGUI(QMainWindow):
         plots_layout.addWidget(self.plots['predicted_velocities'], 1, 3)
         plots_layout.addWidget(self.plots['predicted_controls'], 2, 0, 1, 2)  # Span 2 columns
         
-        parent_layout.addWidget(plots_widget, 2)
+        parent_layout.addWidget(plots_widget, 4)  # 增加图表区域占比
     
     def create_control_panel(self, parent_layout):
         """Create the control panel"""
@@ -506,7 +506,8 @@ class MPCDisplayGUI(QMainWindow):
         control_layout.addWidget(status_group)
         
         control_layout.addStretch()
-        parent_layout.addWidget(control_widget, 1)
+        parent_layout.addWidget(control_widget, 0)  # 固定宽度，不拉伸
+        control_widget.setFixedWidth(300)  # 设置固定宽度为300像素
     
     def create_info_panel(self, parent_layout):
         """Create the information panel"""
@@ -582,7 +583,8 @@ class MPCDisplayGUI(QMainWindow):
         info_layout.addWidget(error_group)
         
         info_layout.addStretch()
-        parent_layout.addWidget(info_widget, 1)
+        parent_layout.addWidget(info_widget, 0)  # 固定宽度，不拉伸
+        info_widget.setFixedWidth(300)  # 设置固定宽度为250像素
     
     def update_display(self, data):
         """Update display with new data"""

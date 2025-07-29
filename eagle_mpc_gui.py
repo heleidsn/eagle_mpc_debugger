@@ -176,6 +176,7 @@ class ROSServiceHandler:
             self.services['initialize_trajectory'] = rospy.ServiceProxy('/initialize_trajectory', Trigger)
             self.services['start_l1_control'] = rospy.ServiceProxy('/start_l1_control', Trigger)
             self.services['stop_l1_control'] = rospy.ServiceProxy('/stop_l1_control', Trigger)
+            self.services['start_arm_test'] = rospy.ServiceProxy('/start_arm_test', Trigger)
         except rospy.ServiceException as e:
             rospy.logerr(f"Failed to initialize services: {str(e)}")
             
@@ -284,7 +285,7 @@ class EagleMPCDebuggerGUI(QMainWindow):
         
         # Define trajectory mapping for each robot
         self.robot_trajectories = {
-            "s500_uam": ["catch_vicon", "catch_vicon_real", "displacement"],
+            "s500_uam": ["catch_vicon", "catch_vicon_real", "displacement", "arm_test"],
             "s500": ["hover", "displacement", "displacement_real"],
             "hexacopter370_flying_arm_3": ["eagle_catch_nc"]
         }
@@ -486,11 +487,31 @@ class EagleMPCDebuggerGUI(QMainWindow):
         world_selection_layout = QHBoxLayout()
         world_label = QLabel("Gazebo World:")
         self.world_combo = QComboBox()
-        self.world_combo.addItems(["empty", "table_beer"])
-        self.world_combo.setCurrentText("empty")
+        self.world_combo.addItems(["empty", "table_beer", "table_beer_with_stand"])
+        self.world_combo.setCurrentText("table_beer_with_stand")
         world_selection_layout.addWidget(world_label)
         world_selection_layout.addWidget(self.world_combo)
         simulation_layout.addLayout(world_selection_layout)
+        
+        # Add camera selection
+        camera_selection_layout = QHBoxLayout()
+        camera_label = QLabel("Camera:")
+        self.camera_combo = QComboBox()
+        self.camera_combo.addItems(["True", "False"])
+        self.camera_combo.setCurrentText("False")
+        camera_selection_layout.addWidget(camera_label)
+        camera_selection_layout.addWidget(self.camera_combo)
+        simulation_layout.addLayout(camera_selection_layout)
+        
+        # Add arm control mode selection
+        arm_control_mode_selection_layout = QHBoxLayout()
+        arm_control_mode_label = QLabel("Arm Control Mode:")
+        self.arm_control_mode_combo = QComboBox()
+        self.arm_control_mode_combo.addItems(["position", "velocity", "effort"])
+        self.arm_control_mode_combo.setCurrentText("effort")
+        arm_control_mode_selection_layout.addWidget(arm_control_mode_label)
+        arm_control_mode_selection_layout.addWidget(self.arm_control_mode_combo)
+        simulation_layout.addLayout(arm_control_mode_selection_layout)
         
         # ROSCore Control
         self.start_roscore_btn = QPushButton("Start ROSCore")
@@ -542,6 +563,10 @@ class EagleMPCDebuggerGUI(QMainWindow):
         self.start_trajectory_btn = QPushButton("Start Trajectory")
         self.start_trajectory_btn.clicked.connect(self.start_trajectory)
         service_layout.addWidget(self.start_trajectory_btn)
+        
+        self.start_arm_test_btn = QPushButton("Start Arm Test")
+        self.start_arm_test_btn.clicked.connect(self.start_arm_test)
+        service_layout.addWidget(self.start_arm_test_btn)
         
         self.initialize_trajectory_btn = QPushButton("Initialize Trajectory")
         self.initialize_trajectory_btn.clicked.connect(self.initialize_trajectory)
@@ -757,6 +782,14 @@ class EagleMPCDebuggerGUI(QMainWindow):
             self.log_message("Trajectory started")
         else:
             self.log_message(f"Failed to start trajectory: {message}")
+
+    def start_arm_test(self):
+        """Start the arm test"""
+        success, message = self.service_handler.call_service('start_arm_test')
+        if success:
+            self.log_message("Arm test started")
+        else:
+            self.log_message(f"Failed to start arm test: {message}")
             
     def initialize_trajectory(self):
         """Initialize the trajectory"""
@@ -827,6 +860,8 @@ class EagleMPCDebuggerGUI(QMainWindow):
             # Get selected robot name and world
             robot_name = self.robot_combo.currentText()
             world_name = self.world_combo.currentText()
+            use_camera = self.camera_combo.currentText()
+            arm_control_mode = self.arm_control_mode_combo.currentText()
             
             # Select appropriate launch file based on robot name
             if robot_name == "s500_uam":
@@ -839,7 +874,7 @@ class EagleMPCDebuggerGUI(QMainWindow):
                 raise ValueError(f"No simulation launch file available for robot: {robot_name}")
             
             # Launch the simulation script with world parameter
-            cmd = f"roslaunch eagle_mpc_debugger {launch_file} world_name:={world_name}"
+            cmd = f"roslaunch eagle_mpc_debugger {launch_file} world_name:={world_name} use_camera:={use_camera} arm_control_mode:={arm_control_mode}"
             self.simulation_process = subprocess.Popen(cmd, shell=True, env=env)
             self.log_message(f"Simulation environment launched successfully for {robot_name} with world: {world_name}")
             self.simulation_status.setText("Running")

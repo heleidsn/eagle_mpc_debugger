@@ -73,7 +73,7 @@ class TrajectoryPublisher:
             # running on PC
             self.control_rate = rospy.get_param('~control_rate', 50.0)
             self.odom_source = rospy.get_param('~odom_source', 'gazebo')
-            self.use_simulation = rospy.get_param('~use_simulation', False)
+            self.use_simulation = rospy.get_param('~use_simulation', True)
             
             self.publish_planned_trajectory_enabled = rospy.get_param('~publish_planned_trajectory', False)
             self.publish_wholebody_state_enabled = rospy.get_param('~publish_wholebody_state', False)
@@ -87,7 +87,7 @@ class TrajectoryPublisher:
 
         # Get parameters
         self.robot_name = rospy.get_param('~robot_name', 's500_uam')     # s500, s500_uam, hexacopter370_flying_arm_3
-        self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon_offset')   # displacement, catch_vicon
+        self.trajectory_name = rospy.get_param('~trajectory_name', 'arm_test')   # displacement, catch_vicon
         self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 50)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
         self.yaml_path = rospy.get_param('~yaml_path', 'config/yaml')
@@ -96,7 +96,7 @@ class TrajectoryPublisher:
         
         self.control_mode = rospy.get_param('~control_mode', 'MPC')  # MPC, Geometric, PX4, MPC_L1
         self.arm_enabled = rospy.get_param('~arm_enabled', True)
-        self.arm_control_mode = rospy.get_param('~arm_control_mode', 'velocity')  # position, velocity, position_velocity, position_velocity_effort, effort
+        self.arm_control_mode = rospy.get_param('~arm_control_mode', 'position')  # position, velocity, position_velocity, position_velocity_effort, effort
         
         self.max_thrust = rospy.get_param('~max_thrust', 8.0664 * 4)
         
@@ -155,10 +155,10 @@ class TrajectoryPublisher:
         self.arm_control_pub = rospy.Publisher('/desired_joint_states', JointState, queue_size=10)
         
         # Create publishers for each joint position controller
-        self.joint1_pub = rospy.Publisher('/arm_controller/joint_1_position_controller/command', Float64, queue_size=10)
-        self.joint2_pub = rospy.Publisher('/arm_controller/joint_2_position_controller/command', Float64, queue_size=10)
-        self.joint3_pub = rospy.Publisher('/arm_controller/joint_3_position_controller/command', Float64, queue_size=10)
-        self.joint4_pub = rospy.Publisher('/arm_controller/joint_4_position_controller/command', Float64, queue_size=10)
+        self.joint1_pub = rospy.Publisher('/arm_controller/joint_1_controller/command', Float64, queue_size=10)
+        self.joint2_pub = rospy.Publisher('/arm_controller/joint_2_controller/command', Float64, queue_size=10)
+        self.joint3_pub = rospy.Publisher('/arm_controller/joint_3_controller/command', Float64, queue_size=10)
+        self.joint4_pub = rospy.Publisher('/arm_controller/joint_4_controller/command', Float64, queue_size=10)
         
         # arm control publisher
         
@@ -902,7 +902,8 @@ class TrajectoryPublisher:
         
         mpc_planned_state = self.mpc_controller.solver.xs[0]
         mpc_planned_state_next = self.mpc_controller.solver.xs[1]
-        ref_state = mpc_planned_state_next
+        
+        ref_state = ref_state
         
         current_time = rospy.Time.now()
         
@@ -947,7 +948,7 @@ class TrajectoryPublisher:
             joint_msg.velocity = [0.0, 0.0]
             # input effort for dynamixel_interface API is A not torque, we need to convert torque to current in A
             # a = 0.55221504
-            a = 0.5
+            a = 1.0
             b = 0.0
             
             torque_in_Nm = np.array([self.control_command[-2] + self.l1_controller.u_ad[-2], self.control_command[-1] + self.l1_controller.u_ad[-1]])
@@ -970,8 +971,16 @@ class TrajectoryPublisher:
         
         if self.use_simulation:
             # Control arm joints
-            self.joint1_pub.publish(Float64(joint_msg.position[0]))
-            self.joint2_pub.publish(Float64(joint_msg.position[1]))
+            if self.arm_control_mode == 'position':
+                self.joint1_pub.publish(Float64(joint_msg.position[0]))
+                self.joint2_pub.publish(Float64(joint_msg.position[1]))
+            elif self.arm_control_mode == 'velocity':
+                self.joint1_pub.publish(Float64(joint_msg.velocity[0]))
+                self.joint2_pub.publish(Float64(joint_msg.velocity[1]))
+            elif self.arm_control_mode == 'effort':
+                self.joint1_pub.publish(Float64(joint_msg.effort[0]))
+                self.joint2_pub.publish(Float64(joint_msg.effort[1]))
+            # print('publish arm control command: ', joint_msg.position)  
               
     def publish_mpc_control_command(self, u_mpc, u_ad, u_tracking):
         '''
@@ -1244,7 +1253,10 @@ class TrajectoryPublisher:
     #     self.flat_target_pub.publish(flat_target_msg)
         
     def mav_state_callback(self, msg):
-        self.current_state = msg
+        if self.trajectory_name == "arm_test":
+            pass
+        else:
+            self.current_state = msg
         
     def arm_state_callback(self, msg):
         self.arm_state = msg
@@ -1266,6 +1278,13 @@ class TrajectoryPublisher:
             index = model_states.name.index(self.robot_name)
             pose = model_states.pose[index]
             twist = model_states.twist[index]
+            
+            if self.trajectory_name == "arm_test":
+                self.state[0:3] = [0, 0, 0]
+                self.state[3:7] = [0, 0, 0, 1]
+                self.state[7+self.arm_joint_number:10+self.arm_joint_number] = [0, 0, 0]
+                self.state[10+self.arm_joint_number:13+self.arm_joint_number] = [0, 0, 0]
+                return
             
             # Update the state with the pose and twist
             self.state[0:3] = [pose.position.x,
