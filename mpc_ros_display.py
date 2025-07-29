@@ -298,11 +298,23 @@ class MPCDisplayGUI(QMainWindow):
         plots_widget = QWidget()
         plots_layout = QGridLayout(plots_widget)
         
-        # Configure PyQtGraph
+        # Configure PyQtGraph with unified style
         pg.setConfigOptions(antialias=True)
+        
+        # Set unified style for all plots
+        pg.setConfigOption('background', 'w')
+        pg.setConfigOption('foreground', 'k')  # Black text
+        
+        # Set plot style
+        pg.setConfigOption('useOpenGL', False)
         
         # Create plots
         self.plots = {}
+        
+        # Helper function to set plot style
+        def setup_plot_style(plot):
+            plot.getAxis('left').setPen(pg.mkPen('k'))
+            plot.getAxis('bottom').setPen(pg.mkPen('k'))
         
         # Position tracking plot
         self.plots['position'] = pg.PlotWidget(title='Joint Position Tracking')
@@ -310,6 +322,7 @@ class MPCDisplayGUI(QMainWindow):
         self.plots['position'].setLabel('bottom', 'Time (s)')
         self.plots['position'].addLegend()
         self.plots['position'].showGrid(x=True, y=True)
+        setup_plot_style(self.plots['position'])
         self.position_curves = {
             'joint1_actual': self.plots['position'].plot(pen=pg.mkPen('b', width=2), name='Joint 1 Actual'),
             'joint2_actual': self.plots['position'].plot(pen=pg.mkPen('r', width=2), name='Joint 2 Actual'),
@@ -323,6 +336,7 @@ class MPCDisplayGUI(QMainWindow):
         self.plots['velocity'].setLabel('bottom', 'Time (s)')
         self.plots['velocity'].addLegend()
         self.plots['velocity'].showGrid(x=True, y=True)
+        setup_plot_style(self.plots['velocity'])
         self.velocity_curves = {
             'joint1': self.plots['velocity'].plot(pen=pg.mkPen('b', width=2), name='Joint 1'),
             'joint2': self.plots['velocity'].plot(pen=pg.mkPen('r', width=2), name='Joint 2'),
@@ -336,6 +350,7 @@ class MPCDisplayGUI(QMainWindow):
         self.plots['control'].setLabel('bottom', 'Time (s)')
         self.plots['control'].addLegend()
         self.plots['control'].showGrid(x=True, y=True)
+        setup_plot_style(self.plots['control'])
         self.control_curves = {
             'joint1': self.plots['control'].plot(pen=pg.mkPen('b', width=2), name='Joint 1'),
             'joint2': self.plots['control'].plot(pen=pg.mkPen('r', width=2), name='Joint 2')
@@ -346,6 +361,7 @@ class MPCDisplayGUI(QMainWindow):
         self.plots['cost'].setLabel('left', 'Cost')
         self.plots['cost'].setLabel('bottom', 'Time (s)')
         self.plots['cost'].showGrid(x=True, y=True)
+        setup_plot_style(self.plots['cost'])
         self.cost_curve = self.plots['cost'].plot(pen=pg.mkPen('g', width=2))
         
         # Solve time plot
@@ -353,6 +369,7 @@ class MPCDisplayGUI(QMainWindow):
         self.plots['solve_time'].setLabel('left', 'Time (ms)')
         self.plots['solve_time'].setLabel('bottom', 'Time (s)')
         self.plots['solve_time'].showGrid(x=True, y=True)
+        setup_plot_style(self.plots['solve_time'])
         self.solve_time_curve = self.plots['solve_time'].plot(pen=pg.mkPen('m', width=2))
         
         # Iterations plot
@@ -360,6 +377,7 @@ class MPCDisplayGUI(QMainWindow):
         self.plots['iterations'].setLabel('left', 'Iterations')
         self.plots['iterations'].setLabel('bottom', 'Time (s)')
         self.plots['iterations'].showGrid(x=True, y=True)
+        setup_plot_style(self.plots['iterations'])
         self.iterations_curve = self.plots['iterations'].plot(pen=pg.mkPen('c', width=2))
         
         # Predicted positions plot
@@ -368,6 +386,7 @@ class MPCDisplayGUI(QMainWindow):
         self.plots['predicted_positions'].setLabel('bottom', 'Time Steps')
         self.plots['predicted_positions'].addLegend()
         self.plots['predicted_positions'].showGrid(x=True, y=True)
+        setup_plot_style(self.plots['predicted_positions'])
         self.predicted_positions_curves = {
             'joint1': self.plots['predicted_positions'].plot(pen=pg.mkPen('b', width=2), name='Joint 1'),
             'joint2': self.plots['predicted_positions'].plot(pen=pg.mkPen('r', width=2), name='Joint 2'),
@@ -381,6 +400,7 @@ class MPCDisplayGUI(QMainWindow):
         self.plots['predicted_velocities'].setLabel('bottom', 'Time Steps')
         self.plots['predicted_velocities'].addLegend()
         self.plots['predicted_velocities'].showGrid(x=True, y=True)
+        setup_plot_style(self.plots['predicted_velocities'])
         self.predicted_velocities_curves = {
             'joint1': self.plots['predicted_velocities'].plot(pen=pg.mkPen('b', width=2), name='Joint 1'),
             'joint2': self.plots['predicted_velocities'].plot(pen=pg.mkPen('r', width=2), name='Joint 2')
@@ -392,6 +412,7 @@ class MPCDisplayGUI(QMainWindow):
         self.plots['predicted_controls'].setLabel('bottom', 'Time Steps')
         self.plots['predicted_controls'].addLegend()
         self.plots['predicted_controls'].showGrid(x=True, y=True)
+        setup_plot_style(self.plots['predicted_controls'])
         self.predicted_controls_curves = {
             'joint1': self.plots['predicted_controls'].plot(pen=pg.mkPen('b', width=2), name='Joint 1'),
             'joint2': self.plots['predicted_controls'].plot(pen=pg.mkPen('r', width=2), name='Joint 2')
