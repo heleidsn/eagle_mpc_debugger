@@ -31,6 +31,7 @@ try:
     from sensor_msgs.msg import JointState
     from std_msgs.msg import Float64, Float64MultiArray
     from geometry_msgs.msg import PoseStamped
+    from eagle_mpc_msgs.msg import MpcState
     ROS_AVAILABLE = True
 except ImportError:
     ROS_AVAILABLE = False
@@ -61,6 +62,8 @@ class ROSDataSubscriber(QThread):
             self.joint_sub = rospy.Subscriber('/joint_states', JointState, self.joint_callback)
             self.control_sub = rospy.Subscriber('/mpc/control_input', Float64MultiArray, self.control_callback)
             self.target_sub = rospy.Subscriber('/mpc/target_state', Float64MultiArray, self.target_callback)
+            
+            self.mpc_state_sub = rospy.Subscriber('/mpc/state', MpcState, self.mpc_state_callback)
             
             # MPC solver information subscribers
             self.solver_info_sub = rospy.Subscriber('/mpc/solver_info', Float64MultiArray, self.solver_info_callback)
@@ -96,6 +99,21 @@ class ROSDataSubscriber(QThread):
                 self.emit_data()
         except Exception as e:
             print(f"Error in joint callback: {e}")
+            
+    def mpc_state_callback(self, msg):
+        """Callback for MPC state messages"""
+        try:
+            self.mpc_state = msg
+            
+            self.target_state = self.mpc_state.state_ref[6:8]
+            
+            self.mpc_cost = self.mpc_state.mpc_final_cost
+            # self.solve_time = s
+            self.iterations = self.mpc_state.mpc_iter_num
+            
+            self.emit_data()
+        except Exception as e:
+            print(f"Error in MPC state callback: {e}")
     
     def control_callback(self, msg):
         """Callback for control input messages"""
@@ -141,13 +159,14 @@ class ROSDataSubscriber(QThread):
     
     def predicted_states_callback(self, msg):
         """Callback for predicted states messages"""
+        # print(f"Predicted states callback: {msg.data}")
         try:
             # Store predicted states for display
             if len(msg.data) > 0:
                 # Reshape: [horizon * state_dim] -> [horizon, state_dim]
-                horizon = len(msg.data) // 4  # Assuming 4D state (2 pos + 2 vel)
+                horizon = len(msg.data) // 17  # Assuming 16D state (2 pos + 2 vel)
                 if horizon > 0:
-                    states = np.array(msg.data).reshape(horizon, 4)
+                    states = np.array(msg.data).reshape(horizon, 17)
                     # Store all predicted states for display
                     self.predicted_states = states
         except Exception as e:
@@ -159,9 +178,9 @@ class ROSDataSubscriber(QThread):
             # Store predicted controls for display
             if len(msg.data) > 0:
                 # Reshape: [horizon * control_dim] -> [horizon, control_dim]
-                horizon = len(msg.data) // 2  # Assuming 2D control
+                horizon = len(msg.data) // 6  # Assuming 2D control
                 if horizon > 0:
-                    controls = np.array(msg.data).reshape(horizon, 2)
+                    controls = np.array(msg.data).reshape(horizon, 6)
                     # Store all predicted controls for display
                     self.predicted_controls = controls
         except Exception as e:
@@ -254,7 +273,7 @@ class MPCDisplayGUI(QMainWindow):
         self.iterations_data = []
         
         # Data retention settings
-        self.max_data_points = 1000
+        self.max_data_points = 5000
         self.update_rate = 10  # Hz
         
         # Initialize GUI
@@ -274,7 +293,7 @@ class MPCDisplayGUI(QMainWindow):
     
     def init_ui(self):
         """Initialize the user interface"""
-        self.setWindowTitle('MPC ROS Data Display')
+        self.setWindowTitle('MPC Plotter')
         self.setGeometry(100, 100, 2800, 1400)
         
         # Create central widget
@@ -317,17 +336,17 @@ class MPCDisplayGUI(QMainWindow):
             plot.getAxis('bottom').setPen(pg.mkPen('k'))
         
         # Position tracking plot
-        self.plots['position'] = pg.PlotWidget(title='Joint Position Tracking')
+        self.plots['position'] = pg.PlotWidget(title='Joint Position')
         self.plots['position'].setLabel('left', 'Position (rad)')
         self.plots['position'].setLabel('bottom', 'Time (s)')
         self.plots['position'].addLegend()
         self.plots['position'].showGrid(x=True, y=True)
         setup_plot_style(self.plots['position'])
         self.position_curves = {
-            'joint1_actual': self.plots['position'].plot(pen=pg.mkPen('b', width=2), name='Joint 1 Actual'),
-            'joint2_actual': self.plots['position'].plot(pen=pg.mkPen('r', width=2), name='Joint 2 Actual'),
-            'joint1_target': self.plots['position'].plot(pen=pg.mkPen('b', width=1, style=pg.QtCore.Qt.DashLine), name='Joint 1 Target'),
-            'joint2_target': self.plots['position'].plot(pen=pg.mkPen('r', width=1, style=pg.QtCore.Qt.DashLine), name='Joint 2 Target')
+            'joint1_actual': self.plots['position'].plot(pen=pg.mkPen('b', width=3), name='Joint 1 Actual'),
+            'joint2_actual': self.plots['position'].plot(pen=pg.mkPen('g', width=3), name='Joint 2 Actual'),
+            'joint1_target': self.plots['position'].plot(pen=pg.mkPen('b', width=2, style=pg.QtCore.Qt.DashLine), name='Joint 1 Target'),
+            'joint2_target': self.plots['position'].plot(pen=pg.mkPen('g', width=2, style=pg.QtCore.Qt.DashLine), name='Joint 2 Target')
         }
         
         # Velocity plot
@@ -338,22 +357,22 @@ class MPCDisplayGUI(QMainWindow):
         self.plots['velocity'].showGrid(x=True, y=True)
         setup_plot_style(self.plots['velocity'])
         self.velocity_curves = {
-            'joint1': self.plots['velocity'].plot(pen=pg.mkPen('b', width=2), name='Joint 1'),
-            'joint2': self.plots['velocity'].plot(pen=pg.mkPen('r', width=2), name='Joint 2'),
-            'joint1_target': self.plots['velocity'].plot(pen=pg.mkPen('b', width=1, style=pg.QtCore.Qt.DashLine), name='Joint 1 Target'),
-            'joint2_target': self.plots['velocity'].plot(pen=pg.mkPen('r', width=1, style=pg.QtCore.Qt.DashLine), name='Joint 2 Target')
+            'joint1': self.plots['velocity'].plot(pen=pg.mkPen('b', width=3), name='Joint 1'),
+            'joint2': self.plots['velocity'].plot(pen=pg.mkPen('g', width=3), name='Joint 2'),
+            'joint1_target': self.plots['velocity'].plot(pen=pg.mkPen('b', width=2, style=pg.QtCore.Qt.DashLine), name='Joint 1 Target'),
+            'joint2_target': self.plots['velocity'].plot(pen=pg.mkPen('g', width=2, style=pg.QtCore.Qt.DashLine), name='Joint 2 Target')
         }
         
-        # Control input plot
-        self.plots['control'] = pg.PlotWidget(title='Control Input')
+        # Joint effort plot
+        self.plots['control'] = pg.PlotWidget(title='Joint Effort')
         self.plots['control'].setLabel('left', 'Control (Nm)')
         self.plots['control'].setLabel('bottom', 'Time (s)')
         self.plots['control'].addLegend()
         self.plots['control'].showGrid(x=True, y=True)
         setup_plot_style(self.plots['control'])
         self.control_curves = {
-            'joint1': self.plots['control'].plot(pen=pg.mkPen('b', width=2), name='Joint 1'),
-            'joint2': self.plots['control'].plot(pen=pg.mkPen('r', width=2), name='Joint 2')
+            'joint1': self.plots['control'].plot(pen=pg.mkPen('b', width=3), name='Joint 1'),
+            'joint2': self.plots['control'].plot(pen=pg.mkPen('g', width=3), name='Joint 2')
         }
         
         # Cost function plot
@@ -388,10 +407,10 @@ class MPCDisplayGUI(QMainWindow):
         self.plots['predicted_positions'].showGrid(x=True, y=True)
         setup_plot_style(self.plots['predicted_positions'])
         self.predicted_positions_curves = {
-            'joint1': self.plots['predicted_positions'].plot(pen=pg.mkPen('b', width=2), name='Joint 1'),
-            'joint2': self.plots['predicted_positions'].plot(pen=pg.mkPen('r', width=2), name='Joint 2'),
-            'joint1_target': self.plots['predicted_positions'].plot(pen=pg.mkPen('b', width=1, style=pg.QtCore.Qt.DashLine), name='Joint 1 Target'),
-            'joint2_target': self.plots['predicted_positions'].plot(pen=pg.mkPen('r', width=1, style=pg.QtCore.Qt.DashLine), name='Joint 2 Target')
+            'joint1': self.plots['predicted_positions'].plot(pen=pg.mkPen('b', width=3), name='Joint 1'),
+            'joint2': self.plots['predicted_positions'].plot(pen=pg.mkPen('g', width=3), name='Joint 2'),
+            'joint1_target': self.plots['predicted_positions'].plot(pen=pg.mkPen('b', width=2, style=pg.QtCore.Qt.DashLine), name='Joint 1 Target'),
+            'joint2_target': self.plots['predicted_positions'].plot(pen=pg.mkPen('g', width=2, style=pg.QtCore.Qt.DashLine), name='Joint 2 Target')
         }
         
         # Predicted velocities plot
@@ -402,8 +421,8 @@ class MPCDisplayGUI(QMainWindow):
         self.plots['predicted_velocities'].showGrid(x=True, y=True)
         setup_plot_style(self.plots['predicted_velocities'])
         self.predicted_velocities_curves = {
-            'joint1': self.plots['predicted_velocities'].plot(pen=pg.mkPen('b', width=2), name='Joint 1'),
-            'joint2': self.plots['predicted_velocities'].plot(pen=pg.mkPen('r', width=2), name='Joint 2')
+            'joint1': self.plots['predicted_velocities'].plot(pen=pg.mkPen('b', width=3), name='Joint 1'),
+            'joint2': self.plots['predicted_velocities'].plot(pen=pg.mkPen('g', width=3), name='Joint 2')
         }
         
         # Predicted controls plot
@@ -414,20 +433,22 @@ class MPCDisplayGUI(QMainWindow):
         self.plots['predicted_controls'].showGrid(x=True, y=True)
         setup_plot_style(self.plots['predicted_controls'])
         self.predicted_controls_curves = {
-            'joint1': self.plots['predicted_controls'].plot(pen=pg.mkPen('b', width=2), name='Joint 1'),
-            'joint2': self.plots['predicted_controls'].plot(pen=pg.mkPen('r', width=2), name='Joint 2')
+            'joint1': self.plots['predicted_controls'].plot(pen=pg.mkPen('b', width=3), name='Joint 1'),
+            'joint2': self.plots['predicted_controls'].plot(pen=pg.mkPen('g', width=3), name='Joint 2')
         }
         
         # Add plots to grid (3x4 layout)
         plots_layout.addWidget(self.plots['position'], 0, 0)
         plots_layout.addWidget(self.plots['velocity'], 0, 1)
         plots_layout.addWidget(self.plots['control'], 0, 2)
-        plots_layout.addWidget(self.plots['cost'], 0, 3)
+    
         plots_layout.addWidget(self.plots['solve_time'], 1, 0)
         plots_layout.addWidget(self.plots['iterations'], 1, 1)
-        plots_layout.addWidget(self.plots['predicted_positions'], 1, 2)
-        plots_layout.addWidget(self.plots['predicted_velocities'], 1, 3)
-        plots_layout.addWidget(self.plots['predicted_controls'], 2, 0, 1, 2)  # Span 2 columns
+        plots_layout.addWidget(self.plots['cost'], 1, 2)
+        
+        plots_layout.addWidget(self.plots['predicted_positions'], 2, 0)
+        plots_layout.addWidget(self.plots['predicted_velocities'], 2, 1)
+        plots_layout.addWidget(self.plots['predicted_controls'], 2, 2)  # Span 2 columns
         
         parent_layout.addWidget(plots_widget, 4)  # 增加图表区域占比
     
@@ -727,8 +748,8 @@ class MPCDisplayGUI(QMainWindow):
                     if len(predicted_states) > 0:
                         steps = np.arange(len(predicted_states))
                         # States format: [pos1, pos2, vel1, vel2]
-                        self.predicted_positions_curves['joint1'].setData(steps, predicted_states[:, 0])
-                        self.predicted_positions_curves['joint2'].setData(steps, predicted_states[:, 1])
+                        self.predicted_positions_curves['joint1'].setData(steps, predicted_states[:, 7])
+                        self.predicted_positions_curves['joint2'].setData(steps, predicted_states[:, 8])
                         
                         # Add target positions (horizontal lines)
                         if len(self.target_data) > 0:
@@ -745,16 +766,16 @@ class MPCDisplayGUI(QMainWindow):
                     if len(predicted_states) > 0:
                         steps = np.arange(len(predicted_states))
                         # States format: [pos1, pos2, vel1, vel2]
-                        self.predicted_velocities_curves['joint1'].setData(steps, predicted_states[:, 2])
-                        self.predicted_velocities_curves['joint2'].setData(steps, predicted_states[:, 3])
+                        self.predicted_velocities_curves['joint1'].setData(steps, predicted_states[:, -2])
+                        self.predicted_velocities_curves['joint2'].setData(steps, predicted_states[:, -1])
                 
                 # Update predicted controls plot (all steps)
                 if hasattr(self.ros_subscriber, 'predicted_controls') and self.ros_subscriber.predicted_controls is not None:
                     predicted_controls = self.ros_subscriber.predicted_controls
                     if len(predicted_controls) > 0:
                         steps = np.arange(len(predicted_controls))
-                        self.predicted_controls_curves['joint1'].setData(steps, predicted_controls[:, 0])
-                        self.predicted_controls_curves['joint2'].setData(steps, predicted_controls[:, 1])
+                        self.predicted_controls_curves['joint1'].setData(steps, predicted_controls[:, -2])
+                        self.predicted_controls_curves['joint2'].setData(steps, predicted_controls[:, -1])
                 
                 # Auto-scale if enabled
                 if self.auto_scale_check.isChecked():
