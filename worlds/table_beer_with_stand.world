@@ -93,7 +93,7 @@
       <wall_time>1751970098 669734372</wall_time>
       <iterations>99319</iterations>
       <model name='beer'>
-        <pose>-0 -0.12 0.83 -1.5708 -1.50229 -1.8e-05</pose>
+        <pose>0 0 0.8 -1.57 0 0</pose>
         <scale>1 1 1</scale>
         <link name='link'>
           <pose>2e-06 -0.005 0.83 -1.5708 -1.50229 -1.8e-05</pose>
@@ -227,7 +227,7 @@
     </gui>
     <model name='beer'>
       <link name='link'>
-        <pose>0 0 0.8 -1.57 0 0</pose>
+        <pose>0 0 0 0 0 0</pose>
         <inertial>
           <mass>0.39</mass>
           <inertia>
@@ -243,7 +243,7 @@
         <collision name='collision'>
           <geometry>
             <cylinder>
-              <radius>0.055</radius>
+              <radius>0.05</radius>
               <length>0.23</length>
             </cylinder>
           </geometry>
@@ -257,17 +257,28 @@
               <torsional>
                 <ode/>
               </torsional>
-              <ode/>
+              <ode>
+                <mu>100.0</mu>
+                <mu2>100.0</mu2>
+              </ode>
             </friction>
           </surface>
         </collision>
         <visual name='visual'>
           <geometry>
             <cylinder>
-              <radius>0.055</radius>
+              <radius>0.05</radius>
               <length>0.23</length>
             </cylinder>
           </geometry>
+          <surface>
+            <friction>
+                <ode>
+                <mu>100.0</mu>         
+                <mu2>100.0</mu2>         
+                </ode>
+            </friction>
+          </surface>
           <material>
             <script>
               <uri>model://beer/materials/scripts</uri>
@@ -280,7 +291,7 @@
         <enable_wind>0</enable_wind>
         <kinematic>0</kinematic>
       </link>
-      <pose>0 0 0 0 0 0</pose>
+      <pose>0 0 0.8 -1.57 0 0</pose>
     </model>
     <model name='cafe_table'>
       <static>1</static>

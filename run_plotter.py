@@ -32,10 +32,43 @@ try:
     from std_msgs.msg import Float64, Float64MultiArray
     from geometry_msgs.msg import PoseStamped
     from eagle_mpc_msgs.msg import MpcState
+    from std_srvs.srv import Trigger, TriggerResponse
     ROS_AVAILABLE = True
 except ImportError:
     ROS_AVAILABLE = False
     print("Warning: ROS not available. GUI will run in simulation mode.")
+
+class ROSServiceHandler:
+    """ROS service handler for controlling system services"""
+    
+    def __init__(self):
+        self.services = {}
+        self.init_services()
+        
+    def init_services(self):
+        """Initialize ROS service proxies"""
+        try:
+            self.services['open_gripper'] = rospy.ServiceProxy('/open_gripper', Trigger)
+            self.services['close_gripper'] = rospy.ServiceProxy('/close_gripper', Trigger)
+            self.services['reset_beer'] = rospy.ServiceProxy('/reset_beer', Trigger)
+            self.services['start_trajectory'] = rospy.ServiceProxy('/start_trajectory', Trigger)
+            self.services['initialize_trajectory'] = rospy.ServiceProxy('/initialize_trajectory', Trigger)
+            self.services['start_l1_control'] = rospy.ServiceProxy('/start_l1_control', Trigger)
+            self.services['stop_l1_control'] = rospy.ServiceProxy('/stop_l1_control', Trigger)
+            self.services['start_arm_test'] = rospy.ServiceProxy('/start_arm_test', Trigger)
+        except rospy.ServiceException as e:
+            rospy.logerr(f"Failed to initialize services: {str(e)}")
+            
+    def call_service(self, service_name, *args):
+        """Call a ROS service with error handling"""
+        try:
+            if service_name in self.services:
+                response = self.services[service_name]()
+                return response.success, response.message
+            else:
+                return False, f"Service {service_name} not found"
+        except rospy.ServiceException as e:
+            return False, str(e)
 
 class ROSDataSubscriber(QThread):
     """ROS data subscriber running in separate thread"""
@@ -276,6 +309,9 @@ class MPCDisplayGUI(QMainWindow):
         self.max_data_points = 5000
         self.update_rate = 10  # Hz
         
+        # Initialize service handler
+        self.service_handler = ROSServiceHandler()
+        
         # Initialize GUI
         self.init_ui()
         
@@ -288,6 +324,11 @@ class MPCDisplayGUI(QMainWindow):
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self.update_plots)
         self.update_timer.start(1000 // self.update_rate)  # Convert Hz to milliseconds
+        
+        # Service status clear timer
+        self.service_status_timer = QTimer()
+        self.service_status_timer.timeout.connect(self.clear_service_status)
+        self.service_status_timer.setSingleShot(True)
         
         print("MPC Display GUI initialized")
     
@@ -511,6 +552,46 @@ class MPCDisplayGUI(QMainWindow):
         
         control_layout.addWidget(button_group)
         
+        # Service Control Group
+        service_group = QGroupBox("Service Control")
+        service_layout = QVBoxLayout(service_group)
+        
+        self.open_gripper_btn = QPushButton("Open Gripper")
+        self.open_gripper_btn.clicked.connect(self.open_gripper)
+        service_layout.addWidget(self.open_gripper_btn)
+        
+        self.close_gripper_btn = QPushButton("Close Gripper")
+        self.close_gripper_btn.clicked.connect(self.close_gripper)
+        service_layout.addWidget(self.close_gripper_btn)
+        
+        self.reset_beer_btn = QPushButton("Reset Beer Position")
+        self.reset_beer_btn.clicked.connect(self.reset_beer)
+        service_layout.addWidget(self.reset_beer_btn)
+        
+        self.start_trajectory_btn = QPushButton("Start Trajectory")
+        self.start_trajectory_btn.clicked.connect(self.start_trajectory)
+        service_layout.addWidget(self.start_trajectory_btn)
+        
+        self.start_arm_test_btn = QPushButton("Start Arm Test")
+        self.start_arm_test_btn.clicked.connect(self.start_arm_test)
+        service_layout.addWidget(self.start_arm_test_btn)
+        
+        self.initialize_trajectory_btn = QPushButton("Initialize Trajectory")
+        self.initialize_trajectory_btn.clicked.connect(self.initialize_trajectory)
+        service_layout.addWidget(self.initialize_trajectory_btn)
+        
+        # Add L1 Control buttons
+        self.start_l1_control_btn = QPushButton("Start L1 Control")
+        self.start_l1_control_btn.clicked.connect(self.start_l1_control)
+        service_layout.addWidget(self.start_l1_control_btn)
+        
+        self.stop_l1_control_btn = QPushButton("Stop L1 Control")
+        self.stop_l1_control_btn.clicked.connect(self.stop_l1_control)
+        service_layout.addWidget(self.stop_l1_control_btn)
+        
+        service_group.setLayout(service_layout)
+        control_layout.addWidget(service_group)
+        
         # Status
         status_group = QGroupBox("Status")
         status_layout = QVBoxLayout(status_group)
@@ -523,6 +604,9 @@ class MPCDisplayGUI(QMainWindow):
         
         self.ros_status_label = QLabel("ROS: Connected" if ROS_AVAILABLE else "ROS: Not Available")
         status_layout.addWidget(self.ros_status_label)
+        
+        self.service_status_label = QLabel("Service Status: Ready")
+        status_layout.addWidget(self.service_status_label)
         
         control_layout.addWidget(status_group)
         
@@ -848,6 +932,99 @@ class MPCDisplayGUI(QMainWindow):
             self.update_timer.start()
             self.status_label.setText("Status: Running")
     
+    # Service Control Methods
+    def open_gripper(self):
+        """Open the gripper"""
+        success, message = self.service_handler.call_service('open_gripper')
+        if success:
+            print("Gripper opened successfully")
+            self.service_status_label.setText("Service Status: Gripper Opened")
+        else:
+            print(f"Failed to open gripper: {message}")
+            self.service_status_label.setText(f"Service Status: Failed - {message}")
+        self.service_status_timer.start(3000)  # Clear status after 3 seconds
+            
+    def close_gripper(self):
+        """Close the gripper"""
+        success, message = self.service_handler.call_service('close_gripper')
+        if success:
+            print("Gripper closed successfully")
+            self.service_status_label.setText("Service Status: Gripper Closed")
+        else:
+            print(f"Failed to close gripper: {message}")
+            self.service_status_label.setText(f"Service Status: Failed - {message}")
+        self.service_status_timer.start(3000)  # Clear status after 3 seconds
+            
+    def reset_beer(self):
+        """Reset the beer position"""
+        success, message = self.service_handler.call_service('reset_beer')
+        if success:
+            print("Beer position reset successfully")
+            self.service_status_label.setText("Service Status: Beer Reset")
+        else:
+            print(f"Failed to reset beer position: {message}")
+            self.service_status_label.setText(f"Service Status: Failed - {message}")
+        self.service_status_timer.start(3000)  # Clear status after 3 seconds
+            
+    def start_trajectory(self):
+        """Start the trajectory"""
+        success, message = self.service_handler.call_service('start_trajectory')
+        if success:
+            print("Trajectory started successfully")
+            self.service_status_label.setText("Service Status: Trajectory Started")
+        else:
+            print(f"Failed to start trajectory: {message}")
+            self.service_status_label.setText(f"Service Status: Failed - {message}")
+        self.service_status_timer.start(3000)  # Clear status after 3 seconds
+
+    def start_arm_test(self):
+        """Start the arm test"""
+        success, message = self.service_handler.call_service('start_arm_test')
+        if success:
+            print("Arm test started successfully")
+            self.service_status_label.setText("Service Status: Arm Test Started")
+        else:
+            print(f"Failed to start arm test: {message}")
+            self.service_status_label.setText(f"Service Status: Failed - {message}")
+        self.service_status_timer.start(3000)  # Clear status after 3 seconds
+            
+    def initialize_trajectory(self):
+        """Initialize the trajectory"""
+        success, message = self.service_handler.call_service('initialize_trajectory')
+        if success:
+            print("Trajectory initialized successfully")
+            self.service_status_label.setText("Service Status: Trajectory Initialized")
+        else:
+            print(f"Failed to initialize trajectory: {message}")
+            self.service_status_label.setText(f"Service Status: Failed - {message}")
+        self.service_status_timer.start(3000)  # Clear status after 3 seconds
+            
+    def start_l1_control(self):
+        """Start L1 adaptive control"""
+        success, message = self.service_handler.call_service('start_l1_control')
+        if success:
+            print("L1 control started successfully")
+            self.service_status_label.setText("Service Status: L1 Control Started")
+        else:
+            print(f"Failed to start L1 control: {message}")
+            self.service_status_label.setText(f"Service Status: Failed - {message}")
+        self.service_status_timer.start(3000)  # Clear status after 3 seconds
+            
+    def stop_l1_control(self):
+        """Stop L1 adaptive control"""
+        success, message = self.service_handler.call_service('stop_l1_control')
+        if success:
+            print("L1 control stopped successfully")
+            self.service_status_label.setText("Service Status: L1 Control Stopped")
+        else:
+            print(f"Failed to stop L1 control: {message}")
+            self.service_status_label.setText(f"Service Status: Failed - {message}")
+        self.service_status_timer.start(3000)  # Clear status after 3 seconds
+    
+    def clear_service_status(self):
+        """Clear the service status after a delay"""
+        self.service_status_label.setText("Service Status: Ready")
+    
     def closeEvent(self, event):
         """Handle window close event"""
         self.ros_subscriber.stop()
@@ -882,6 +1059,15 @@ def main():
     print("- /mpc/iterations")
     print("- /arm_controller/joint_states (simulation)")
     print("- /arm_controller/joint_1_position_controller/command (simulation)")
+    print("\nService Control Available:")
+    print("- /open_gripper")
+    print("- /close_gripper")
+    print("- /reset_beer")
+    print("- /start_trajectory")
+    print("- /initialize_trajectory")
+    print("- /start_l1_control")
+    print("- /stop_l1_control")
+    print("- /start_arm_test")
     
     # Start the application
     sys.exit(app.exec_())

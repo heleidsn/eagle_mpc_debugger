@@ -159,12 +159,12 @@ include_directories(
 ## in contrast to setup.py, you can choose the destination
 catkin_install_python(PROGRAMS
   scripts/groundtruth_pub.py
-  scripts/pid_reconfigure.py
-  trajectory_publisher_mpc.py
-  eagle_mpc_gui.py
-  scripts/run_gui.sh
-  run_planning.py
-  run_planning_different_dt.py
+#   scripts/pid_reconfigure.py
+#   trajectory_publisher_mpc.py
+#   eagle_mpc_gui.py
+#   scripts/run_gui.sh
+#   run_planning.py
+#   run_planning_different_dt.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

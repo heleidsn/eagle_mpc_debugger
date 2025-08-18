@@ -441,9 +441,9 @@ class EagleMPCDebuggerGUI(QMainWindow):
         self.arm_enabled_check.setChecked(True)
         controller_config_layout.addRow("Arm Control:", self.arm_enabled_check)
         
-        self.arm_control_mode_combo = QComboBox()
-        self.arm_control_mode_combo.addItems(["position", "position_velocity", "position_velocity_effort", "effort"])
-        controller_config_layout.addRow("Arm Control Mode:", self.arm_control_mode_combo)
+        # self.arm_control_mode_combo = QComboBox()
+        # self.arm_control_mode_combo.addItems(["position", "position_velocity", "position_velocity_effort", "effort"])
+        # controller_config_layout.addRow("Arm Control Mode:", self.arm_control_mode_combo)
         
         # Simulation mode
         self.simulation_check = QCheckBox("Simulation Mode")
@@ -513,21 +513,21 @@ class EagleMPCDebuggerGUI(QMainWindow):
         arm_control_mode_selection_layout.addWidget(self.arm_control_mode_combo)
         simulation_layout.addLayout(arm_control_mode_selection_layout)
         
-        # ROSCore Control
-        self.start_roscore_btn = QPushButton("Start ROSCore")
-        self.start_roscore_btn.clicked.connect(self.start_roscore)
-        simulation_layout.addWidget(self.start_roscore_btn)
+        # # ROSCore Control
+        # self.start_roscore_btn = QPushButton("Start ROSCore")
+        # self.start_roscore_btn.clicked.connect(self.start_roscore)
+        # simulation_layout.addWidget(self.start_roscore_btn)
         
-        self.stop_roscore_btn = QPushButton("Stop ROSCore")
-        self.stop_roscore_btn.clicked.connect(self.stop_roscore)
-        simulation_layout.addWidget(self.stop_roscore_btn)
+        # self.stop_roscore_btn = QPushButton("Stop ROSCore")
+        # self.stop_roscore_btn.clicked.connect(self.stop_roscore)
+        # simulation_layout.addWidget(self.stop_roscore_btn)
         
         # Simulation Control
-        self.launch_simulation_btn = QPushButton("Launch Simulation")
+        self.launch_simulation_btn = QPushButton("Start Gazebo")
         self.launch_simulation_btn.clicked.connect(self.launch_simulation)
         simulation_layout.addWidget(self.launch_simulation_btn)
         
-        self.stop_simulation_btn = QPushButton("Stop Simulation")
+        self.stop_simulation_btn = QPushButton("Stop Gazebo")
         self.stop_simulation_btn.clicked.connect(self.stop_simulation)
         simulation_layout.addWidget(self.stop_simulation_btn)
 
@@ -542,6 +542,11 @@ class EagleMPCDebuggerGUI(QMainWindow):
         simulation_layout.addWidget(self.start_plotjuggler_btn)
         
         simulation_group.setLayout(simulation_layout)
+        
+        # Add plotter button
+        self.start_plotter_btn = QPushButton("Start MPC Plotter")
+        self.start_plotter_btn.clicked.connect(self.start_mpc_plotter)
+        simulation_layout.addWidget(self.start_plotter_btn)
         
         
         # Service Control Group
@@ -571,6 +576,15 @@ class EagleMPCDebuggerGUI(QMainWindow):
         self.initialize_trajectory_btn = QPushButton("Initialize Trajectory")
         self.initialize_trajectory_btn.clicked.connect(self.initialize_trajectory)
         service_layout.addWidget(self.initialize_trajectory_btn)
+        
+        # Add L1 Control buttons
+        self.start_l1_control_btn = QPushButton("Start L1 Control")
+        self.start_l1_control_btn.clicked.connect(self.start_l1_control)
+        service_layout.addWidget(self.start_l1_control_btn)
+        
+        self.stop_l1_control_btn = QPushButton("Stop L1 Control")
+        self.stop_l1_control_btn.clicked.connect(self.stop_l1_control)
+        service_layout.addWidget(self.stop_l1_control_btn)
         
         service_group.setLayout(service_layout)
         
@@ -799,6 +813,22 @@ class EagleMPCDebuggerGUI(QMainWindow):
         else:
             self.log_message(f"Failed to initialize trajectory: {message}")
             
+    def start_l1_control(self):
+        """Start L1 adaptive control"""
+        success, message = self.service_handler.call_service('start_l1_control')
+        if success:
+            self.log_message("L1 control started")
+        else:
+            self.log_message(f"Failed to start L1 control: {message}")
+            
+    def stop_l1_control(self):
+        """Stop L1 adaptive control"""
+        success, message = self.service_handler.call_service('stop_l1_control')
+        if success:
+            self.log_message("L1 control stopped")
+        else:
+            self.log_message(f"Failed to stop L1 control: {message}")
+            
     def mpc_state_callback(self, msg):
         """Callback for MPC state messages"""
         self.current_state = msg
@@ -916,6 +946,9 @@ class EagleMPCDebuggerGUI(QMainWindow):
             # Kill all ros-related processes
             kill_ros_cmd = "killall -9 rosmaster rosout roscore"
             subprocess.run(kill_ros_cmd, shell=True, stderr=subprocess.PIPE)
+            
+            kill_px4_cmd = "killall -9 px4"
+            subprocess.run(kill_px4_cmd, shell=True, stderr=subprocess.PIPE)
 
             # Kill any remaining python processes that might be running the simulation
             kill_python_cmd = "pkill -9 -f 'python.*simulation'"
@@ -963,7 +996,7 @@ class EagleMPCDebuggerGUI(QMainWindow):
             env['PYTHONPATH'] = f"{current_dir}:{env.get('PYTHONPATH', '')}"
             
             # Launch the MPC controller script
-            cmd = f"python3 {os.path.join(current_dir, 'trajectory_publisher_mpc.py')}"
+            cmd = f"python3 {os.path.join(current_dir, 'run_controller.py')}"
             self.mpc_controller_process = subprocess.Popen(cmd, shell=True, env=env)
             self.log_message("MPC controller started successfully")
         except Exception as e:
@@ -1057,6 +1090,29 @@ class EagleMPCDebuggerGUI(QMainWindow):
                 self.log_message("PlotJuggler stopped successfully")
         except Exception as e:
             error_msg = f"Failed to stop PlotJuggler: {str(e)}"
+            self.log_message(error_msg)
+            QMessageBox.critical(self, "Error", error_msg)
+
+    def start_mpc_plotter(self):
+        """Start MPC Plotter"""
+        try:
+            cmd = f"python {os.path.join(current_dir, 'run_plotter.py')}"
+            self.mpc_plotter_process = subprocess.Popen(cmd, shell=True)
+            self.log_message("MPC Plotter started successfully")
+        except Exception as e:
+            error_msg = f"Failed to start MPC Plotter: {str(e)}"
+            self.log_message(error_msg)
+            QMessageBox.critical(self, "Error", error_msg)
+
+    def stop_mpc_plotter(self):
+        """Stop MPC Plotter"""
+        try:
+            if hasattr(self, 'mpc_plotter_process') and self.mpc_plotter_process:
+                self.mpc_plotter_process.terminate()
+                self.mpc_plotter_process = None
+                self.log_message("MPC Plotter stopped successfully")
+        except Exception as e:
+            error_msg = f"Failed to stop MPC Plotter: {str(e)}"
             self.log_message(error_msg)
             QMessageBox.critical(self, "Error", error_msg)
 
