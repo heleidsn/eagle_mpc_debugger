@@ -1,0 +1,62 @@
+# Parse command
+
+ros: False
+visualization: False
+target_change_interval: 1000.0
+
+control_mode: "mpc"
+urdf_path: "models/urdf/s500_uam_arm_effort.urdf"
+
+save_data:
+  enable: False
+  save_path: "data/arm_control_perform_test"
+
+simulation:
+  simulation_time: 10
+  simulation_dt: 0.01
+  control_rate: 100.0
+
+friction:
+  enable_friction: True  
+  enable_friction_compensation: False
+
+  static_friction: [0.02, 0.02]
+  dynamic_friction: [0.005, 0.005]
+
+disturbance:
+  enable_disturbance: False
+  disturbance_start_time: 2.0
+  enable_disturbance_compensation: True
+
+  disturbance_torque: [0.2, 0.3]
+
+target:
+  fixed_targets: True
+  fixed_joint1: 0.2
+  fixed_joint2: 0.4
+  target_change_interval: 1000.0
+
+controller:
+  mpc:
+    horizon_length: 10
+    position_weight: 1.0
+    velocity_weight: 1.0
+    control_weight: 1.0
+    terminal_scale: 100
+
+  l1_adaptive:
+    enable: True
+    adaptation_gain: -0.01
+    filter_time_constants: 0.001
+    l1_start_time: 5.0
+
+  pid:
+    position_kp: 1.0
+    position_ki: 0.0
+    position_kd: 0.0
+    velocity_kp: 1.0
+    velocity_ki: 0.0
+    velocity_kd: 0.0
+    control_kp: 1.0
+    control_ki: 0.0
+    control_kd: 0.0

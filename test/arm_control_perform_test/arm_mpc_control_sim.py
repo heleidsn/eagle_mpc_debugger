@@ -12,7 +12,9 @@ import matplotlib.pyplot as plt
 import time
 import os
 from datetime import datetime
-import sys
+
+import argparse
+import yaml
 
 from scipy import linalg as sLA
 
@@ -181,7 +183,7 @@ except ImportError:
     print("Warning: ROS not available. ROS mode will be disabled.")
     
 class L1AdaptiveController:
-    def __init__(self, dt, robot_model, adaptation_gain=50.0, filter_time_constants=None, 
+    def __init__(self, dt, robot_model, adaptation_gain=-10.0, filter_time_constants=None, 
                  friction_threshold=0.01, enable_static_compensation=True):
         self.dt = dt
         
@@ -275,6 +277,7 @@ class L1AdaptiveController:
         self.u_ad = -sig_hat_filtered[self.control_dim:]
         
         self.sig_hat_prev = sig_hat_filtered.copy()
+        # self.u_ad = -self.sig_hat[self.control_dim:]
         
     def low_pass_filter(self, time_const, curr_i, prev_i):
         '''
@@ -291,51 +294,38 @@ class L1AdaptiveController:
         return y_filter
         
     
-class TwoDOFArmMPCController:
-    def __init__(self, urdf_path, mpc_dt=0.01, simulation_dt=None, horizon_length=50, enable_visualization=False, target_change_interval=2.0, control_mode='mpc', velocity_limits=None, enable_velocity_constraints=True, using_l1_adaptive_controller=True, l1_start_time=None):
+class TwoDOFArmController:
+    def __init__(self, args):
         """
         Initialize 2DOF robotic arm controller (MPC or PID)
-        
-        Args:
-            urdf_path: URDF file path
-            mpc_dt: MPC control time step (for optimization and control)
-            simulation_dt: Simulation time step (for dynamics integration, defaults to mpc_dt if None)
-            horizon_length: Prediction horizon length 
-            enable_visualization: Enable Gepetto visualization
-            target_change_interval: Time interval (seconds) for changing target
-            control_mode: Control mode ('mpc' or 'pid')
-            velocity_limits: Maximum joint velocities [joint1, joint2] (rad/s) for PID mode
-            enable_velocity_constraints: Enable velocity constraints for PID mode
-            friction_params: Friction parameters dict with keys: 'static_friction', 'dynamic_friction', 'velocity_threshold'
         """
-        # Set time steps
-        self.mpc_dt = 0.01  # Time step for MPC control
-        self.simulation_dt = 0.001  # simulation using 1ms time step
-        self.control_rate = 100.0  # Hz
-        self.control_interval = 1.0 / self.simulation_dt / self.control_rate
         
-        self.horizon_length = horizon_length
-        self.enable_visualization = enable_visualization
-        self.control_mode = control_mode.lower()
+        self.args = args
+        
+        # Set time steps
+        self.simulation_dt = args.simulation['simulation_dt']  # simulation using 1ms time step
+        self.control_rate = args.simulation['control_rate']  # Hz
+        self.mpc_dt = 1.0 / self.control_rate
+        self.control_interval = int(self.mpc_dt / self.simulation_dt)
+        
+        self.horizon_length = args.controller['mpc']['horizon_length']
+        self.enable_visualization = args.visualization
+        self.control_mode = args.control_mode.lower()
         
         # set numpy print options
         np.set_printoptions(precision=4, suppress=True)
         
-        # Initialize friction parameters
-        self.friction_params = {
-            'static_friction': [0.2, 0.0],    # Static friction coefficients [joint1, joint2] (Nm)
-            'dynamic_friction': [0.0, 0.0],   # Dynamic friction coefficients [joint1, joint2] (Nm·s/rad)  
-            'velocity_threshold': [0.0, 0.0], # Velocity threshold for static/dynamic transition (rad/s)
-            'enable_friction': True,             # Enable friction model in dynamics
-            'enable_friction_compensation': False # Enable friction compensation in control
-        }
+        self.friction_params = args.friction
         
+        self.enable_disturbance = args.disturbance['enable_disturbance']
+        self.disturbance_start_time = args.disturbance['disturbance_start_time']
+        self.disturbance_start_step = int(self.disturbance_start_time / self.simulation_dt)
         
-        self.enable_friction = self.friction_params.get('enable_friction', False)
-        self.enable_friction_compensation = self.friction_params.get('enable_friction_compensation', False)
+        self.enable_friction = args.friction['enable_friction']
+        self.enable_friction_compensation = args.friction['enable_friction_compensation']
         
         # Load robot model
-        self.robot = pin.buildModelFromUrdf(urdf_path)
+        self.robot = pin.buildModelFromUrdf(args.urdf_path)
         self.data = self.robot.createData()
         
         # State and control dimensions
@@ -343,26 +333,21 @@ class TwoDOFArmMPCController:
         self.control_dim = self.robot.nv  # joint torques
         
         # L1 adaptive controller configuration
-        self.using_l1_adaptive_controller = using_l1_adaptive_controller
+        self.using_l1_adaptive_controller = args.controller['l1_adaptive']['enable']
         if self.using_l1_adaptive_controller:
-            self.l1_config = {
-                'adaptation_gain': -1.0,
-                'filter_time_constants': 0.0,
-                'l1_start_time': 2.0
-            }
-            
+            self.l1_config = args.controller['l1_adaptive']
             self.l1_start_step = int(self.l1_config['l1_start_time'] / self.simulation_dt)
             
             self.l1_adaptive_controller = L1AdaptiveController(self.mpc_dt, self.robot, self.l1_config['adaptation_gain'], self.l1_config['filter_time_constants'])
         
         # Target configuration
-        self.target_change_interval = target_change_interval  # seconds
+        self.target_change_interval = args.target['target_change_interval']  # seconds
         
         # Target mode configuration
-        self.use_dynamic_targets = True  # Use dynamic targets or fixed targets
+        self.use_dynamic_targets = not args.target['fixed_targets']  # Use dynamic targets or fixed targets
         
         # Fixed target configuration (when use_dynamic_targets = False)
-        self.fixed_target_positions = np.array([1.0, 0.6])  # Fixed target positions
+        self.fixed_target_positions = np.array([args.target['fixed_joint1'], args.target['fixed_joint2']])  # Fixed target positions
         
         # Dynamic target configuration (when use_dynamic_targets = True)
         self.target_sequence = [
@@ -383,9 +368,10 @@ class TwoDOFArmMPCController:
         self.target_positions = self.fixed_target_positions.copy()  # Initialize with fixed targets
         
         # Weight parameters (used directly in cost functions)
-        self.position_weight = 1.0  # position tracking weight
-        self.velocity_weight = 1.0  # velocity tracking weight
-        self.control_weight = 1.0  # control weight
+        self.position_weight = args.controller['mpc']['position_weight']  # position tracking weight
+        self.velocity_weight = args.controller['mpc']['velocity_weight']  # velocity tracking weight
+        self.control_weight = args.controller['mpc']['control_weight']  # control weight
+        self.terminal_scale = args.controller['mpc']['terminal_scale']  # terminal scale
         
         # Initialize controller based on mode
         if self.control_mode == 'mpc':
@@ -411,14 +397,14 @@ class TwoDOFArmMPCController:
                 velocity_limits = [1.5, 1.5]  # Default maximum joint velocities
             
             # Only enable velocity constraints if both enabled and limits are provided
-            use_velocity_constraints = enable_velocity_constraints and velocity_limits is not None
+            use_velocity_constraints = True
             
             self.pid_controller = CascadedPIDController(kp_pos, kp_vel, ki_vel, kd_vel, self.mpc_dt, 
                                                       joint_names=['joint_1', 'joint_2'],
                                                       velocity_limits=velocity_limits if use_velocity_constraints else None)
             
         else:
-            raise ValueError(f"Unknown control mode: {control_mode}. Use 'mpc' or 'pid'")
+            raise ValueError(f"Unknown control mode: {self.control_mode}. Use 'mpc' or 'pid'")
         
         self.create_state_update_model()
         
@@ -434,6 +420,10 @@ class TwoDOFArmMPCController:
         self.control_data = []
         self.cost_data = []
         self.target_data = []  # Store target positions over time
+        
+        self.l1_z_tilde_data = []
+        self.l1_sig_hat_data = []
+        self.l1_z_hat_data = []
         
         self.control_data_u_b = []
         self.control_data_u_ad = []
@@ -464,7 +454,6 @@ class TwoDOFArmMPCController:
         if self.enable_friction:
             print(f"  Static friction: {self.friction_params['static_friction']} Nm")
             print(f"  Dynamic friction: {self.friction_params['dynamic_friction']} Nm·s/rad")
-            print(f"  Velocity threshold: {self.friction_params['velocity_threshold']} rad/s")
             
         # continue once input is received
         # input("Press Enter to continue...")
@@ -536,12 +525,6 @@ class TwoDOFArmMPCController:
             state, actuation, crocoddyl.CostModelSum(state, self.control_dim)
         )
         
-        # Create integrated model using RK4 with MPC time step (for MPC optimization)
-        self.state_update_model = crocoddyl.IntegratedActionModelRK4(differential_model, self.mpc_dt)
-        
-        # Create data for the integrated model
-        self.state_update_data = self.state_update_model.createData()
-        
         # Create separate state update model for simulation with simulation time step
         self.simulation_update_model = crocoddyl.IntegratedActionModelRK4(differential_model, self.simulation_dt)
         self.simulation_update_data = self.simulation_update_model.createData()
@@ -605,10 +588,10 @@ class TwoDOFArmMPCController:
         
         # Create weight vectors for position and velocity separately (higher weights for terminal cost)
         position_weights = np.zeros(self.state_dim)
-        position_weights[:self.robot.nq] = self.position_weight * 100.0
+        position_weights[:self.robot.nq] = self.position_weight * self.terminal_scale
         
         velocity_weights = np.zeros(self.state_dim)
-        velocity_weights[self.robot.nq:] = self.velocity_weight * 100.0
+        velocity_weights[self.robot.nq:] = self.velocity_weight * self.terminal_scale
         
         # Add terminal position tracking cost (higher weight)
         position_residual = crocoddyl.ResidualModelState(state, self.get_target_state(), self.control_dim)
@@ -785,6 +768,9 @@ class TwoDOFArmMPCController:
         print(f"Starting simulation, total time: {simulation_time} seconds")
         
         while current_time < simulation_time:
+            print('current_state: ', current_state)
+            if current_step == 200:
+                print('current_state: ', current_state)
             # Record current state
             self.time_data.append(current_time)
             self.position_data.append(current_state[:self.robot.nq].copy())
@@ -802,12 +788,12 @@ class TwoDOFArmMPCController:
             # Solve control problem (MPC or PID or L1 adaptive controller)
             if current_step % self.control_interval == 0:
                 # get baseline control (MPC or PID)
-                optimal_controls, optimal_states, solve_time, iterations = self.compute_control(current_state)
+                optimal_controls, optimal_states, solve_time, iterations = self.compute_control(current_state.copy())
                 u_b = optimal_controls[0]
                 
                 # get adaptive control (L1 adaptive controller)
                 if self.using_l1_adaptive_controller and current_step >= self.l1_start_step:
-                    self.l1_adaptive_controller.solve_l1_problem(current_state, u_b)
+                    self.l1_adaptive_controller.solve_l1_problem(current_state.copy(), u_b)
                     
                     print('--------------------------------step: {}--------------------------------'.format(current_step))
                     print('current_state: ', current_state)
@@ -827,6 +813,11 @@ class TwoDOFArmMPCController:
             self.control_data_u_b.append(u_b)
             self.control_data_u_ad.append(u_ad)
             
+            if self.using_l1_adaptive_controller:
+                self.l1_z_tilde_data.append(self.l1_adaptive_controller.z_tilde.copy())
+                self.l1_sig_hat_data.append(self.l1_adaptive_controller.sig_hat.copy())
+                self.l1_z_hat_data.append(self.l1_adaptive_controller.z_hat.copy())
+            
             # Record cost and solver info (handle both MPC and PID modes)
             if self.control_mode == 'mpc':
                 self.cost_data.append(self.solver.cost)
@@ -842,37 +833,49 @@ class TwoDOFArmMPCController:
             # Apply first control input
             control_input = optimal_controls[0]  # This should be a 2D vector
             
+            # control_input = np.zeros(2)
             
-            # Ensure control_input is the right shape and type
-            control_input = np.array(control_input, dtype=np.float64)
-            
-            # Apply friction compensation to control input (if enabled)
-            current_velocities = current_state[self.robot.nq:]  # Extract velocities from state
-            compensated_control_input = self.apply_friction_compensation_to_control(control_input, current_velocities)
-            
-            # Compute actual friction torque for debugging
-            friction_torque = self.compute_friction_torque(current_velocities)
-            friction_compensation = self.compute_static_friction_compensation(current_velocities) if self.enable_friction_compensation else np.zeros(2)
-            
-            # Debug: Print control information
+            # add disturbance torque to the control input      
+            if current_step >= self.disturbance_start_step and self.enable_disturbance:
+                disturbance_torque = np.array(self.args.disturbance['disturbance_torque'])
+            else:
+                disturbance_torque = np.array([0.0, 0.0])
+                
+            # add friction torque to the control input
             # if self.enable_friction:
-            #     if self.enable_friction_compensation:
-            #         print(f"Control: {control_input} -> Compensation: {friction_compensation} -> Final: {compensated_control_input}, Friction in dynamics: {friction_torque}")
-            #     else:
-            #         print(f"Control: {control_input} (No compensation), Friction in dynamics: {friction_torque}")
+            #     friction_torque = self.compute_friction_torque(current_state[self.robot.nq:], control_input)
+            #     print('friction_torque: ', friction_torque)
             # else:
-            #     print(f"Control: {control_input} (No friction model)")
+            #     friction_torque = np.array([0.0, 0.0])
             
-            # Update state using the compensated control input
-            next_state = self.calculate_next_state(current_state, compensated_control_input)
+            # get friction
+            friction_torque = np.zeros(self.robot.nv)
+            
+            if self.enable_friction:
+                for i in range(self.robot.nv):
+                    viscous = self.args.friction['dynamic_friction'][i] * current_state.copy()[self.robot.nq + i]
+                    # static friction, only when control_input bigger than static friction
+                    if abs(control_input[i]) > self.args.friction['static_friction'][i]:
+                        # 当控制输入大于静摩擦力时，摩擦力方向与控制输入方向相反
+                        friction_torque[i] = -viscous - self.args.friction['static_friction'][i]
+                    else:
+                        # 当控制输入小于静摩擦力时，最终表现相当于只有粘性摩擦力
+                        friction_torque[i] = -viscous - control_input[i]
+            
+            # get next state
+            final_torque = control_input + disturbance_torque + friction_torque
+            next_state = self.calculate_next_state(current_state.copy(), final_torque.copy())
             
             print('--------------------------------step: {}--------------------------------'.format(current_step))
             print('current_state            : ', current_state)
-            print('compensated_control_input: ', compensated_control_input)
+            print('control_input            : ', control_input)
+            # print('disturbance_torque       : ', disturbance_torque)
+            print('friction_torque          : ', friction_torque)
+            print('final_torque             : ', final_torque)
             print('next_state               : ', next_state)
             
             # Update state and time (using simulation time step)
-            current_state = next_state
+            current_state = next_state.copy()
             current_time += self.simulation_dt
             current_step += 1
             
@@ -903,11 +906,22 @@ class TwoDOFArmMPCController:
         control_array = np.array(self.control_data)
         cost_array = np.array(self.cost_data)
         target_array = np.array(self.target_data)
+        l1_z_tilde_array = np.array(self.l1_z_tilde_data)
+        l1_sig_hat_array = np.array(self.l1_sig_hat_data)
+        l1_z_hat_array = np.array(self.l1_z_hat_data)
+        l1_u_ad_array = np.array(self.control_data_u_ad)
+        l1_u_b_array = np.array(self.control_data_u_b)
         
         # Create figure
-        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+        fig, axes = plt.subplots(4, 2, figsize=(12, 10))
         control_mode_title = 'MPC' if self.control_mode == 'mpc' else 'PID'
-        fig.suptitle(f'2DOF Robotic Arm {control_mode_title} Angle Tracking Results', fontsize=16)
+        
+        # Add L1 information to title if using L1 controller
+        if self.using_l1_adaptive_controller:
+            l1_start_time = self.l1_start_step * self.simulation_dt
+            fig.suptitle(f'2DOF Robotic Arm {control_mode_title} + L1 Adaptive Control Results\n(L1 starts at t={l1_start_time:.1f}s)', fontsize=16)
+        else:
+            fig.suptitle(f'2DOF Robotic Arm {control_mode_title} Angle Tracking Results', fontsize=16)
         
         # Position tracking with dynamic targets
         axes[0, 0].plot(time_array, position_array[:, 0], 'b-', label='Joint 1 Actual Position', linewidth=2)
@@ -948,6 +962,66 @@ class TwoDOFArmMPCController:
             axes[1, 1].set_ylabel('Tracking Error (rad)')
             axes[1, 1].set_title('Position Tracking Error')
         axes[1, 1].grid(True)
+        
+        # L1 controller variables
+        if self.using_l1_adaptive_controller:
+            axes[2, 0].plot(time_array, l1_z_tilde_array[:, 2], 'b-', label='Joint 1 z_tilde', linewidth=2)
+            axes[2, 0].plot(time_array, l1_z_tilde_array[:, 3], 'r-', label='Joint 2 z_tilde', linewidth=2)
+            axes[2, 0].set_xlabel('Time (s)')
+            axes[2, 0].set_ylabel('z_tilde')
+            axes[2, 0].set_title('L1 Controller z_tilde')
+            axes[2, 0].legend()
+            axes[2, 0].grid(True)
+        
+            axes[2, 1].plot(time_array, l1_sig_hat_array[:, 2], 'b-', label='Joint 1 sig_hat', linewidth=2)
+            axes[2, 1].plot(time_array, l1_sig_hat_array[:, 3], 'r-', label='Joint 2 sig_hat', linewidth=2)
+            axes[2, 1].set_xlabel('Time (s)')
+            axes[2, 1].set_ylabel('sig_hat')
+            axes[2, 1].set_title('L1 Controller sig_hat')
+            axes[2, 1].legend()
+            axes[2, 1].grid(True)
+            
+            axes[3, 0].plot(time_array, l1_z_hat_array[:, 2], 'b-', label='Joint 1 z_hat', linewidth=2)
+            axes[3, 0].plot(time_array, l1_z_hat_array[:, 3], 'r-', label='Joint 2 z_hat', linewidth=2)
+            axes[3, 0].set_xlabel('Time (s)')
+            axes[3, 0].set_ylabel('z_hat')
+            axes[3, 0].set_title('L1 Controller z_hat')
+            axes[3, 0].legend()
+            axes[3, 0].grid(True)
+            
+            axes[3, 1].plot(time_array, l1_u_b_array[:, 0], 'b-', label='Joint 1 u_b', linewidth=2)
+            axes[3, 1].plot(time_array, l1_u_b_array[:, 1], 'r-', label='Joint 2 u_b', linewidth=2)
+            axes[3, 1].plot(time_array, l1_u_ad_array[:, 0], 'b--', label='Joint 1 u_ad', linewidth=2)
+            axes[3, 1].plot(time_array, l1_u_ad_array[:, 1], 'r--', label='Joint 2 u_ad', linewidth=2)
+            axes[3, 1].set_xlabel('Time (s)')
+            axes[3, 1].set_ylabel('u_b, u_ad')
+            axes[3, 1].set_title('L1 Controller u_b, u_ad')
+            axes[3, 1].legend()
+            axes[3, 1].grid(True)
+            # axes[3, 1].set_ylim(0, 0.2)
+        
+        # Add L1 controller start time annotation to all subplots
+        if self.using_l1_adaptive_controller:
+            l1_start_time = self.l1_start_step * self.simulation_dt
+            
+            # Add vertical line and annotation to all subplots
+            for i in range(4):
+                for j in range(2):
+                    # Add vertical line at L1 start time
+                    axes[i, j].axvline(x=l1_start_time, color='black', linestyle=':', 
+                                     linewidth=2, alpha=0.8, label='L1 Controller Start' if i == 0 and j == 0 else "")
+                    
+                    # Add text annotation only on the top plots to avoid clutter
+                    if i == 0:
+                        axes[i, j].annotate(f'L1 Start\nt={l1_start_time:.1f}s', 
+                                          xy=(l1_start_time, axes[i, j].get_ylim()[1]*0.1), 
+                                          xytext=(l1_start_time + 0.5, axes[i, j].get_ylim()[1] * 0.5),
+                                          fontsize=9, color='black', weight='bold',
+                                          arrowprops=dict(arrowstyle='->', color='black', alpha=0.7))
+                    
+                    # Update legend for the first subplot to include L1 start line
+                    if i == 0 and j == 0:
+                        axes[i, j].legend()
         
         plt.tight_layout()
         
@@ -1015,20 +1089,8 @@ class TwoDOFArmMPCController:
         Returns:
             next_state: Next state
         """
-        # Extract current velocities for friction calculation
-        current_velocities = current_state[self.robot.nq:]
         
-        # Compute friction torque
-        friction_torque = self.compute_friction_torque(current_velocities)
-        
-        # Apply friction to control input
-        control_with_friction = control.copy() + friction_torque
-        
-        # Use crocoddyl state update model for consistent dynamics
-        # Use simulation model with simulation time step for state integration
-        
-        # Compute next state using the simulation model with friction-modified control
-        self.simulation_update_model.calc(self.simulation_update_data, current_state.copy(), control_with_friction.copy())
+        self.simulation_update_model.calc(self.simulation_update_data, current_state, control)
         next_state_mpc = self.simulation_update_data.xnext
         
         return next_state_mpc
@@ -1044,16 +1106,7 @@ class TwoDOFArmMPCController:
         status = "enabled" if enable else "disabled"
         print(f"Debug Euler integration comparison {status}")
 
-    def compute_friction_torque(self, current_velocities):
-        """
-        Compute realistic friction torque including static and dynamic friction
-        
-        Args:
-            current_velocities: Current joint velocities [joint1_vel, joint2_vel]
-            
-        Returns:
-            friction_torque: Friction torques [joint1, joint2] (opposing motion)
-        """
+    def compute_friction_torque(self, current_velocities, control_input):
         if not self.enable_friction:
             return np.zeros(2)
         
@@ -1061,27 +1114,29 @@ class TwoDOFArmMPCController:
         friction_torque = np.zeros(2)
         
         static_friction = np.array(self.friction_params['static_friction'])
-        dynamic_friction = np.array(self.friction_params['dynamic_friction'])
-        velocity_threshold = np.array(self.friction_params['velocity_threshold'])
+        viscous_coeff   = np.array(self.friction_params['dynamic_friction'])  # 当作粘滞系数
+        velocity_threshold = np.array([0.1, 0.1])  # 速度阈值，用于平滑过渡
+        
+        eps = 1e-3   # 稍大一些，避免数值抖动
         
         for i in range(2):
-            abs_velocity = abs(current_velocities[i])
+            v = current_velocities[i]
+            abs_v = abs(v)
             
-            if abs_velocity < velocity_threshold[i]:
-                # Static friction region - Coulomb friction model
-                # Static friction opposes any tendency to move
-                if abs_velocity > 0:
-                    friction_torque[i] = -np.sign(current_velocities[i]) * static_friction[i]
-                else:
-                    # At exactly zero velocity, friction depends on applied torque
-                    # For simulation, we'll apply a small static friction
-                    friction_torque[i] = 0.0
-            else:
-                # Dynamic friction region - Viscous friction model
-                # Dynamic friction = viscous friction (proportional to velocity)
-                friction_torque[i] = -np.sign(current_velocities[i]) * (
-                    static_friction[i] + dynamic_friction[i] * abs_velocity
-                )
+            # 平滑过渡因子 (0~1)
+            transition = 1 - np.exp(-abs_v / (velocity_threshold[i] + eps))
+            
+            # 平滑符号函数
+            smooth_sign = v / (abs_v + eps)
+            
+            # Coulomb 摩擦（常值，随速度方向变化）
+            coulomb = static_friction[i] * transition
+            
+            # 粘滞摩擦（与速度成正比）
+            viscous = viscous_coeff[i] * v
+            
+            # 总摩擦力矩
+            friction_torque[i] = -(coulomb * smooth_sign + viscous)
         
         return friction_torque
     
@@ -1142,8 +1197,11 @@ class TwoDOFArmMPCController:
             
             self.current_target_index = target_index
         else:
-            # Fixed target mode: use fixed target positions
-            new_target = self.fixed_target_positions
+            # change target every 2 seconds
+            if int(current_time/2) % 2 == 1:
+                new_target = -self.fixed_target_positions
+            else:
+                new_target = self.fixed_target_positions
             self.current_target_index = 0
         
         # Only update if target has changed
@@ -1414,181 +1472,72 @@ class RosArmControlNode:
 
 def main():
     """Main function"""
-    import argparse
     
-    # Parse command line arguments
+    # =============================read config.yaml================================
+    with open("test/arm_control_perform_test/arm_sim_config.yaml", "r") as f:
+        config = yaml.safe_load(f)
+
+    # dynamic build parser
     parser = argparse.ArgumentParser(description='2DOF Robotic Arm MPC Control Test')
-    parser.add_argument('--visualization', action='store_true', default=False,
-                      help='Enable Gepetto visualization')
-    parser.add_argument('--simulation-time', type=float, default=5.0,
-                      help='Simulation time in seconds')
-    parser.add_argument('--mpc-dt', type=float, default=0.01,
-                      help='MPC control time step in seconds')
-    parser.add_argument('--simulation-dt', type=float, default=0.01,
-                      help='Simulation time step in seconds (defaults to mpc-dt if not provided)')
-    parser.add_argument('--target-change-interval', type=float, default=1000.0,
-                      help='Target change interval in seconds')
-    parser.add_argument('--ros', action='store_true', default=False,
-                      help='Run as ROS node')
-    parser.add_argument('--dynamic-targets', action='store_true', default=False,
-                      help='Use dynamic changing targets')
-    parser.add_argument('--fixed-targets', action='store_true', default=True,
-                      help='Use fixed target positions')
-    parser.add_argument('--fixed-joint1', type=float, default=1.0,
-                      help='Fixed target position for joint 1 (when using fixed targets)')
-    parser.add_argument('--fixed-joint2', type=float, default=0.6,
-                      help='Fixed target position for joint 2 (when using fixed targets)')
-    parser.add_argument('--control-mode', type=str, default='mpc', choices=['mpc', 'pid'],
-                      help='Control mode: mpc or pid')
-    parser.add_argument('--kp-pos', type=float, nargs=2, default=[3.0, 3.0],
-                      help='Position proportional gains for joint 1 and joint 2 (outer loop)')
-    parser.add_argument('--kp-vel', type=float, nargs=2, default=[8.0, 8.0],
-                      help='Velocity proportional gains for joint 1 and joint 2 (inner loop)')
-    parser.add_argument('--ki-vel', type=float, nargs=2, default=[1.0, 1.0],
-                      help='Velocity integral gains for joint 1 and joint 2 (inner loop)')
-    parser.add_argument('--kd-vel', type=float, nargs=2, default=[0.5, 0.5],
-                      help='Velocity derivative gains for joint 1 and joint 2 (inner loop)')
-    # Keep legacy PID parameters for backward compatibility
-    parser.add_argument('--pid-kp', type=float, nargs=2, default=None,
-                      help='Legacy: Use --kp-pos instead')
-    parser.add_argument('--pid-ki', type=float, nargs=2, default=None,
-                      help='Legacy: Use --ki-vel instead')
-    parser.add_argument('--pid-kd', type=float, nargs=2, default=None,
-                      help='Legacy: Use --kd-vel instead')
-    parser.add_argument('--velocity-limits', type=float, nargs=2, default=[1.5, 1.5],
-                      help='Maximum joint velocities for PID control (rad/s) for joint 1 and joint 2')
-    parser.add_argument('--enable-velocity-constraints', action='store_true', default=True,
-                      help='Enable velocity constraints for PID control')
-    parser.add_argument('--disable-velocity-constraints', action='store_true', default=False,
-                      help='Disable velocity constraints for PID control')
-    # Friction parameters
-    parser.add_argument('--static-friction', type=float, nargs=2, default=[0.15, 0.12],
-                      help='Static friction coefficients for joint 1 and joint 2 (Nm)')
-    parser.add_argument('--dynamic-friction', type=float, nargs=2, default=[0.08, 0.06],
-                      help='Dynamic friction coefficients for joint 1 and joint 2 (Nm·s/rad)')
-    parser.add_argument('--friction-velocity-threshold', type=float, nargs=2, default=[0.01, 0.01],
-                      help='Velocity threshold for static/dynamic friction transition (rad/s)')
-    parser.add_argument('--enable-friction', action='store_true', default=True,
-                      help='Enable friction model')
-    parser.add_argument('--disable-friction', action='store_true', default=False,
-                      help='Disable friction model')
-    parser.add_argument('--enable-friction-compensation', action='store_true', default=False,
-                      help='Enable friction compensation in control')
-    parser.add_argument('--disable-friction-compensation', action='store_true', default=False,
-                      help='Disable friction compensation in control')
-    
+    for key, value in config.items():
+        print(f"key: {key}, value: {value}")
+        parser.add_argument(f"--{key}", type=type(value), default=value)
+
     args = parser.parse_args()
-    
-    # Check if ROS mode is requested but ROS is not available
-    if args.ros and not ROS_AVAILABLE:
-        print("Error: ROS mode requested but ROS is not available")
-        print("Please install ROS and required packages")
-        return
-    
-    # URDF file path
-    urdf_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'models', 'urdf', 's500_uam_arm_effort.urdf')
+
+    # get urdf_path from config
+    urdf_path = args.urdf_path
     
     # Check if URDF file exists
     if not os.path.exists(urdf_path):
         print(f"Error: URDF file does not exist: {urdf_path}")
         return
     
-    # Create controller (MPC or PID)
-    velocity_constraints_enabled = args.enable_velocity_constraints and not args.disable_velocity_constraints
-    friction_enabled = args.enable_friction and not args.disable_friction
-    friction_compensation_enabled = args.enable_friction_compensation and not args.disable_friction_compensation
-    
-    mpc_controller = TwoDOFArmMPCController(
-        urdf_path=urdf_path,
-        mpc_dt=args.mpc_dt,
-        simulation_dt=args.simulation_dt,
-        enable_visualization=args.visualization,  # enable visualization
-        target_change_interval=args.target_change_interval,
-        control_mode=args.control_mode,
-        velocity_limits=args.velocity_limits if velocity_constraints_enabled else None,
-        enable_velocity_constraints=velocity_constraints_enabled
-    )
-    
-    # Set cascaded P+PID gains and velocity constraints if using PID mode
-    if args.control_mode == 'pid':
-        # Handle legacy parameters for backward compatibility
-        if args.pid_kp is not None:
-            print("Warning: --pid-kp is deprecated. Use --kp-pos instead.")
-            kp_pos = args.pid_kp
-        else:
-            kp_pos = args.kp_pos
-            
-        if args.pid_ki is not None:
-            print("Warning: --pid-ki is deprecated. Use --ki-vel instead.")
-            ki_vel = args.pid_ki
-        else:
-            ki_vel = args.ki_vel
-            
-        if args.pid_kd is not None:
-            print("Warning: --pid-kd is deprecated. Use --kd-vel instead.")
-            kd_vel = args.pid_kd
-        else:
-            kd_vel = args.kd_vel
-        
-        # Set cascaded controller gains
-        mpc_controller.pid_controller.kp_pos = np.array(kp_pos)
-        mpc_controller.pid_controller.kp_vel = np.array(args.kp_vel)
-        mpc_controller.pid_controller.ki_vel = np.array(ki_vel)
-        mpc_controller.pid_controller.kd_vel = np.array(kd_vel)
-        
-        # Set velocity constraints
-        velocity_constraints_enabled = args.enable_velocity_constraints and not args.disable_velocity_constraints
-        mpc_controller.pid_controller.velocity_limits = np.array(args.velocity_limits)
-        mpc_controller.pid_controller.enable_velocity_constraints = velocity_constraints_enabled
-        
-        print(f"Cascaded P+PID gains set:")
-        print(f"  Position gains (Kp_pos): {kp_pos}")
-        print(f"  Velocity gains (Kp_vel): {args.kp_vel}")
-        print(f"  Velocity gains (Ki_vel): {ki_vel}")
-        print(f"  Velocity gains (Kd_vel): {kd_vel}")
-        print(f"Velocity constraints - Enabled: {velocity_constraints_enabled}, Limits: {args.velocity_limits} rad/s")
+    # =============================Create controller ===============================
+    arm_controller = TwoDOFArmController(args)
     
     # Set target mode and positions based on command line arguments
-    if args.fixed_targets:
+    if args.target['fixed_targets']:
         # Fixed target mode
-        mpc_controller.use_dynamic_targets = False
-        mpc_controller.fixed_target_positions = np.array([args.fixed_joint1, args.fixed_joint2])
-        mpc_controller.target_positions = mpc_controller.fixed_target_positions.copy()
-        print(f"Using fixed targets: {mpc_controller.target_positions}")
+        arm_controller.use_dynamic_targets = False
+        arm_controller.fixed_target_positions = np.array([args.target['fixed_joint1'], args.target['fixed_joint2']])
+        arm_controller.target_positions = arm_controller.fixed_target_positions.copy()
+        print(f"Using fixed targets: {arm_controller.target_positions}")
     else:
         # Dynamic target mode
-        mpc_controller.use_dynamic_targets = True
-        print(f"Using dynamic targets with {len(mpc_controller.target_sequence)} sequences")
-        print(f"Target change interval: {mpc_controller.target_change_interval} seconds")
+        arm_controller.use_dynamic_targets = True
+        print(f"Using dynamic targets with {len(arm_controller.target_sequence)} sequences")
+        print(f"Target change interval: {arm_controller.target_change_interval} seconds")
     
+    # ==============================simulation======================================
     if args.ros:
-        # Run as ROS node
+        # Run as ROS node, dynamic is simulated using gazebo
         print(f"Starting ROS {args.control_mode.upper()} node...")
-        ros_node = RosArmControlNode(mpc_controller)
+        ros_node = RosArmControlNode(arm_controller)
         ros_node.run()
     else:
         # Run simulation mode
-        # Set initial state [joint1_pos, joint2_pos, joint1_vel, joint2_vel]
         initial_state = np.array([0.0, 0.0, 0.0, 0.0])
         
         print(f"Initial state: {initial_state}")
-        print(f"Target positions: {mpc_controller.target_positions}")
+        print(f"Target positions: {arm_controller.target_positions}")
         print(f"Visualization enabled: {args.visualization}")
         
         # Run simulation
-        simulation_time = args.simulation_time  # seconds
-        mpc_controller.simulate_system(initial_state, simulation_time)
+        simulation_time = args.simulation['simulation_time']
+        arm_controller.simulate_system(initial_state, simulation_time)
         
         # Display complete trajectory if visualization is enabled
-        if args.visualization and mpc_controller.enable_visualization:
+        if args.visualization and arm_controller.enable_visualization:
             print("\nDisplaying complete trajectory...")
-            mpc_controller.display_trajectory(mpc_controller.position_data)
+            arm_controller.display_trajectory(arm_controller.position_data)
         
         # Plot results
-        mpc_controller.plot_results()
+        arm_controller.plot_results()
         
         # Save data
-        mpc_controller.save_data()
+        if args.save_data['enable']:
+            arm_controller.save_data()
         
         print("Test completed!")
 
