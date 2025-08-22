@@ -305,8 +305,8 @@ class TwoDOFArmController:
         # Set time steps
         self.simulation_dt = args.simulation['simulation_dt']  # simulation using 1ms time step
         self.control_rate = args.simulation['control_rate']  # Hz
-        self.mpc_dt = 1.0 / self.control_rate
-        self.control_interval = int(self.mpc_dt / self.simulation_dt)
+        self.mpc_dt = args.controller['mpc']['mpc_dt']
+        self.control_interval = int(1 / self.control_rate / self.simulation_dt)
         
         self.horizon_length = args.controller['mpc']['horizon_length']
         self.enable_visualization = args.visualization

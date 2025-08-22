@@ -13,11 +13,11 @@ save_data:
 
 simulation:
   simulation_time: 10
-  simulation_dt: 0.01
-  control_rate: 100.0
+  simulation_dt: 0.001
+  control_rate: 200.0
 
 friction:
-  enable_friction: True  
+  enable_friction: False  
   enable_friction_compensation: False
 
   static_friction: [0.02, 0.02]
@@ -39,13 +39,14 @@ target:
 controller:
   mpc:
     horizon_length: 10
+    mpc_dt: 0.01
     position_weight: 1.0
     velocity_weight: 1.0
     control_weight: 1.0
     terminal_scale: 100
 
   l1_adaptive:
-    enable: True
+    enable: False
     adaptation_gain: -0.01
     filter_time_constants: 0.001
     l1_start_time: 5.0
