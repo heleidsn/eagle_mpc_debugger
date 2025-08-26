@@ -46,17 +46,17 @@
   <link name="rotor_1">
     <inertial>
       <origin
-        xyz="3.9471E-08 0.025041 -1.4592E-05"
+        xyz="0 0 0"
         rpy="0 0 0" />
       <mass
-        value="0.010198" />
+        value="0.01" />
       <inertia
-        ixx="3.3719E-05"
-        ixy="7.4123E-13"
-        ixz="-4.3241E-07"
-        iyy="3.3918E-05"
-        iyz="-3.8834E-11"
-        izz="2.8343E-07" />
+        ixx="9.75e-07"
+        ixy="0"
+        ixz="0"
+        iyy="5.2e-05"
+        iyz="0"
+        izz="5.2e-05" />
     </inertial>
     <visual>
       <origin
@@ -84,7 +84,7 @@
   </link>
   <joint name="rotor_joint_1" type="fixed">
     <origin
-      xyz="0.171 0.171 0.045"
+      xyz="0.171 0.171 0.07"
       rpy="0 0 0" />
     <parent
       link="base_link" />
@@ -96,17 +96,17 @@
   <link name="rotor_2">
     <inertial>
       <origin
-        xyz="8.1559E-08 0.027195 -1.4122E-05"
+        xyz="0 0 0"
         rpy="0 0 0" />
       <mass
-        value="0.010198" />
+        value="0.01" />
       <inertia
-        ixx="3.3719E-05"
-        ixy="-8.3558E-13"
-        ixz="-4.3246E-07"
-        iyy="3.3919E-05"
-        iyz="-4.2468E-11"
-        izz="2.8344E-07" />
+        ixx="9.75e-07"
+        ixy="0"
+        ixz="0"
+        iyy="5.2e-05"
+        iyz="0"
+        izz="5.2e-05" />
     </inertial>
     <visual>
       <origin
@@ -134,7 +134,7 @@
   </link>
   <joint name="rotor_joint_2" type="fixed">
     <origin
-      xyz="-0.171 0.171 0.045"
+      xyz="-0.171 0.171 0.07"
       rpy="0 0 0" />
     <parent
       link="base_link" />
@@ -146,17 +146,17 @@
   <link name="rotor_3">
     <inertial>
       <origin
-        xyz="9.9115E-08 0.011499 -1.3684E-05"
+        xyz="0 0 0"
         rpy="0 0 0" />
       <mass
-        value="0.010198" />
+        value="0.01" />
       <inertia
-        ixx="3.3719E-05"
-        ixy="1.6825E-12"
-        ixz="-4.3246E-07"
-        iyy="3.3919E-05"
-        iyz="-5.4463E-11"
-        izz="2.8343E-07" />
+        ixx="9.75e-07"
+        ixy="0"
+        ixz="0"
+        iyy="5.2e-05"
+        iyz="0"
+        izz="5.2e-05" />
     </inertial>
     <visual>
       <origin
@@ -184,7 +184,7 @@
   </link>
   <joint name="rotor_joint_3" type="fixed">
     <origin
-      xyz="-0.171 -0.171 0.045"
+      xyz="-0.171 -0.171 0.07"
       rpy="0 0 0" />
     <parent
       link="base_link" />
@@ -196,17 +196,17 @@
   <link name="rotor_4">
     <inertial>
       <origin
-        xyz="1.4103E-07 0.009346 -1.3967E-05"
+        xyz="0 0 0"
         rpy="0 0 0" />
       <mass
-        value="0.010198" />
+        value="0.01" />
       <inertia
-        ixx="3.3719E-05"
-        ixy="1.1737E-12"
-        ixz="-4.3243E-07"
-        iyy="3.3918E-05"
-        iyz="-4.6991E-11"
-        izz="2.8343E-07" />
+        ixx="9.75e-07"
+        ixy="0"
+        ixz="0"
+        iyy="5.2e-05"
+        iyz="0"
+        izz="5.2e-05" />
     </inertial>
     <visual>
       <origin
@@ -234,7 +234,7 @@
   </link>
   <joint name="rotor_joint_4" type="fixed">
     <origin
-      xyz="0.1701 -0.1701 0.0603"
+      xyz="0.171 -0.171 0.07"
       rpy="0 0 0" />
     <parent
       link="base_link" />
