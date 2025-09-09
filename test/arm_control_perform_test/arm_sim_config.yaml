@@ -14,7 +14,7 @@ save_data:
 simulation:
   simulation_time: 10
   simulation_dt: 0.001
-  control_rate: 200.0
+  control_rate: 100
 
 friction:
   enable_friction: False  
@@ -26,30 +26,32 @@ friction:
 disturbance:
   enable_disturbance: False
   disturbance_start_time: 2.0
-  enable_disturbance_compensation: True
-
-  disturbance_torque: [0.2, 0.3]
+  disturbance_torque: [0.4, 0.2]
 
 target:
   fixed_targets: True
-  fixed_joint1: 0.2
-  fixed_joint2: 0.4
-  target_change_interval: 1000.0
+  fixed_joint1: 0.6
+  fixed_joint2: 0.3
+  target_change_interval: 5.0
 
 controller:
   mpc:
-    horizon_length: 10
+    horizon_length: 20
     mpc_dt: 0.01
     position_weight: 1.0
     velocity_weight: 1.0
-    control_weight: 1.0
+    control_weight: 0.0
     terminal_scale: 100
 
   l1_adaptive:
     enable: False
-    adaptation_gain: -0.01
-    filter_time_constants: 0.001
     l1_start_time: 5.0
+
+    adaptation_gain: -0.1
+    filter_time_constants: 0.1
+
+    l1_model_scale_coef: 1.0
+    
 
   pid:
     position_kp: 1.0

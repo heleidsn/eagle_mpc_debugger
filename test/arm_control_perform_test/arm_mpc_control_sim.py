@@ -183,8 +183,7 @@ except ImportError:
     print("Warning: ROS not available. ROS mode will be disabled.")
     
 class L1AdaptiveController:
-    def __init__(self, dt, robot_model, adaptation_gain=-10.0, filter_time_constants=None, 
-                 friction_threshold=0.01, enable_static_compensation=True):
+    def __init__(self, dt, robot_model, adaptation_gain=-1.0, filter_time_constants=None, model_scale_coef=1.0):
         self.dt = dt
         
         self.robot_model = robot_model
@@ -192,6 +191,7 @@ class L1AdaptiveController:
         
         self.adaptation_gain = adaptation_gain
         self.filter_time_constants = filter_time_constants
+        self.model_scale_coef = model_scale_coef
         
         self.state_dim = self.robot_model.nq + self.robot_model.nv
         self.control_dim = self.robot_model.nv
@@ -258,6 +258,7 @@ class L1AdaptiveController:
         
         M_aug = self.M_aug_template.copy()
         M_aug[self.control_dim:, self.control_dim:] = M
+        M_aug = M_aug * self.model_scale_coef
         
         mu = np.matmul(self.expm_A_s_dt, self.z_tilde)
         PHI_inv_mul_mu = self.PHI_inv_diag * mu
@@ -338,7 +339,10 @@ class TwoDOFArmController:
             self.l1_config = args.controller['l1_adaptive']
             self.l1_start_step = int(self.l1_config['l1_start_time'] / self.simulation_dt)
             
-            self.l1_adaptive_controller = L1AdaptiveController(self.mpc_dt, self.robot, self.l1_config['adaptation_gain'], self.l1_config['filter_time_constants'])
+            # self.cut_off_frequency = 10 # Hz
+            # self.filter_time_constants = 0.1
+            # print(f"Filter time constants: {self.filter_time_constants} s")
+            self.l1_adaptive_controller = L1AdaptiveController(1/self.control_rate, self.robot, self.l1_config['adaptation_gain'], self.l1_config['filter_time_constants'], self.l1_config['l1_model_scale_coef'])
         
         # Target configuration
         self.target_change_interval = args.target['target_change_interval']  # seconds
@@ -526,7 +530,7 @@ class TwoDOFArmController:
         )
         
         # Create separate state update model for simulation with simulation time step
-        self.simulation_update_model = crocoddyl.IntegratedActionModelRK4(differential_model, self.simulation_dt)
+        self.simulation_update_model = crocoddyl.IntegratedActionModelEuler(differential_model, self.simulation_dt)
         self.simulation_update_data = self.simulation_update_model.createData()
         
         print("State update models created successfully")
@@ -869,7 +873,7 @@ class TwoDOFArmController:
             print('--------------------------------step: {}--------------------------------'.format(current_step))
             print('current_state            : ', current_state)
             print('control_input            : ', control_input)
-            # print('disturbance_torque       : ', disturbance_torque)
+            print('disturbance_torque       : ', disturbance_torque)
             print('friction_torque          : ', friction_torque)
             print('final_torque             : ', final_torque)
             print('next_state               : ', next_state)
@@ -1198,7 +1202,7 @@ class TwoDOFArmController:
             self.current_target_index = target_index
         else:
             # change target every 2 seconds
-            if int(current_time/2) % 2 == 1:
+            if int(current_time/self.target_change_interval) % self.target_change_interval == 1:
                 new_target = -self.fixed_target_positions
             else:
                 new_target = self.fixed_target_positions
