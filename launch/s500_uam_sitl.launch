@@ -3,7 +3,7 @@
     <arg name="vehicle" default="s500_uam"/>
     <arg name="world_name" default="table_beer_with_stand"/>
     <arg name="use_camera" default="false"/>
-    <arg name="arm_control_mode" default="effort"/>
+    <arg name="arm_control_mode" default="position"/>
     
     <arg name="world" default="$(find eagle_mpc_debugger)/worlds/$(arg world_name).world"/>
     <arg name="sdf" default="$(find eagle_mpc_debugger)/models/sdf/s500_uam/s500_uam_camera.sdf"/>
@@ -32,8 +32,8 @@
     <!-- Gazebo sim add arm initial position-->
     <arg name="x" default="-1.5"/>
     <arg name="y" default="0"/>
-    <arg name="z" default="0.35" if="$(eval arg('world_name') == 'table_beer_with_stand')"/>
-    <arg name="z" default="0" unless="$(eval arg('world_name') == 'table_beer_with_stand')"/>
+    <arg name="z" default="0.37" if="$(eval arg('world_name') == 'table_beer_with_stand')"/>
+    <arg name="z" default="0.5" unless="$(eval arg('world_name') == 'table_beer_with_stand')"/>
     <arg name="joint_1_pos" default="-1.2"/>
     <arg name="joint_2_pos" default="-0.6"/>
     <arg name="joint_3_pos" default="0.0"/>
@@ -76,6 +76,13 @@
         respawn="false">
         <param name="use_sim_time" value="true"/>
     </node>
+
+    <!-- Launch Joint PID Controller -->
+    <!-- <node name="joint_pid_controller" pkg="eagle_mpc_debugger" type="joint_pid_controller.py" output="screen">
+    </node> -->
+    
+    <!-- Optional: Launch rqt_reconfigure for easy parameter tuning -->
+    <!-- <node name="rqt_reconfigure" pkg="rqt_reconfigure" type="rqt_reconfigure" output="screen" /> -->
 
     <!-- gazebo state-->
     <node pkg="eagle_mpc_debugger" type="groundtruth_pub.py" name="groundtruth_pub" output="screen">

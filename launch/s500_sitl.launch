@@ -7,7 +7,7 @@
     <arg name="est" default="ekf2"/>
     <arg name="vehicle" default="s500"/>
     <arg name="world" default="$(find eagle_mpc_debugger)/worlds/empty.world"/>
-    <arg name="sdf" default="$(find mavlink_sitl_gazebo)/models/$(arg vehicle)/$(arg vehicle).sdf"/>
+    <arg name="sdf" default="$(find eagle_mpc_debugger)/models/sdf/s500_uam/s500.sdf"/>
 
     <!-- gazebo configs -->
     <arg name="gui" default="true"/>
