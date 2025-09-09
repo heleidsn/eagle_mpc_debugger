@@ -508,7 +508,7 @@ class EagleMPCDebuggerGUI(QMainWindow):
         arm_control_mode_label = QLabel("Arm Control Mode:")
         self.arm_control_mode_combo = QComboBox()
         self.arm_control_mode_combo.addItems(["position", "velocity", "effort"])
-        self.arm_control_mode_combo.setCurrentText("effort")
+        self.arm_control_mode_combo.setCurrentText("position")
         arm_control_mode_selection_layout.addWidget(arm_control_mode_label)
         arm_control_mode_selection_layout.addWidget(self.arm_control_mode_combo)
         simulation_layout.addLayout(arm_control_mode_selection_layout)
@@ -661,7 +661,7 @@ class EagleMPCDebuggerGUI(QMainWindow):
         self.system_status.setText("Running" if roscore_running else "Stopped")
         
         if self.current_state:
-            self.control_mode_status.setText(self.current_state.control_mode)
+            # self.control_mode_status.setText(self.current_state.control_mode)
             self.mpc_status.setText(f"Running (Cost: {self.current_state.mpc_final_cost:.2f})")
             
         if self.arm_state:

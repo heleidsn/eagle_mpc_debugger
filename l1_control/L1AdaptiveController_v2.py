@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2024-09-07 17:26:46
-LastEditTime: 2025-07-15 13:07:44
+LastEditTime: 2025-09-09 11:15:23
 Description: L1 adaptive controller with 9 state variables
 Version 3: Used for full actuation
 0916： fixed the bug in adaptive_law_new, change tau_body=u_b + u_ad_all + self.sig_hat_b
@@ -27,16 +27,18 @@ class L1AdaptiveControllerAll:
     param {*} self
     return {*}
     '''    
-    def __init__(self, dt, robot_model, As_coef, filter_time_constant, using_z_real=False):
+    def __init__(self, dt, robot_model, As_coef, filter_time_constant):
         self.dt = dt
         
         self.as_matrix_coef   = As_coef  # Hurwitz matrix
+        
+        self.step_debug = False
         
         self.using_vel_disturbance = False
         self.using_full_state = False         # choose whether to use full state or not
         self.flag_using_z_ref = False
         
-        self.using_z_real = using_z_real
+        self.using_z_real = False
         
         self.robot_model = robot_model
         self.robot_model_data = self.robot_model.createData()
@@ -48,13 +50,14 @@ class L1AdaptiveControllerAll:
         if self.robot_model.nq == 7:
             self.use_arm = False
             self.filter_num = 2   # no arm
+            self.arm_joint_num = 0
         else:
             self.filter_num = 3   # with arm
             self.use_arm = True
             self.arm_joint_num = self.robot_model.nq - 7  # number of arm joints
         
         # tunning parameters
-        self.a_s = np.ones(self.state_dim_euler) * self.as_matrix_coef #! Hurwitz matrix
+        self.a_s = np.ones(self.state_dim_euler) * self.as_matrix_coef
         self.filter_time_const = filter_time_constant
         
         # Pre-compute matrices for optimization
@@ -83,7 +86,7 @@ class L1AdaptiveControllerAll:
         
         self.z_hat = np.zeros(self.state_dim_euler)     # 估计的状态向量 Euler
         self.z_ref = np.zeros(self.state_dim_euler)     # 参考状态向量 Euler
-        self.z_real = np.zeros(self.state_dim_euler) # 状态测量值  in rad
+        self.z_real = np.zeros(self.state_dim_euler)    # 状态测量值  in rad
         
         self.sig_hat = np.zeros(self.state_dim_euler)  # 估计的扰动
         
@@ -97,7 +100,9 @@ class L1AdaptiveControllerAll:
         
         self.sig_f_prev = np.zeros(3)
         self.sig_t_prev = np.zeros(3)
-        self.sig_t_arm_prev = np.zeros(self.arm_joint_num) 
+        
+        if self.use_arm:
+            self.sig_t_arm_prev = np.zeros(self.arm_joint_num) 
         
         self.A_s = np.diag(self.a_s) # diagonal Hurwitz matrix, same as that used in [3]
         self.expm_A_s_dt = sLA.expm(self.A_s * self.dt)
@@ -124,17 +129,16 @@ class L1AdaptiveControllerAll:
         return {*}
         '''        
         # update predictor
-        # tau_body = self.u_mpc + self.u_ad + self.sig_hat[self.control_dim:] + self.u_tracking   # 假设只用u_b进行控制
-        
-        tau_body = self.u_mpc + self.u_ad + self.sig_hat[self.control_dim:]
-        # # tau_body = self.u_mpc
-        # print('--------------------------------')
-        # print('u_mpc   : ', self.u_mpc)
-        # print('u_ad    : ', self.u_ad)
-        # print('sig_hat : ', self.sig_hat[self.control_dim:])
-        # print('tau_body: ', tau_body)
-        # print('dt      : ', self.dt)
-        # print('--------------------------------')
+        tau_body = self.u_mpc + self.u_ad + self.sig_hat[self.control_dim:] + self.u_tracking   # 假设只用u_b进行控制
+
+        if self.step_debug:
+            print('--------------------------------')
+            print('u_mpc   : ', self.u_mpc)
+            print('u_ad    : ', self.u_ad)
+            print('sig_hat : ', self.sig_hat[self.control_dim:])
+            print('tau_body: ', tau_body)
+            print('dt      : ', self.dt)
+            print('--------------------------------')
         
         z_hat_prev = self.z_hat.copy()
         
@@ -142,30 +146,25 @@ class L1AdaptiveControllerAll:
         data = self.robot_model_data
         q = self.current_state[:self.robot_model.nq]    # state
         v = self.current_state[self.robot_model.nq:]    # velocity
-        dt = self.dt
         
-        # if self.flag_using_z_ref:
-        #     z_hat_dot_vel = pin.aba(model, data, q, v, u) + (self.A_s @ self.z_tilde_ref)[self.control_dim:]
-        # else:
-        #     z_hat_dot_vel = pin.aba(model, data, q, v, u) + (self.A_s @ self.z_tilde)[self.control_dim:]
         z_hat_dot_without_disturb = pin.aba(model, data, q, v, tau_body)   # get a using the current state
         z_hat_dot_disturb = self.A_s[self.control_dim:, self.control_dim:] @ self.z_tilde[self.control_dim:]  # get a using the current state
+        
         z_hat_dot_vel = z_hat_dot_without_disturb.copy() + z_hat_dot_disturb.copy()
         
-        # print('--------------------------------')
-        # print('z_hat_dot_wo_disturb: ', z_hat_dot_without_disturb[-2:])
-        # print('z_hat_dot_disturb   : ', z_hat_dot_disturb[-2:])
-        # print('z_hat_dot_vel       : ', z_hat_dot_vel[-2:])
+        self.z_hat[self.control_dim:] = z_hat_prev[self.control_dim:].copy() + self.dt * z_hat_dot_vel.copy()
         
-        # self.z_hat = z_hat_new.copy()    # in body frame
-        if self.using_z_real:
-            self.z_hat[self.control_dim:] = self.z_real[self.control_dim:] + self.dt * z_hat_dot_vel.copy()
-        else:
-            self.z_hat[self.control_dim:] = z_hat_prev[self.control_dim:].copy() + self.dt * z_hat_dot_vel.copy()
-            # print('z_hat: ', self.z_hat[self.control_dim:])
-            
-        # limit the z_hat
-        # self.z_hat = np.clip(self.z_hat, -2, 2)
+        if self.step_debug:
+            print('--------------------------------')
+            print('q                   : ', q)
+            print('v                   : ', v)
+            print('tau_body            : ', tau_body)
+            print('z_hat_dot_wo_disturb: ', z_hat_dot_without_disturb[-2:])
+            print('z_hat_dot_disturb   : ', z_hat_dot_disturb[-2:])
+            print('z_hat_dot_vel       : ', z_hat_dot_vel[-2:]) 
+            print('z_hat               : ', self.z_hat[self.control_dim:])
+            print('z_tilde             : ', self.z_tilde[self.control_dim:])
+            print('--------------------------------')
         
     def update_sig_hat_all_v2_new(self):
         """Optimized version that uses pre-computed matrices and diagonal structure"""
@@ -193,15 +192,21 @@ class L1AdaptiveControllerAll:
         # print('sigma_hat_disturb: ', sigma_hat_disturb)
 
         # Use direct weight multiplication instead of matrix operations
-        weight = np.array([0, 0, 0, 0, 0, 0, 0, 0, 100, 100, 50, 1, 1, 1, 0.2, 0.1])
-        self.sig_hat = -1 * weight * self.z_tilde.copy()
-        # self.sig_hat = sigma_hat_disturb.copy()
+        # weight = np.array([0, 0, 0, 0, 0, 0, 0, 0, 100, 100, 50, 1, 1, 1, 1, 1])
+        weight = np.array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.4, 0.09])
+        # self.sig_hat = -1 * weight * self.z_tilde.copy()
+        self.sig_hat = sigma_hat_disturb.copy()
         
         # add constrain to sig_hat
-        self.sig_hat = np.clip(self.sig_hat, -1, 1)
+        self.sig_hat = np.clip(self.sig_hat, -20, 20)
 
         t5 = time.time()
         # rospy.loginfo(f"timing (ms): crba: {(t1-t0)*1000:.3f}  aug: {(t2-t1)*1000:.3f}  phi_mul: {(t4-t2)*1000:.3f}  sigma_hat: {(t5-t4)*1000:.3f}")
+        
+        if self.step_debug:
+            print('--------------------------------')
+            print('sig_hat: ', self.sig_hat[self.control_dim:])
+            print('--------------------------------')
     
     def update_u_ad(self):
         '''
@@ -231,7 +236,7 @@ class L1AdaptiveControllerAll:
         self.u_ad = -sig_hat_filtered
         
         # limitation
-        flag_using_limit = True
+        flag_using_limit = False
         if flag_using_limit:
             if self.use_arm:
                 min_values = np.array([0, 0, -10, -1, -1, -1, -1.0, -1.0])
@@ -243,15 +248,11 @@ class L1AdaptiveControllerAll:
             clipped_array = np.where(clipped_array > max_values, max_values, clipped_array)
             
             self.u_ad = clipped_array
-        
-        # 加入对于tracking error的反馈
-        if self.flag_using_z_ref:
-            error_p = np.array([1, 1, 1, 1, 1, 1]) # 位置反馈的权重  error_p = np.array([0, 0, 0, 0, 0, 0, 1.8, 3, 0.03]) # 位置反馈的权重
-            self.u_tracking = self.tracking_error_angle * error_p * 5 + self.tracking_error_velocity * 0
             
-            return self.u_ad + self.u_tracking
-        else:
-            return self.u_ad
+        if self.step_debug:
+            print('--------------------------------')
+            print('u_ad: ', self.u_ad)
+            print('--------------------------------')
     
     def low_pass_filter(self, time_const, curr_i, prev_i):
         '''

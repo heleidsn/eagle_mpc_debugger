@@ -6,6 +6,7 @@ import numpy as np
 import rospkg
 import os
 import yaml
+import pinocchio as pin
 
 class SafeCallback(crocoddyl.CallbackAbstract):
     def __init__(self):
@@ -142,3 +143,34 @@ def create_mpc_controller(mpc_name, trajectory, traj_state_ref, dt_traj_opt, mpc
         # Clean up the temporary file
         if os.path.exists(temp_yaml_path):
             os.remove(temp_yaml_path)
+            
+def create_state_update_model(urdf_model_path, dt):
+    '''
+    description: create state update model
+    '''
+    robot_model = pin.buildModelFromUrdf(urdf_model_path, pin.JointModelFreeFlyer())
+    
+    state = crocoddyl.StateMultibody(robot_model)
+    actuation = crocoddyl.ActuationModelFull(state)
+    action_model = crocoddyl.DifferentialActionModelFreeFwdDynamics(state, actuation, crocoddyl.CostModelSum(state, actuation.nu))
+    
+    return crocoddyl.IntegratedActionModelEuler(action_model, dt/1000)
+
+def create_state_update_model_quadrotor(robotModel, platformParams, dt):
+    robotModel = robotModel
+    robotState = crocoddyl.StateMultibody(robotModel)
+    platformParams = platformParams
+    dt = dt / 1000.
+
+    actuationModel = crocoddyl.ActuationModelMultiCopterBase(
+        robotState, platformParams.tau_f)
+    difAM = crocoddyl.DifferentialActionModelFreeFwdDynamics(
+        robotState, actuationModel, crocoddyl.CostModelSum(robotState, actuationModel.nu))
+    intAM = crocoddyl.IntegratedActionModelEuler(difAM, dt)
+    intAD = intAM.createData()
+    
+    print(f"State update model created successfully")
+    print(f"  MPC model uses dt = {dt} s")
+    print(f"  Simulation model uses dt = {dt} s")
+    
+    return intAM, intAD

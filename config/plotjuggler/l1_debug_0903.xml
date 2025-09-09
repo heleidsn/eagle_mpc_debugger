@@ -1,0 +1,212 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<root>
+ <tabbed_widget name="Main Window" parent="main_window">
+  <Tab tab_name="tab1" containers="1">
+   <Container>
+    <DockSplitter count="1" orientation="-" sizes="1">
+     <DockSplitter count="4" orientation="|" sizes="0.25;0.25;0.25;0.25">
+      <DockSplitter count="5" orientation="-" sizes="0.199899;0.199899;0.200404;0.199899;0.199899">
+       <DockArea name="...">
+        <plot flip_x="false" style="Lines" mode="TimeSeries" flip_y="false">
+         <range top="-1.484187" bottom="-1.485343" right="33.099000" left="3.099000"/>
+         <limitY/>
+         <curve name="/mpc/state/state[0]" color="#1f77b4"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot flip_x="false" style="Lines" mode="TimeSeries" flip_y="false">
+         <range top="0.000444" bottom="-0.000730" right="33.099000" left="3.099000"/>
+         <limitY/>
+         <curve name="/mpc/state/state[1]" color="#d62728"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot flip_x="false" style="Lines" mode="TimeSeries" flip_y="false">
+         <range top="1.292981" bottom="1.292626" right="33.099000" left="3.099000"/>
+         <limitY/>
+         <curve name="/mpc/state/state[2]" color="#1ac938"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot flip_x="false" style="Lines" mode="TimeSeries" flip_y="false">
+         <range top="-0.779148" bottom="-0.779768" right="33.099000" left="3.099000"/>
+         <limitY/>
+         <curve name="/mpc/state/state[6]" color="#17becf"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot flip_x="false" style="Lines" mode="TimeSeries" flip_y="false">
+         <range top="0.001825" bottom="-0.000028" right="33.099000" left="3.099000"/>
+         <limitY/>
+         <curve name="/mpc/state/state[14]" color="#17becf"/>
+        </plot>
+       </DockArea>
+      </DockSplitter>
+      <DockSplitter count="5" orientation="-" sizes="0.199899;0.199899;0.200404;0.199899;0.199899">
+       <DockArea name="...">
+        <plot flip_x="false" style="Lines" mode="TimeSeries" flip_y="false">
+         <range top="0.000621" bottom="-0.000467" right="33.099000" left="3.099000"/>
+         <limitY/>
+         <curve name="/mpc/state/state[3]" color="#ff7f0e"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot flip_x="false" style="Lines" mode="TimeSeries" flip_y="false">
+         <range top="0.000453" bottom="-0.000625" right="33.099000" left="3.099000"/>
+         <limitY/>
+         <curve name="/mpc/state/state[4]" color="#f14cc1"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot flip_x="false" style="Lines" mode="TimeSeries" flip_y="false">
+         <range top="0.000827" bottom="-0.000686" right="33.099000" left="3.099000"/>
+         <limitY/>
+         <curve name="/mpc/state/state[5]" color="#9467bd"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot flip_x="false" style="Lines" mode="TimeSeries" flip_y="false">
+         <range top="-0.440655" bottom="-0.440749" right="33.099000" left="3.099000"/>
+         <limitY/>
+         <curve name="/mpc/state/state[7]" color="#bcbd22"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot flip_x="false" style="Lines" mode="TimeSeries" flip_y="false">
+         <range top="0.000012" bottom="0.000003" right="33.099000" left="3.099000"/>
+         <limitY/>
+         <curve name="/mpc/state/state[15]" color="#bcbd22"/>
+        </plot>
+       </DockArea>
+      </DockSplitter>
+      <DockSplitter count="5" orientation="-" sizes="0.199899;0.199899;0.200404;0.199899;0.199899">
+       <DockArea name="...">
+        <plot flip_x="false" style="Lines" mode="TimeSeries" flip_y="false">
+         <range top="0.000818" bottom="-0.000677" right="33.099000" left="3.099000"/>
+         <limitY/>
+         <curve name="/mpc/state/state[8]" color="#1f77b4"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot flip_x="false" style="Lines" mode="TimeSeries" flip_y="false">
+         <range top="0.000941" bottom="-0.001254" right="33.099000" left="3.099000"/>
+         <limitY/>
+         <curve name="/mpc/state/state[9]" color="#d62728"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot flip_x="false" style="Lines" mode="TimeSeries" flip_y="false">
+         <range top="0.000508" bottom="-0.000553" right="33.099000" left="3.099000"/>
+         <limitY/>
+         <curve name="/mpc/state/state[10]" color="#1ac938"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot flip_x="false" style="Lines" mode="TimeSeries" flip_y="false">
+         <range top="21.987292" bottom="-0.536275" right="33.099000" left="3.099000"/>
+         <limitY/>
+         <curve name="/mpc/state/u_mpc[2]" color="#1f77b4"/>
+         <curve name="/mpc/state/u_ad[2]" color="#d62728"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot flip_x="false" style="Lines" mode="TimeSeries" flip_y="false">
+         <range top="0.006754" bottom="-0.276930" right="33.099000" left="3.099000"/>
+         <limitY/>
+         <curve name="/mpc/state/u_mpc[6]" color="#ff7f0e"/>
+         <curve name="/mpc/state/u_ad[6]" color="#9467bd"/>
+        </plot>
+       </DockArea>
+      </DockSplitter>
+      <DockSplitter count="5" orientation="-" sizes="0.199899;0.199899;0.200404;0.199899;0.199899">
+       <DockArea name="...">
+        <plot flip_x="false" style="Lines" mode="TimeSeries" flip_y="false">
+         <range top="0.009353" bottom="-0.008954" right="33.099000" left="3.099000"/>
+         <limitY/>
+         <curve name="/mpc/state/state[11]" color="#ff7f0e"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot flip_x="false" style="Lines" mode="TimeSeries" flip_y="false">
+         <range top="0.008532" bottom="-0.008579" right="33.099000" left="3.099000"/>
+         <limitY/>
+         <curve name="/mpc/state/state[12]" color="#f14cc1"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot flip_x="false" style="Lines" mode="TimeSeries" flip_y="false">
+         <range top="0.002722" bottom="-0.002691" right="33.099000" left="3.099000"/>
+         <limitY/>
+         <curve name="/mpc/state/state[13]" color="#9467bd"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot flip_x="false" style="Lines" mode="TimeSeries" flip_y="false">
+         <range top="0.007115" bottom="-0.291710" right="33.099000" left="3.099000"/>
+         <limitY/>
+         <curve name="/mpc/state/u_mpc[4]" color="#1ac938"/>
+         <curve name="/mpc/state/u_ad[4]" color="#bcbd22"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot flip_x="false" style="Lines" mode="TimeSeries" flip_y="false">
+         <range top="0.002787" bottom="-0.114276" right="33.099000" left="3.099000"/>
+         <limitY/>
+         <curve name="/mpc/state/u_mpc[7]" color="#f14cc1"/>
+         <curve name="/mpc/state/u_ad[7]" color="#17becf"/>
+        </plot>
+       </DockArea>
+      </DockSplitter>
+     </DockSplitter>
+    </DockSplitter>
+   </Container>
+  </Tab>
+  <currentTabIndex index="0"/>
+ </tabbed_widget>
+ <use_relative_time_offset enabled="1"/>
+ <!-- - - - - - - - - - - - - - - -->
+ <!-- - - - - - - - - - - - - - - -->
+ <Plugins>
+  <plugin ID="DataLoad CSV">
+   <parameters time_axis="" delimiter="0"/>
+  </plugin>
+  <plugin ID="DataLoad MCAP"/>
+  <plugin ID="DataLoad ROS bags">
+   <use_header_stamp value="false"/>
+   <discard_large_arrays value="true"/>
+   <max_array_size value="100"/>
+   <boolean_strings_to_number value="true"/>
+   <remove_suffix_from_strings value="true"/>
+   <selected_topics value="/desired_joint_states;/diagnostics;/gripper/pose_vicon;/joint_states;/mavlink/from;/mavlink/gcs_ip;/mavros/altitude;/mavros/battery;/mavros/estimator_status;/mavros/extended_state;/mavros/geofence/waypoints;/mavros/imu/data;/mavros/imu/data_raw;/mavros/imu/mag;/mavros/imu/static_pressure;/mavros/imu/temperature_imu;/mavros/local_position/odom;/mavros/local_position/pose;/mavros/local_position/velocity_body;/mavros/local_position/velocity_local;/mavros/mission/waypoints;/mavros/odometry/in;/mavros/rallypoint/waypoints;/mavros/rc/in;/mavros/rc/out;/mavros/setpoint_raw/attitude;/mavros/setpoint_raw/target_attitude;/mavros/setpoint_raw/target_local;/mavros/state;/mavros/statustext/recv;/mavros/sys_status;/mavros/time_reference;/mavros/timesync_status;/mavros/vfr_hud;/mavros/vision_pose/pose;/mpc/state;/rosout;/rosout_agg;/servo_diagnostics;/tf;/tf_static;/vrpn_client_node/AMS_S500/accel;/vrpn_client_node/AMS_S500/twist;/vrpn_client_node/AMS_bottle_red/accel;/vrpn_client_node/AMS_bottle_red/pose;/vrpn_client_node/AMS_bottle_red/twist;/vrpn_client_node/HR_follower1/accel;/vrpn_client_node/HR_follower1/pose;/vrpn_client_node/HR_follower1/twist;/vrpn_client_node/HR_leader/accel;/vrpn_client_node/HR_leader/pose;/vrpn_client_node/HR_leader/twist;/vrpn_client_node/gripper_lei/accel;/vrpn_client_node/gripper_lei/twist"/>
+  </plugin>
+  <plugin ID="DataLoad ULog"/>
+  <plugin ID="ROS Topic Subscriber">
+   <use_header_stamp value="false"/>
+   <discard_large_arrays value="true"/>
+   <max_array_size value="100"/>
+   <boolean_strings_to_number value="true"/>
+   <remove_suffix_from_strings value="true"/>
+   <selected_topics value="/arm_controller/gazebo_ros_control/pid_gains/joint_1/parameter_descriptions;/arm_controller/gazebo_ros_control/pid_gains/joint_1/parameter_updates;/arm_controller/gazebo_ros_control/pid_gains/joint_2/parameter_descriptions;/arm_controller/gazebo_ros_control/pid_gains/joint_2/parameter_updates;/arm_controller/gazebo_ros_control/pid_gains/joint_3/parameter_descriptions;/arm_controller/gazebo_ros_control/pid_gains/joint_3/parameter_updates;/arm_controller/gazebo_ros_control/pid_gains/joint_4/parameter_descriptions;/arm_controller/gazebo_ros_control/pid_gains/joint_4/parameter_updates;/arm_controller/joint_1_controller/command;/arm_controller/joint_2_controller/command;/arm_controller/joint_3_controller/command;/arm_controller/joint_4_controller/command;/arm_controller/joint_states;/clock;/desired_joint_states;/diagnostics;/gazebo/link_states;/gazebo/model_states;/gazebo/parameter_descriptions;/gazebo/parameter_updates;/gazebo/performance_metrics;/mavlink/from;/mavlink/gcs_ip;/mavros/adsb/vehicle;/mavros/altitude;/mavros/battery;/mavros/cam_imu_sync/cam_imu_stamp;/mavros/camera/image_captured;/mavros/debug_value/debug;/mavros/debug_value/debug_float_array;/mavros/debug_value/debug_vector;/mavros/debug_value/named_value_float;/mavros/debug_value/named_value_int;/mavros/esc_info;/mavros/esc_status;/mavros/esc_telemetry;/mavros/estimator_status;/mavros/extended_state;/mavros/geofence/waypoints;/mavros/global_position/compass_hdg;/mavros/global_position/global;/mavros/global_position/gp_lp_offset;/mavros/global_position/gp_origin;/mavros/global_position/local;/mavros/global_position/raw/fix;/mavros/global_position/raw/gps_vel;/mavros/global_position/raw/satellites;/mavros/global_position/rel_alt;/mavros/gps_rtk/rtk_baseline;/mavros/gpsstatus/gps1/raw;/mavros/gpsstatus/gps1/rtk;/mavros/gpsstatus/gps2/raw;/mavros/gpsstatus/gps2/rtk;/mavros/hil/actuator_controls;/mavros/hil/controls;/mavros/home_position/home;/mavros/imu/data;/mavros/imu/data_raw;/mavros/imu/diff_pressure;/mavros/imu/mag;/mavros/imu/static_pressure;/mavros/imu/temperature_baro;/mavros/imu/temperature_imu;/mavros/landing_target/lt_marker;/mavros/landing_target/pose_in;/mavros/local_position/accel;/mavros/local_position/odom;/mavros/local_position/pose;/mavros/local_position/pose_cov;/mavros/local_position/velocity_body;/mavros/local_position/velocity_body_cov;/mavros/local_position/velocity_local;/mavros/log_transfer/raw/log_data;/mavros/log_transfer/raw/log_entry;/mavros/mag_calibration/report;/mavros/mag_calibration/status;/mavros/manual_control/control;/mavros/mission/reached;/mavros/mission/waypoints;/mavros/mount_control/orientation;/mavros/mount_control/status;/mavros/nav_controller_output;/mavros/odometry/in;/mavros/param/param_value;/mavros/px4flow/ground_distance;/mavros/px4flow/raw/optical_flow_rad;/mavros/px4flow/temperature;/mavros/radio_status;/mavros/rallypoint/waypoints;/mavros/rc/in;/mavros/rc/out;/mavros/setpoint_raw/attitude;/mavros/setpoint_raw/local;/mavros/setpoint_raw/target_attitude;/mavros/setpoint_raw/target_global;/mavros/setpoint_raw/target_local;/mavros/setpoint_trajectory/desired;/mavros/state;/mavros/statustext/recv;/mavros/sys_status;/mavros/target_actuator_control;/mavros/terrain/report;/mavros/time_reference;/mavros/timesync_status;/mavros/trajectory/desired;/mavros/tunnel/out;/mavros/vfr_hud;/mavros/vision_pose/pose;/mavros/wind_estimation;/move_base_simple/goal;/mpc/l1_avg_timing;/mpc/l1_timing;/mpc/mpc_avg_timing;/mpc/mpc_timing;/mpc/predicted_controls;/mpc/predicted_states;/mpc/state;/mpc/timing_stats;/reference/pose;/reference/yaw;/rosout;/rosout_agg;/tf;/tf_static;/uav_path;/whole_body_partial_trajectory_current;/whole_body_planned_trajectory;/whole_body_reference_trajectory;/whole_body_state_current;/whole_body_state_target"/>
+  </plugin>
+  <plugin ID="UDP Server"/>
+  <plugin ID="WebSocket Server"/>
+  <plugin ID="ZMQ Subscriber"/>
+  <plugin ID="Fast Fourier Transform"/>
+  <plugin ID="Quaternion to RPY"/>
+  <plugin ID="Reactive Script Editor">
+   <library code="--[[ Helper function to create a series from arrays&#xa;&#xa; new_series: a series previously created with ScatterXY.new(name)&#xa; prefix:     prefix of the timeseries, before the index of the array&#xa; suffix_X:   suffix to complete the name of the series containing the X value. If [nil], use the index of the array.&#xa; suffix_Y:   suffix to complete the name of the series containing the Y value&#xa; timestamp:   usually the tracker_time variable&#xa;              &#xa; Example:&#xa; &#xa; Assuming we have multiple series in the form:&#xa; &#xa;   /trajectory/node.{X}/position/x&#xa;   /trajectory/node.{X}/position/y&#xa;   &#xa; where {N} is the index of the array (integer). We can create a reactive series from the array with:&#xa; &#xa;   new_series = ScatterXY.new(&quot;my_trajectory&quot;) &#xa;   CreateSeriesFromArray( new_series, &quot;/trajectory/node&quot;, &quot;position/x&quot;, &quot;position/y&quot;, tracker_time );&#xa;--]]&#xa;&#xa;function CreateSeriesFromArray( new_series, prefix, suffix_X, suffix_Y, timestamp )&#xa;  &#xa;  --- clear previous values&#xa;  new_series:clear()&#xa;  &#xa;  --- Append points to new_series&#xa;  index = 0&#xa;  while(true) do&#xa;&#xa;    x = index;&#xa;    -- if not nil, get the X coordinate from a series&#xa;    if suffix_X ~= nil then &#xa;      series_x = TimeseriesView.find( string.format( &quot;%s.%d/%s&quot;, prefix, index, suffix_X) )&#xa;      if series_x == nil then break end&#xa;      x = series_x:atTime(timestamp)&#x9; &#xa;    end&#xa;    &#xa;    series_y = TimeseriesView.find( string.format( &quot;%s.%d/%s&quot;, prefix, index, suffix_Y) )&#xa;    if series_y == nil then break end &#xa;    y = series_y:atTime(timestamp)&#xa;    &#xa;    new_series:push_back(x,y)&#xa;    index = index+1&#xa;  end&#xa;end&#xa;&#xa;--[[ Similar to the built-in function GetSeriesNames(), but select only the names with a give prefix. --]]&#xa;&#xa;function GetSeriesNamesByPrefix(prefix)&#xa;  -- GetSeriesNames(9 is a built-in function&#xa;  all_names = GetSeriesNames()&#xa;  filtered_names = {}&#xa;  for i, name in ipairs(all_names)  do&#xa;    -- check the prefix&#xa;    if name:find(prefix, 1, #prefix) then&#xa;      table.insert(filtered_names, name);&#xa;    end&#xa;  end&#xa;  return filtered_names&#xa;end&#xa;&#xa;--[[ Modify an existing series, applying offsets to all their X and Y values&#xa;&#xa; series: an existing timeseries, obtained with TimeseriesView.find(name)&#xa; delta_x: offset to apply to each x value&#xa; delta_y: offset to apply to each y value &#xa;  &#xa;--]]&#xa;&#xa;function ApplyOffsetInPlace(series, delta_x, delta_y)&#xa;  -- use C++ indeces, not Lua indeces&#xa;  for index=0, series:size()-1 do&#xa;    x,y = series:at(index)&#xa;    series:set(index, x + delta_x, y + delta_y)&#xa;  end&#xa;end&#xa;"/>
+   <scripts/>
+  </plugin>
+  <plugin ID="CSV Exporter"/>
+  <plugin ID="ROS /rosout Visualization"/>
+  <plugin ID="ROS Topic Re-Publisher"/>
+ </Plugins>
+ <!-- - - - - - - - - - - - - - - -->
+ <previouslyLoaded_Datafiles/>
+ <previouslyLoaded_Streamer name="ROS Topic Subscriber"/>
+ <!-- - - - - - - - - - - - - - - -->
+ <customMathEquations/>
+ <snippets/>
+ <!-- - - - - - - - - - - - - - - -->
+</root>
+
