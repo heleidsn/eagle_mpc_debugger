@@ -3,10 +3,11 @@ mpc_controller:
     name: "s500"
     urdf: "models/urdf/s500_simple.urdf"
     follow: "config/yaml/multicopter/s500.yaml"
+
   integration_method: "IntegratedActionModelEuler"
   knots: 20
   solver: "SolverSbFDDP"
-  iters: 100
+  iters: 10
   dt: 50
 
   carrot_weight: 1000
@@ -23,6 +24,11 @@ mpc_controller:
 
   rail_weight: 100
   rail_activation_weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-  rail_control_weight: 0
 
+  rail_control_weight: 0
   control_reference: [5, 5, 5, 5]
+
+  rail_state_limits_weight: 0
+  rail_state_limits_act_weights: [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1]
+  rail_state_limits_u_bound: [0, 0, 0, 0, 0, 0, 0.5, 0.5, 0.5, 1, 1, 1]
+  rail_state_limits_l_bound: [0, 0, 0, 0, 0, 0, -0.5, -0.5, -0.5, -1, -1, -1]

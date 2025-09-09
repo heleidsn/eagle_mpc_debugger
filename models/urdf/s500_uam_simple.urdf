@@ -1,7 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com) 
-     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
-     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
 <robot name="s500_uam">
   <link name="base_link">
     <inertial>
@@ -48,14 +45,14 @@
         xyz="0 0 0"
         rpy="0 0 0" />
       <mass
-        value="0.010198" />
+        value="0.01" />
       <inertia
-        ixx="3.3719E-05"
-        ixy="7.4123E-13"
-        ixz="-4.3241E-07"
-        iyy="3.3918E-05"
-        iyz="-3.8834E-11"
-        izz="2.8343E-07" />
+        ixx="9.75e-07"
+        ixy="0"
+        ixz="0"
+        iyy="5.2e-05"
+        iyz="0"
+        izz="5.2e-05" />
     </inertial>
     <visual>
       <origin
@@ -98,14 +95,14 @@
         xyz="0 0 0"
         rpy="0 0 0" />
       <mass
-        value="0.010198" />
+        value="0.01" />
       <inertia
-        ixx="3.3719E-05"
-        ixy="-8.3558E-13"
-        ixz="-4.3246E-07"
-        iyy="3.3919E-05"
-        iyz="-4.2468E-11"
-        izz="2.8344E-07" />
+        ixx="9.75e-07"
+        ixy="0"
+        ixz="0"
+        iyy="5.2e-05"
+        iyz="0"
+        izz="5.2e-05" />
     </inertial>
     <visual>
       <origin
@@ -148,14 +145,14 @@
         xyz="0 0 0"
         rpy="0 0 0" />
       <mass
-        value="0.010198" />
+        value="0.01" />
       <inertia
-        ixx="3.3719E-05"
-        ixy="1.6825E-12"
-        ixz="-4.3246E-07"
-        iyy="3.3919E-05"
-        iyz="-5.4463E-11"
-        izz="2.8343E-07" />
+        ixx="9.75e-07"
+        ixy="0"
+        ixz="0"
+        iyy="5.2e-05"
+        iyz="0"
+        izz="5.2e-05" />
     </inertial>
     <visual>
       <origin
@@ -198,14 +195,14 @@
         xyz="0 0 0"
         rpy="0 0 0" />
       <mass
-        value="0.010198" />
+        value="0.01" />
       <inertia
-        ixx="3.3719E-05"
-        ixy="1.1737E-12"
-        ixz="-4.3243E-07"
-        iyy="3.3918E-05"
-        iyz="-4.6991E-11"
-        izz="2.8343E-07" />
+        ixx="9.75e-07"
+        ixy="0"
+        ixz="0"
+        iyy="5.2e-05"
+        iyz="0"
+        izz="5.2e-05" />
     </inertial>
     <visual>
       <origin
@@ -242,20 +239,21 @@
     <axis
       xyz="0 1 0" />
   </joint>
+
   <link name="link_1">
     <inertial>
       <origin
-        xyz="-5.7463E-12 -0.00019643 -0.076809"
+        xyz="-0 -0.000196 -0.076809"
         rpy="0 0 0" />
       <mass
-        value="0.056776" />
+        value="0.095" />
       <inertia
-        ixx="1.5689E-03"
-        ixy="-1.0155E-16"
-        ixz="-5.2428E-15"
-        iyy="1.3617E-03"
-        iyz="-1.6017E-09"
-        izz="8.7857E-03" />
+        ixx="5.8e-04"
+        ixy="0"
+        ixz="0"
+        iyy="5.1e-04"
+        iyz="0"
+        izz="1.8e-04" />
     </inertial>
     <visual>
       <origin
@@ -281,6 +279,7 @@
       </geometry>
     </collision>
   </link>
+
   <joint name="joint_1" type="revolute">
     <origin
       xyz="0.0007 0 -0.07275"
@@ -290,23 +289,24 @@
     <child
       link="link_1" />
     <axis xyz="0 1 0" />
-    <limit effort="1" lower="-1.5" upper="1.5" velocity="3"/>
-    <dynamics damping="0.1" friction="0.1"/>
+    <limit effort="2" lower="-2" upper="2" velocity="10"/>
+    <!-- <dynamics damping="0.1" friction="0.1"/> -->
   </joint>
+
   <link name="link_2">
     <inertial>
       <origin
-        xyz="0.00057539 0.00024651 -0.072261"
+        xyz="0.000575 0.000247 -0.072261"
         rpy="0 0 0" />
       <mass
-        value="0.065663" />
+        value="0.082" />
       <inertia
-        ixx="1.3006E-04"
-        ixy="2.5553E-07"
-        ixz="4.4082E-09"
-        iyy="1.4985E-04"
-        iyz="-6.0777E-07"
-        izz="1.6054E-04" />
+        ixx="4.3e-04"
+        ixy="0"
+        ixz="0"
+        iyy="4.1e-04"
+        iyz="0"
+        izz="2.6e-04" />
     </inertial>
     <visual>
       <origin
@@ -332,6 +332,7 @@
       </geometry>
     </collision>
   </link>
+
   <joint name="joint_2" type="revolute">
     <origin
       xyz="0 0 -0.09925"
@@ -341,23 +342,24 @@
     <child
       link="link_2" />
     <axis xyz="0 1 0" />
-    <limit effort="1" lower="-1.5" upper="1.5" velocity="3"/>
-    <dynamics damping="0.1" friction="0.1"/>
+    <limit effort="2" lower="-2" upper="2" velocity="10"/>
+    <!-- <dynamics damping="0.1" friction="0.1"/> -->
   </joint>
+
   <link name="link_3">
     <inertial>
       <origin
         xyz="0.025274 0.000991 -0.041284"
         rpy="0 0 0" />
       <mass
-        value="0.012158" />
+        value="0.012" />
       <inertia
-        ixx="1.0667E-05"
-        ixy="-2.5213E-09"
-        ixz="3.6553E-06"
-        iyy="1.2675E-05"
-        iyz="4.2721E-09"
-        izz="2.4775E-06" />
+        ixx="1.0e-05"
+        ixy="0"
+        ixz="0"
+        iyy="1.0e-05"
+        iyz="0"
+        izz="2.0e-06" />
     </inertial>
     <visual>
       <origin
@@ -383,6 +385,7 @@
       </geometry>
     </collision>
   </link>
+
   <joint name="joint_3" type="fixed">
     <origin
       xyz="-0.011 0 -0.08225"
@@ -399,20 +402,21 @@
       effort="10"
       velocity="1" />
   </joint>
+
   <link name="link_4">
     <inertial>
       <origin
-        xyz="0.024422 -0.0009913 -0.039818"
+        xyz="0.024422 -0.000991 -0.039818"
         rpy="0 0 0" />
       <mass
-        value="0.012587" />
+        value="0.012" />
       <inertia
-        ixx="1.1294E-05"
-        ixy="2.4212E-09"
-        ixz="4.0228E-06"
-        iyy="1.352E-05"
-        iyz="-4.1022E-09"
-        izz="2.6966E-06" />
+        ixx="1.0e-05"
+        ixy="0"
+        ixz="0"
+        iyy="1.0e-05"
+        iyz="0"
+        izz="2.0e-06" />
     </inertial>
     <visual>
       <origin
@@ -438,6 +442,7 @@
       </geometry>
     </collision>
   </link>
+
   <joint name="joint_4" type="fixed">
     <origin
       xyz="0.011 0 -0.08225"
@@ -456,20 +461,25 @@
   </joint>
 
   <link name="gripper_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0.001" />
+      <inertia ixx="1e-9" ixy="0" ixz="0" iyy="1e-9" iyz="0" izz="1e-9" />
+    </inertial>
     <visual>
         <origin xyz="0 0 0" rpy="0 0 0" />
         <geometry>
-            <!-- 使用一个小的box或sphere作为可视化 -->
-            <box size="0.01 0.01 0.01" />  <!-- 或者使用 <sphere radius="0.005" /> -->
+            <box size="0.01 0.01 0.01" /> 
         </geometry>
         <material name="">
-            <color rgba="1 0 0 0.5" />  <!-- 红色，半透明 -->
+            <color rgba="1 0 0 0.5" /> 
         </material>
     </visual>
-    <!-- 不需要collision和inertial属性，因为这是虚拟link -->
+
   </link>
+
   <joint name="gripper_joint" type="fixed">
-    <origin xyz="0 0 -0.14" rpy="0 0 0" />  <!-- 调整xyz和rpy以匹配爪子位置 -->
+    <origin xyz="0 0 -0.14" rpy="0 0 0" />  
     <parent link="link_2" />
     <child link="gripper_link" />
   </joint>

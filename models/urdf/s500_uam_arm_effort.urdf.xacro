@@ -37,9 +37,9 @@
   <link name="link_1">
     <inertial>
       <origin xyz="-0 -0.000196 -0.076809" rpy="0 0 0"/>
-      <mass value="0.056776"/>
-      <inertia ixx="1.5689e-05" ixy="-1.0155e-16" ixz="-5.2428e-15"
-               iyy="1.3617e-05" iyz="-1.6017e-09" izz="8.7857e-06"/>
+      <mass value="0.095"/>
+      <inertia ixx="5.8e-05" ixy="0" ixz="0"
+               iyy="5.1e-05" iyz="0" izz="1.8e-05"/>
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -60,16 +60,20 @@
     <parent link="base_link"/>
     <child link="link_1"/>
     <axis xyz="0 1 0"/>
-    <limit lower="-1.57" upper="1.57" effort="2" velocity="1"/>
+    <limit lower="-1.57" upper="1.57" effort="1" velocity="1"/>
+    <dynamics>
+      <damping>0.05</damping>
+      <friction>0.1</friction>
+    </dynamics>
   </joint>
 
   <!-- Link 2 -->
   <link name="link_2">
     <inertial>
       <origin xyz="0.000575 0.000247 -0.072261" rpy="0 0 0"/>
-      <mass value="0.065663"/>
-      <inertia ixx="1.3006e-05" ixy="2.5553e-07" ixz="4.4082e-09"
-               iyy="1.4985e-05" iyz="-6.0777e-07" izz="1.6054e-05"/>
+      <mass value="0.082"/>
+      <inertia ixx="4.3e-05" ixy="0" ixz="0"
+               iyy="4.1e-05" iyz="0" izz="2.6e-05"/>
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -90,16 +94,20 @@
     <parent link="link_1"/>
     <child link="link_2"/>
     <axis xyz="0 1 0"/>
-    <limit lower="-1.57" upper="1.57" effort="2" velocity="1"/>
+    <limit lower="-1.57" upper="1.57" effort="1" velocity="1"/>
+    <dynamics>
+      <damping>0.05</damping>
+      <friction>0.1</friction>
+    </dynamics>
   </joint>
 
   <!-- Link 3 (Gripper Left Finger) -->
   <link name="link_3">
     <inertial>
       <origin xyz="0.025274 0.000991 -0.041284" rpy="0 0 0"/>
-      <mass value="0.012158"/>
-      <inertia ixx="1.0667e-05" ixy="-2.5213e-09" ixz="3.6553e-06"
-               iyy="1.2675e-05" iyz="4.2721e-09" izz="2.4775e-06"/>
+      <mass value="0.012"/>
+      <inertia ixx="1.0e-05" ixy="0" ixz="0"
+               iyy="1.0e-05" iyz="0" izz="2.0e-06"/>
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -120,16 +128,16 @@
     <parent link="link_2"/>
     <child link="link_3"/>
     <axis xyz="0 1 0"/>
-    <limit lower="-1.57" upper="1.57" effort="2" velocity="1"/>
+    <limit lower="-1.57" upper="1.57" effort="0.5" velocity="0.5"/>
   </joint>
 
   <!-- Link 4 (Gripper Right Finger - mimic) -->
   <link name="link_4">
     <inertial>
       <origin xyz="0.024422 -0.000991 -0.039818" rpy="0 0 0"/>
-      <mass value="0.012587"/>
-      <inertia ixx="1.1294e-05" ixy="2.4212e-09" ixz="4.0228e-06"
-               iyy="1.352e-05" iyz="-4.1022e-09" izz="2.6966e-06"/>
+      <mass value="0.012"/>
+      <inertia ixx="1.0e-05" ixy="0" ixz="0"
+               iyy="1.0e-05" iyz="0" izz="2.0e-06"/>
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -150,11 +158,11 @@
     <parent link="link_2"/>
     <child link="link_4"/>
     <axis xyz="0 1 0"/>
-    <limit lower="-1.57" upper="1.57" effort="2" velocity="1"/>
+    <limit lower="-1.57" upper="1.57" effort="1.0" velocity="0.5"/>
   </joint>
 
   <!-- Gripper -->
-  <link name="gripper_link">
+  <!-- <link name="gripper_link">
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
@@ -180,12 +188,11 @@
     </inertial>
   </link>
 
-  <!-- Gripper Joint -->
   <joint name="gripper_joint" type="fixed">
     <parent link="link_2"/>
     <child link="gripper_link"/>
     <origin xyz="0 0 -0.14" rpy="0 0 0"/>
-  </joint>
+  </joint> -->
 
   <!-- Transmissions for ros_control -->
   <transmission name="joint_1_trans">
@@ -221,9 +228,9 @@
   <transmission name="joint_3_trans">
     <type>transmission_interface/SimpleTransmission</type>
     <joint name="joint_3">
-      <hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface>
-      <!-- <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface> -->
+      <!-- <hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface> -->
+      <!-- <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface> -->
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
     </joint>
     <actuator name="joint_3_motor">
       <!-- <hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface>
@@ -236,9 +243,9 @@
   <transmission name="joint_4_trans">
     <type>transmission_interface/SimpleTransmission</type>
     <joint name="joint_4">
-      <hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface>
-      <!-- <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface> -->
+      <!-- <hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface> -->
+      <!-- <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface> -->
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
     </joint>
     <actuator name="joint_4_motor">
       <!-- <hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface>
@@ -251,6 +258,7 @@
     <plugin name="gazebo_ros_control" filename="libgazebo_ros_control.so">
       <robotNamespace>/s500_uam</robotNamespace>
       <controlPeriod>0.001</controlPeriod>
+      <updateRate>1000</updateRate>
       <robotParam>/s500_uam/robot_description</robotParam>
       <legacyModeNS>true</legacyModeNS>
     </plugin>

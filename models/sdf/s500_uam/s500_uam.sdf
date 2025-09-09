@@ -1,6 +1,21 @@
 <!-- DO NOT EDIT: Generated from s500_uam.sdf.jinja -->
 <sdf version='1.6'>
   <model name='s500_uam'>
+
+    <!-- <joint name="base_joint" type="prismatic">
+        <parent>world</parent>
+        <child>base_link</child>
+        <axis>
+            <xyz>0 0 1</xyz>
+            <limit>
+            <lower>0.0</lower>
+            <upper>0.0</upper>
+            <effort>100</effort>
+            <velocity>0</velocity>
+            </limit>
+        </axis>
+    </joint> -->
+
     <link name='base_link'>
       <pose>0 0 0 0 0 0</pose>
       <inertial>
@@ -18,9 +33,10 @@
       <collision name='base_link_inertia_collision'>
         <pose>0 0 0 0 0 0</pose>
         <geometry>
-          <box>
-            <size>0.47 0.47 0.35</size>
-          </box>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://s500_uam/meshes/base_link_small.STL</uri>
+          </mesh>
         </geometry>
         <surface>
           <contact>
@@ -67,7 +83,7 @@
         </inertia>
       </inertial>
     </link>
-    <joint name='/imu_joint' type='revolute'>
+    <joint name='/imu_joint' type='fixed'>
       <child>/imu_link</child>
       <parent>base_link</parent>
       <axis>
@@ -94,9 +110,9 @@
           <ixx>9.75e-07</ixx>
           <ixy>0</ixy>
           <ixz>0</ixz>
-          <iyy>0.000273104</iyy>
+          <iyy>5.2e-05</iyy>
           <iyz>0</iyz>
-          <izz>0.000274004</izz>
+          <izz>5.2e-05</izz>
         </inertia>
       </inertial>
       <collision name='rotor_0_collision'>
@@ -159,9 +175,9 @@
           <ixx>9.75e-07</ixx>
           <ixy>0</ixy>
           <ixz>0</ixz>
-          <iyy>0.000273104</iyy>
+          <iyy>5.2e-05</iyy>
           <iyz>0</iyz>
-          <izz>0.000274004</izz>
+          <izz>5.2e-05</izz>
         </inertia>
       </inertial>
       <collision name='rotor_1_collision'>
@@ -224,9 +240,9 @@
           <ixx>9.75e-07</ixx>
           <ixy>0</ixy>
           <ixz>0</ixz>
-          <iyy>0.000273104</iyy>
+          <iyy>5.2e-05</iyy>
           <iyz>0</iyz>
-          <izz>0.000274004</izz>
+          <izz>5.2e-05</izz>
         </inertia>
       </inertial>
       <collision name='rotor_2_collision'>
@@ -289,9 +305,9 @@
           <ixx>9.75e-07</ixx>
           <ixy>0</ixy>
           <ixz>0</ixz>
-          <iyy>0.000273104</iyy>
+          <iyy>5.2e-05</iyy>
           <iyz>0</iyz>
-          <izz>0.000274004</izz>
+          <izz>5.2e-05</izz>
         </inertia>
       </inertial>
       <collision name='rotor_3_collision'>
@@ -346,38 +362,20 @@
       </axis>
     </joint>
 
-    <joint name='joint_1' type='revolute'>
-      <pose relative_to='base_link'>0.0007 0 -0.07275 0 0 0</pose>
-      <parent>base_link</parent>
-      <child>link_1</child>
-      <axis>
-        <xyz>0 1 0</xyz>
-        <limit>
-          <lower>-1.57</lower>
-	      <upper>1.57</upper>
-	      <effort>2.0</effort>
-	      <velocity>1</velocity>
-        </limit>
-        <dynamics>
-          <damping>0.1</damping>
-          <friction>0.01</friction>
-          <spring_reference>0</spring_reference>
-          <spring_stiffness>0</spring_stiffness>
-        </dynamics>
-      </axis>
-    </joint>
+    <!-- link_1 -->
+
     <link name='link_1'>
       <pose relative_to='joint_1'>0 0 0 0 -0 0</pose>
       <inertial>
         <pose>-0 -0.000196 -0.076809 0 -0 0</pose>
-        <mass>0.056776</mass>
+        <mass>0.095</mass>
         <inertia>
-          <ixx>1.5689e-05</ixx>
-          <ixy>-1.0155e-16</ixy>
-          <ixz>-5.2428e-15</ixz>
-          <iyy>1.3617e-05</iyy>
-          <iyz>-1.6017e-09</iyz>
-          <izz>8.7857e-06</izz>
+          <ixx>5.8e-04</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>5.1e-04</iyy>
+          <iyz>0</iyz>
+          <izz>1.8e-04</izz>
         </inertia>
       </inertial>
       <collision name='link_1_collision'>
@@ -399,38 +397,40 @@
         </geometry>
       </visual>
     </link>
-    <joint name='joint_2' type='revolute'>
-      <pose relative_to='link_1'>0 0 -0.09925 0 0 0</pose>
-      <parent>link_1</parent>
-      <child>link_2</child>
+
+    <joint name='joint_1' type='revolute'>
+      <pose relative_to='base_link'>0.0007 0 -0.07275 0 0 0</pose>
+      <parent>base_link</parent>
+      <child>link_1</child>
       <axis>
         <xyz>0 1 0</xyz>
         <limit>
-          <lower>-1.57</lower>
-	      <upper>1.57</upper>
+          <lower>-2</lower>
+	      <upper>2</upper>
 	      <effort>2.0</effort>
-	      <velocity>1</velocity>
+	      <velocity>1.0</velocity>
         </limit>
         <dynamics>
           <damping>0.1</damping>
           <friction>0.01</friction>
-          <spring_reference>0</spring_reference>
-          <spring_stiffness>0</spring_stiffness>
         </dynamics>
       </axis>
     </joint>
+
+    <!-- link_2 -->
+
     <link name='link_2'>
       <pose relative_to='joint_2'>0 0 0 0 -0 0</pose>
       <inertial>
         <pose>0.000575 0.000247 -0.072261 0 -0 0</pose>
-        <mass>0.065663</mass>
+        <mass>0.082</mass>
         <inertia>
-          <ixx>1.3006e-05</ixx>
-          <ixy>2.5553e-07</ixy>
-          <ixz>4.4082e-09</ixz>
-          <iyy>1.4985e-05</iyy>
-          <iyz>-6.0777e-07</iyz>
-          <izz>1.6054e-05</izz>
+          <ixx>4.3e-04</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>4.1e-04</iyy>
+          <iyz>0</iyz>
+          <izz>2.6e-04</izz>
         </inertia>
       </inertial>
       <collision name='link_2_collision'>
@@ -452,48 +452,58 @@
         </geometry>
       </visual>
     </link>
-    <joint name='joint_3' type='revolute'>
-      <pose relative_to='link_2'>-0.011 0 -0.08225 -0 0.23432 -3.14159</pose>
-      <parent>link_2</parent>
-      <child>link_3</child>
+
+    <joint name='joint_2' type='revolute'>
+      <pose relative_to='link_1'>0 0 -0.09925 0 0 0</pose>
+      <parent>link_1</parent>
+      <child>link_2</child>
       <axis>
         <xyz>0 1 0</xyz>
         <limit>
-          <lower>-1.57</lower>
-	      <upper>1.57</upper>
+          <lower>-2</lower>
+	      <upper>2</upper>
 	      <effort>2.0</effort>
 	      <velocity>1.0</velocity>
         </limit>
         <dynamics>
           <damping>0.1</damping>
-          <friction>1</friction>
-          <spring_reference>0</spring_reference>
-          <spring_stiffness>0</spring_stiffness>
+          <friction>0.01</friction>
         </dynamics>
       </axis>
     </joint>
+
+    <!-- link_3 -->
+
     <link name='link_3'>
       <pose relative_to='joint_3'>0 0 0 0 -0 0</pose>
       <inertial>
         <pose>0.025274 0.000991 -0.041284 0 -0 0</pose>
-        <mass>0.012158</mass>
+        <mass>0.012</mass>
         <inertia>
-          <ixx>1.0667e-05</ixx>
-          <ixy>-2.5213e-09</ixy>
-          <ixz>3.6553e-06</ixz>
-          <iyy>1.2675e-05</iyy>
-          <iyz>4.2721e-09</iyz>
-          <izz>2.4775e-06</izz>
+          <ixx>1.0e-05</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>1.0e-05</iyy>
+          <iyz>0</iyz>
+          <izz>2.0e-06</izz>
         </inertia>
       </inertial>
       <collision name='link_3_collision'>
         <pose>0 0 0 0 -0 0</pose>
         <geometry>
           <mesh>
-            <scale>1 1 1</scale>
+            <scale>0.9 0.9 0.9</scale>
             <uri>model://s500_uam/meshes/link_3.STL</uri>
           </mesh>
         </geometry>
+        <surface>
+            <friction>
+                <ode>
+                <mu>10.0</mu> 
+                <mu2>10.0</mu2>  
+                </ode>
+            </friction>
+        </surface>
       </collision>
       <visual name='link_3_visual'>
         <pose>0 0 0 0 -0 0</pose>
@@ -505,38 +515,42 @@
         </geometry>
       </visual>
     </link>
-    <joint name='joint_4' type='revolute'>
-      <pose relative_to='link_2'>0.011 0 -0.08225 0 0.26237 0</pose>
+
+    <joint name='joint_3' type='revolute'>
+      <pose relative_to='link_2'>-0.011 0 -0.08225 -0 0.23432 -3.14159</pose>
       <parent>link_2</parent>
-      <child>link_4</child>
+      <child>link_3</child>
       <axis>
         <xyz>0 1 0</xyz>
         <limit>
           <lower>-1.57</lower>
 	      <upper>1.57</upper>
-	      <effort>2.0</effort>
-	      <velocity>1.0</velocity>
+	      <effort>1</effort>
+	      <velocity>0.5</velocity>
         </limit>
         <dynamics>
-          <damping>0.1</damping>
-          <friction>1</friction>
+          <damping>0.01</damping>
+          <!-- <friction>0.1</friction> -->
           <spring_reference>0</spring_reference>
           <spring_stiffness>0</spring_stiffness>
         </dynamics>
       </axis>
     </joint>
+    
+    <!-- link_4 -->
+
     <link name='link_4'>
       <pose relative_to='joint_4'>0 0 0 0 -0 0</pose>
       <inertial>
         <pose>0.024422 -0.000991 -0.039818 0 -0 0</pose>
-        <mass>0.012587</mass>
+        <mass>0.012</mass>
         <inertia>
-          <ixx>1.1294e-05</ixx>
-          <ixy>2.4212e-09</ixy>
-          <ixz>4.0228e-06</ixz>
-          <iyy>1.352e-05</iyy>
-          <iyz>-4.1022e-09</iyz>
-          <izz>2.6966e-06</izz>
+          <ixx>1.0e-05</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>1.0e-05</iyy>
+          <iyz>0</iyz>
+          <izz>2.0e-06</izz>
         </inertia>
       </inertial>
       <collision name='link_4_collision'>
@@ -547,6 +561,14 @@
             <uri>model://s500_uam/meshes/link_4.STL</uri>
           </mesh>
         </geometry>
+        <surface>
+            <friction>
+                <ode>
+                <mu>10.0</mu>      
+                <mu2>10.0</mu2>       
+                </ode>
+            </friction>
+        </surface>
       </collision>
       <visual name='link_4_visual'>
         <pose>0 0 0 0 -0 0</pose>
@@ -559,24 +581,41 @@
       </visual>
     </link>
 
-    <joint name="gripper_joint" type="fixed">
+    <joint name='joint_4' type='revolute'>
+      <pose relative_to='link_2'>0.011 0 -0.08225 0 0.26237 0</pose>
       <parent>link_2</parent>
-      <child>gripper_link</child>
-      <pose>0 0 0 0 0 0</pose>
+      <child>link_4</child>
+      <axis>
+        <xyz>0 1 0</xyz>
+        <limit>
+          <lower>-1.57</lower>
+	      <upper>1.57</upper>
+	      <effort>1</effort>
+	      <velocity>5</velocity>
+        </limit>
+        <dynamics>
+          <damping>0.01</damping>
+          <!-- <friction>0.1</friction> -->
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
     </joint>
+
+    <!-- gripper link -->
 
     <link name="gripper_link">
       <pose relative_to='link_2'>0 0 -0.14 0 0 0</pose>
       <inertial>
-        <pose>0.024422 -0.000991 -0.039818 0 -0 0</pose>
+        <pose>0 0 0 0 0 0</pose>
         <mass>0.001</mass>
         <inertia>
-          <ixx>1.1294e-05</ixx>
-          <ixy>2.4212e-09</ixy>
-          <ixz>4.0228e-06</ixz>
-          <iyy>1.352e-05</iyy>
-          <iyz>-4.1022e-09</iyz>
-          <izz>2.6966e-06</izz>
+          <ixx>1e-08</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>1e-08</iyy>
+          <iyz>0</iyz>
+          <izz>1e-08</izz>
         </inertia>
       </inertial>
       <visual name="gripper_visual">
@@ -595,7 +634,12 @@
       </visual>
     </link>
 
-    
+    <joint name="gripper_joint" type="fixed">
+      <pose relative_to='link_2'>0 0 -0.14 0 0 0</pose> 
+      <parent>link_2</parent>
+      <child>gripper_link</child>
+    </joint>
+
 
     <plugin name='rosbag' filename='libgazebo_multirotor_base_plugin.so'>
       <robotNamespace/>
@@ -816,6 +860,7 @@
       </control_channels>
     </plugin>
     <static>0</static>
+
     <plugin name='rotors_gazebo_imu_plugin' filename='libgazebo_imu_plugin.so'>
       <robotNamespace/>
       <linkName>/imu_link</linkName>
@@ -829,9 +874,11 @@
       <accelerometerBiasCorrelationTime>300.0</accelerometerBiasCorrelationTime>
       <accelerometerTurnOnBiasSigma>0.196</accelerometerTurnOnBiasSigma>
     </plugin>
+
     <plugin name="gazebo_ros_control" filename="libgazebo_ros_control.so">
 	    <robotNamespace>/arm_controller</robotNamespace>
 	    <controlPeriod>0.001</controlPeriod>
+        <updateRate>1000</updateRate>
         <!-- <robotParam>/arm_controller/robot_description</robotParam> -->
         <!-- <robotSimType>gazebo_ros_control/DefaultRobotHWSim</robotSimType> -->
     </plugin>

@@ -383,7 +383,7 @@
       </geometry>
     </collision>
   </link>
-  <joint name="joint_3" type="fixed">
+  <joint name="joint_3" type="revolute">
     <origin
       xyz="-0.011 0 -0.08225"
       rpy="0 0.23432 3.1416" />
@@ -438,7 +438,7 @@
       </geometry>
     </collision>
   </link>
-  <joint name="joint_4" type="fixed">
+  <joint name="joint_4" type="revolute">
     <origin
       xyz="0.011 0 -0.08225"
       rpy="0 0.26237 0" />
