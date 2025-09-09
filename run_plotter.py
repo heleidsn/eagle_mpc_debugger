@@ -79,17 +79,25 @@ class ROSDataSubscriber(QThread):
         super().__init__()
         self.is_running = False
         self.joint_states = None
+        self.drone_states = None
         self.control_input = None
         self.target_state = None
+        self.drone_target_state = None
         self.mpc_cost = 0.0
         self.solve_time = 0.0
         self.iterations = 0
         self.predicted_states = None
         self.predicted_controls = None
         
+        # Robot model detection
+        self.robot_model = None  # 's500' or 's500_uam'
+        self.state_dim = None
+        self.control_dim = None
+        self.has_arm = False
+        
         # Initialize ROS node if available
         if ROS_AVAILABLE:
-            rospy.init_node('mpc_display_gui', anonymous=True)
+            rospy.init_node('mpc_display_gui', anonymous=False)
             
             # Subscribers
             self.joint_sub = rospy.Subscriber('/joint_states', JointState, self.joint_callback)
@@ -138,10 +146,62 @@ class ROSDataSubscriber(QThread):
         try:
             self.mpc_state = msg
             
-            self.target_state = self.mpc_state.state_ref[6:8]
+            # Auto-detect robot model based on state dimension
+            current_state_dim = len(self.mpc_state.state)
+            if self.state_dim != current_state_dim:
+                self.detect_robot_model(current_state_dim)
+            
+            # Extract drone states (common for both models)
+            if len(self.mpc_state.state) >= 12:
+                if self.robot_model == 's500':
+                    # s500: 13D state [pos(3), quat(4), vel(3), angular_vel(3)]
+                    self.drone_states = {
+                        'position': np.array(self.mpc_state.state[0:3]),  # x, y, z
+                        'velocity': np.array(self.mpc_state.state[6:9]), # vx, vy, vz
+                        'orientation': np.array(self.mpc_state.state[3:6]), # roll, pitch, yaw
+                        'angular_velocity': np.array(self.mpc_state.state[9:12]), # wx, wy, wz
+                        'timestamp': time.time()
+                    }
+                    
+                    # s500 target states
+                    if len(self.mpc_state.state_ref) >= 12:
+                        self.drone_target_state = {
+                            'position': np.array(self.mpc_state.state_ref[0:3]),
+                            'velocity': np.array(self.mpc_state.state_ref[6:9]),
+                            'orientation': np.array(self.mpc_state.state_ref[3:6]),
+                            'angular_velocity': np.array(self.mpc_state.state_ref[9:12])
+                        }
+                        
+                elif self.robot_model == 's500_uam' and len(self.mpc_state.state) >= 16:
+                    # s500_uam: 16D state [pos(3), quat(4), joint_pos(2), vel(3), angular_vel(3), joint_vel(2)]
+                    self.drone_states = {
+                        'position': np.array(self.mpc_state.state[0:3]),  # x, y, z
+                        'velocity': np.array(self.mpc_state.state[6:9]), # vx, vy, vz
+                        'orientation': np.array(self.mpc_state.state[3:6]), # roll, pitch, yaw
+                        'angular_velocity': np.array(self.mpc_state.state[9:12]), # wx, wy, wz
+                        'timestamp': time.time()
+                    }
+                    
+                    # Extract joint states for s500_uam
+                    self.joint_states = {
+                        'position': np.array(self.mpc_state.state[7:9]),   # joint positions
+                        'velocity': np.array(self.mpc_state.state[15:17]), # joint velocities
+                        'timestamp': time.time()
+                    }
+                    
+                    # s500_uam target states
+                    if len(self.mpc_state.state_ref) >= 17:
+                        self.drone_target_state = {
+                            'position': np.array(self.mpc_state.state_ref[0:3]),
+                            'velocity': np.array(self.mpc_state.state_ref[9:12]),
+                            'orientation': np.array(self.mpc_state.state_ref[3:7]),
+                            'angular_velocity': np.array(self.mpc_state.state_ref[12:15])
+                        }
+                        
+                        # Joint target states
+                        self.target_state = self.mpc_state.state_ref[7:9]
             
             self.mpc_cost = self.mpc_state.mpc_final_cost
-            # self.solve_time = s
             self.iterations = self.mpc_state.mpc_iter_num
             
             self.emit_data()
@@ -151,8 +211,9 @@ class ROSDataSubscriber(QThread):
     def control_callback(self, msg):
         """Callback for control input messages"""
         try:
+            # Accept control input of different dimensions
             if len(msg.data) >= 2:
-                self.control_input = np.array(msg.data[:2])
+                self.control_input = np.array(msg.data)
                 self.emit_data()
         except Exception as e:
             print(f"Error in control callback: {e}")
@@ -197,11 +258,12 @@ class ROSDataSubscriber(QThread):
             # Store predicted states for display
             if len(msg.data) > 0:
                 # Reshape: [horizon * state_dim] -> [horizon, state_dim]
-                horizon = len(msg.data) // 17  # Assuming 16D state (2 pos + 2 vel)
+                horizon = len(msg.data) // 13  # Assuming 16D state (2 pos + 2 vel)
                 if horizon > 0:
-                    states = np.array(msg.data).reshape(horizon, 17)
+                    states = np.array(msg.data).reshape(horizon, 13)
                     # Store all predicted states for display
                     self.predicted_states = states
+                    print(f"Predicted states received: shape {states.shape}, state_dim={self.state_dim}")
         except Exception as e:
             print(f"Error in predicted states callback: {e}")
     
@@ -209,13 +271,14 @@ class ROSDataSubscriber(QThread):
         """Callback for predicted controls messages"""
         try:
             # Store predicted controls for display
-            if len(msg.data) > 0:
+            if len(msg.data) > 0 and self.control_dim is not None:
                 # Reshape: [horizon * control_dim] -> [horizon, control_dim]
-                horizon = len(msg.data) // 6  # Assuming 2D control
+                horizon = len(msg.data) // self.control_dim
                 if horizon > 0:
-                    controls = np.array(msg.data).reshape(horizon, 6)
+                    controls = np.array(msg.data).reshape(horizon, self.control_dim)
                     # Store all predicted controls for display
                     self.predicted_controls = controls
+                    print(f"Predicted controls received: shape {controls.shape}, control_dim={self.control_dim}")
         except Exception as e:
             print(f"Error in predicted controls callback: {e}")
     
@@ -243,16 +306,43 @@ class ROSDataSubscriber(QThread):
         except Exception as e:
             print(f"Error in iterations callback: {e}")
     
+    def detect_robot_model(self, state_dim):
+        """Detect robot model based on state dimension"""
+        self.state_dim = state_dim
+        if state_dim == 12:
+            self.robot_model = 's500'
+            self.control_dim = 4
+            self.has_arm = False
+            print(f"Detected robot model: s500 ({state_dim}D state, {self.control_dim}D control, no arm)")
+        elif state_dim == 17:
+            self.robot_model = 's500_uam'
+            self.control_dim = 8
+            self.has_arm = True
+            print(f"Detected robot model: s500_uam ({state_dim}D state, {self.control_dim}D control, with 2DOF arm)")
+        else:
+            print(f"Warning: Unknown state dimension {state_dim}, defaulting to s500_uam")
+            self.robot_model = 's500_uam'
+            self.control_dim = 8
+            self.has_arm = True
+    
     def emit_data(self):
         """Emit collected data"""
-        if self.joint_states is not None:
+        if self.joint_states is not None or self.drone_states is not None:
             data = {
                 'joint_states': self.joint_states,
+                'drone_states': self.drone_states,
                 'control_input': self.control_input,
                 'target_state': self.target_state,
+                'drone_target_state': self.drone_target_state,
                 'mpc_cost': self.mpc_cost,
                 'solve_time': self.solve_time,
                 'iterations': self.iterations,
+                'robot_model': self.robot_model,
+                'has_arm': self.has_arm,
+                'state_dim': self.state_dim,
+                'control_dim': self.control_dim,
+                'predicted_states': getattr(self, 'predicted_states', None),
+                'predicted_controls': getattr(self, 'predicted_controls', None),
                 'timestamp': time.time()
             }
             self.data_received.emit(data)
@@ -268,16 +358,44 @@ class ROSDataSubscriber(QThread):
                 rate.sleep()
         else:
             # Simulation mode - generate fake data
+            simulation_model = 's500_uam'  # Can be changed to 's500' for testing
+            self.detect_robot_model(17 if simulation_model == 's500_uam' else 13)
+            
             while self.is_running:
                 # Generate fake data for demonstration
                 t = time.time()
-                self.joint_states = {
-                    'position': np.array([0.5 * np.sin(t), 0.3 * np.cos(t)]),
-                    'velocity': np.array([0.5 * np.cos(t), -0.3 * np.sin(t)]),
+                
+                # Generate fake drone data (common for both models)
+                self.drone_states = {
+                    'position': np.array([2.0 * np.sin(0.5*t), 1.5 * np.cos(0.5*t), 1.0 + 0.2 * np.sin(t)]),
+                    'velocity': np.array([1.0 * np.cos(0.5*t), -0.75 * np.sin(0.5*t), 0.2 * np.cos(t)]),
+                    'orientation': np.array([0.1 * np.sin(t), 0.1 * np.cos(t), 0.05 * np.sin(2*t), 0.95]),
+                    'angular_velocity': np.array([0.2 * np.cos(t), 0.1 * np.sin(t), 0.05 * np.sin(2*t)]),
                     'timestamp': t
                 }
-                self.control_input = np.array([0.1 * np.sin(t), 0.05 * np.cos(t)])
-                self.target_state = np.array([0.4, 0.5])
+                
+                # Generate fake drone target data
+                self.drone_target_state = {
+                    'position': np.array([2.0, 1.5, 1.0]),
+                    'velocity': np.array([0.0, 0.0, 0.0]),
+                    'orientation': np.array([0.0, 0.0, 0.0, 1.0]),
+                    'angular_velocity': np.array([0.0, 0.0, 0.0])
+                }
+                
+                # Generate joint data only for s500_uam
+                if simulation_model == 's500_uam':
+                    self.joint_states = {
+                        'position': np.array([0.5 * np.sin(t), 0.3 * np.cos(t)]),
+                        'velocity': np.array([0.5 * np.cos(t), -0.3 * np.sin(t)]),
+                        'timestamp': t
+                    }
+                    self.target_state = np.array([0.4, 0.5])
+                    self.control_input = np.array([0.1 * np.sin(t), 0.05 * np.cos(t)])
+                else:
+                    self.joint_states = None
+                    self.target_state = None
+                    self.control_input = np.array([0.1 * np.sin(t), 0.05 * np.cos(t), 0.03 * np.sin(2*t), 0.02 * np.cos(2*t), 0.01 * np.sin(3*t), 0.01 * np.cos(3*t)])
+                
                 self.mpc_cost = 0.1 + 0.05 * np.sin(t)
                 self.solve_time = 0.001 + 0.0005 * np.sin(t)
                 self.iterations = 10 + int(5 * np.sin(t))
@@ -297,13 +415,29 @@ class MPCDisplayGUI(QMainWindow):
         
         # Initialize data storage
         self.time_data = []
+        # Joint data
         self.position_data = []
         self.velocity_data = []
         self.control_data = []
         self.target_data = []
+        # Drone data
+        self.drone_position_data = []
+        self.drone_velocity_data = []
+        self.drone_target_position_data = []
+        self.drone_target_velocity_data = []
+        self.drone_orientation_data = []
+        self.drone_angular_velocity_data = []
+        # Common data
         self.cost_data = []
         self.solve_time_data = []
         self.iterations_data = []
+        
+        # Display mode: 'joint' or 'drone'
+        self.display_mode = 'joint'
+        
+        # Robot model info
+        self.current_robot_model = None
+        self.current_has_arm = False
         
         # Data retention settings
         self.max_data_points = 5000
@@ -478,20 +612,131 @@ class MPCDisplayGUI(QMainWindow):
             'joint2': self.plots['predicted_controls'].plot(pen=pg.mkPen('g', width=3), name='Joint 2')
         }
         
-        # Add plots to grid (3x4 layout)
-        plots_layout.addWidget(self.plots['position'], 0, 0)
-        plots_layout.addWidget(self.plots['velocity'], 0, 1)
-        plots_layout.addWidget(self.plots['control'], 0, 2)
-    
-        plots_layout.addWidget(self.plots['solve_time'], 1, 0)
-        plots_layout.addWidget(self.plots['iterations'], 1, 1)
-        plots_layout.addWidget(self.plots['cost'], 1, 2)
+        # ========================= Drone Plots =========================
+        # Drone position tracking plot
+        self.plots['drone_position'] = pg.PlotWidget(title='Drone Position')
+        self.plots['drone_position'].setLabel('left', 'Position (m)')
+        self.plots['drone_position'].setLabel('bottom', 'Time (s)')
+        self.plots['drone_position'].addLegend()
+        self.plots['drone_position'].showGrid(x=True, y=True)
+        setup_plot_style(self.plots['drone_position'])
+        self.drone_position_curves = {
+            'x_actual': self.plots['drone_position'].plot(pen=pg.mkPen('r', width=3), name='X Actual'),
+            'y_actual': self.plots['drone_position'].plot(pen=pg.mkPen('g', width=3), name='Y Actual'),
+            'z_actual': self.plots['drone_position'].plot(pen=pg.mkPen('b', width=3), name='Z Actual'),
+            'x_target': self.plots['drone_position'].plot(pen=pg.mkPen('r', width=2, style=pg.QtCore.Qt.DashLine), name='X Target'),
+            'y_target': self.plots['drone_position'].plot(pen=pg.mkPen('g', width=2, style=pg.QtCore.Qt.DashLine), name='Y Target'),
+            'z_target': self.plots['drone_position'].plot(pen=pg.mkPen('b', width=2, style=pg.QtCore.Qt.DashLine), name='Z Target')
+        }
         
-        plots_layout.addWidget(self.plots['predicted_positions'], 2, 0)
-        plots_layout.addWidget(self.plots['predicted_velocities'], 2, 1)
-        plots_layout.addWidget(self.plots['predicted_controls'], 2, 2)  # Span 2 columns
+        # Drone velocity plot
+        self.plots['drone_velocity'] = pg.PlotWidget(title='Drone Velocity')
+        self.plots['drone_velocity'].setLabel('left', 'Velocity (m/s)')
+        self.plots['drone_velocity'].setLabel('bottom', 'Time (s)')
+        self.plots['drone_velocity'].addLegend()
+        self.plots['drone_velocity'].showGrid(x=True, y=True)
+        setup_plot_style(self.plots['drone_velocity'])
+        self.drone_velocity_curves = {
+            'vx_actual': self.plots['drone_velocity'].plot(pen=pg.mkPen('r', width=3), name='Vx Actual'),
+            'vy_actual': self.plots['drone_velocity'].plot(pen=pg.mkPen('g', width=3), name='Vy Actual'),
+            'vz_actual': self.plots['drone_velocity'].plot(pen=pg.mkPen('b', width=3), name='Vz Actual'),
+            'vx_target': self.plots['drone_velocity'].plot(pen=pg.mkPen('r', width=2, style=pg.QtCore.Qt.DashLine), name='Vx Target'),
+            'vy_target': self.plots['drone_velocity'].plot(pen=pg.mkPen('g', width=2, style=pg.QtCore.Qt.DashLine), name='Vy Target'),
+            'vz_target': self.plots['drone_velocity'].plot(pen=pg.mkPen('b', width=2, style=pg.QtCore.Qt.DashLine), name='Vz Target')
+        }
+        
+        # Drone orientation plot (quaternion)
+        self.plots['drone_orientation'] = pg.PlotWidget(title='Drone Orientation (Quaternion)')
+        self.plots['drone_orientation'].setLabel('left', 'Quaternion')
+        self.plots['drone_orientation'].setLabel('bottom', 'Time (s)')
+        self.plots['drone_orientation'].addLegend()
+        self.plots['drone_orientation'].showGrid(x=True, y=True)
+        setup_plot_style(self.plots['drone_orientation'])
+        self.drone_orientation_curves = {
+            'roll': self.plots['drone_orientation'].plot(pen=pg.mkPen('r', width=3), name='Roll'),
+            'pitch': self.plots['drone_orientation'].plot(pen=pg.mkPen('g', width=3), name='Pitch'),
+            'yaw': self.plots['drone_orientation'].plot(pen=pg.mkPen('b', width=3), name='Yaw')
+        }
+        
+        self.plots['drone_predicted_positions'] = pg.PlotWidget(title='Drone Predicted Positions')
+        self.plots['drone_predicted_positions'].setLabel('left', 'Position (m)')
+        self.plots['drone_predicted_positions'].setLabel('bottom', 'Time (s)')
+        self.plots['drone_predicted_positions'].addLegend()
+        self.plots['drone_predicted_positions'].showGrid(x=True, y=True)
+        setup_plot_style(self.plots['drone_predicted_positions'])
+        self.drone_predicted_positions_curves = {
+            'x_predicted': self.plots['drone_predicted_positions'].plot(pen=pg.mkPen('r', width=3), name='X Predicted'),
+            'y_predicted': self.plots['drone_predicted_positions'].plot(pen=pg.mkPen('g', width=3), name='Y Predicted'),
+            'z_predicted': self.plots['drone_predicted_positions'].plot(pen=pg.mkPen('b', width=3), name='Z Predicted'),
+            'x_target': self.plots['drone_predicted_positions'].plot(pen=pg.mkPen('r', width=2, style=pg.QtCore.Qt.DashLine), name='X Target'),
+            'y_target': self.plots['drone_predicted_positions'].plot(pen=pg.mkPen('g', width=2, style=pg.QtCore.Qt.DashLine), name='Y Target'),
+            'z_target': self.plots['drone_predicted_positions'].plot(pen=pg.mkPen('b', width=2, style=pg.QtCore.Qt.DashLine), name='Z Target')
+        }
+        
+        self.plots['drone_predicted_velocities'] = pg.PlotWidget(title='Drone Predicted Velocities')
+        
+        self.plots['drone_predicted_velocities'].setLabel('left', 'Velocity (m/s)')
+        self.plots['drone_predicted_velocities'].setLabel('bottom', 'Time (s)')
+        self.plots['drone_predicted_velocities'].addLegend()
+        self.plots['drone_predicted_velocities'].showGrid(x=True, y=True)
+        setup_plot_style(self.plots['drone_predicted_velocities'])
+        self.drone_predicted_velocities_curves = {
+            'vx_predicted': self.plots['drone_predicted_velocities'].plot(pen=pg.mkPen('r', width=3), name='Vx Predicted'),
+            'vy_predicted': self.plots['drone_predicted_velocities'].plot(pen=pg.mkPen('g', width=3), name='Vy Predicted'),
+            'vz_predicted': self.plots['drone_predicted_velocities'].plot(pen=pg.mkPen('b', width=3), name='Vz Predicted')
+        }
+        
+        # Store plot layout widget for dynamic updates
+        self.plots_layout = plots_layout
+        self.plots_widget = plots_widget
+        
+        # Initially show joint plots
+        self.show_joint_plots()
         
         parent_layout.addWidget(plots_widget, 4)  # 增加图表区域占比
+    
+    def show_joint_plots(self):
+        """Show joint-related plots"""
+        # Clear all widgets from layout
+        self.clear_plot_layout()
+        
+        # Add joint plots to grid (3x3 layout)
+        self.plots_layout.addWidget(self.plots['position'], 0, 0)
+        self.plots_layout.addWidget(self.plots['velocity'], 0, 1)
+        self.plots_layout.addWidget(self.plots['control'], 0, 2)
+    
+        self.plots_layout.addWidget(self.plots['solve_time'], 1, 0)
+        self.plots_layout.addWidget(self.plots['iterations'], 1, 1)
+        self.plots_layout.addWidget(self.plots['cost'], 1, 2)
+        
+        self.plots_layout.addWidget(self.plots['predicted_positions'], 2, 0)
+        self.plots_layout.addWidget(self.plots['predicted_velocities'], 2, 1)
+        self.plots_layout.addWidget(self.plots['predicted_controls'], 2, 2)
+    
+    def show_drone_plots(self):
+        """Show drone-related plots"""
+        # Clear all widgets from layout
+        self.clear_plot_layout()
+        
+        # Add drone plots to grid (3x3 layout)
+        self.plots_layout.addWidget(self.plots['drone_position'], 0, 0)
+        self.plots_layout.addWidget(self.plots['drone_velocity'], 0, 1)
+        self.plots_layout.addWidget(self.plots['drone_orientation'], 0, 2)
+    
+        self.plots_layout.addWidget(self.plots['solve_time'], 1, 0)
+        self.plots_layout.addWidget(self.plots['iterations'], 1, 1)
+        self.plots_layout.addWidget(self.plots['cost'], 1, 2)
+        
+        self.plots_layout.addWidget(self.plots['drone_predicted_positions'], 2, 0)
+        self.plots_layout.addWidget(self.plots['drone_predicted_velocities'], 2, 1)
+        self.plots_layout.addWidget(self.plots['predicted_controls'], 2, 2)
+    
+    def clear_plot_layout(self):
+        """Clear all widgets from the plots layout"""
+        while self.plots_layout.count():
+            child = self.plots_layout.takeAt(0)
+            if child.widget():
+                child.widget().setParent(None)
     
     def create_control_panel(self, parent_layout):
         """Create the control panel"""
@@ -521,6 +766,22 @@ class MPCDisplayGUI(QMainWindow):
         # Display options
         display_group = QGroupBox("Display Options")
         display_layout = QVBoxLayout(display_group)
+        
+        # Robot model display
+        self.robot_model_label = QLabel("Robot Model: Detecting...")
+        display_layout.addWidget(self.robot_model_label)
+        
+        # Plot mode selection
+        self.plot_mode_combo = QComboBox()
+        self.plot_mode_combo.addItems(["Joint Mode", "Drone Mode"])
+        # self.plot_mode_combo.setCurrentText("Drone Mode")
+        self.plot_mode_combo.currentTextChanged.connect(self.change_plot_mode)
+        display_layout.addWidget(QLabel("Plot Mode:"))
+        display_layout.addWidget(self.plot_mode_combo)
+        
+        # Initially disable joint mode until we detect a robot with arm
+        self.joint_mode_enabled = True
+        # self.update_mode_availability()
         
         self.auto_scale_check = QCheckBox("Auto Scale")
         self.auto_scale_check.setChecked(True)
@@ -623,16 +884,33 @@ class MPCDisplayGUI(QMainWindow):
         state_group = QGroupBox("Current State")
         state_layout = QVBoxLayout(state_group)
         
+        # Joint state labels
         self.joint1_pos_label = QLabel("Joint 1 Position: 0.000")
         self.joint2_pos_label = QLabel("Joint 2 Position: 0.000")
         self.joint1_vel_label = QLabel("Joint 1 Velocity: 0.000")
         self.joint2_vel_label = QLabel("Joint 2 Velocity: 0.000")
         
-        for label in [self.joint1_pos_label, self.joint2_pos_label, 
-                     self.joint1_vel_label, self.joint2_vel_label]:
+        # Drone state labels
+        self.drone_x_label = QLabel("Drone X: 0.000")
+        self.drone_y_label = QLabel("Drone Y: 0.000")
+        self.drone_z_label = QLabel("Drone Z: 0.000")
+        self.drone_vx_label = QLabel("Drone Vx: 0.000")
+        self.drone_vy_label = QLabel("Drone Vy: 0.000")
+        self.drone_vz_label = QLabel("Drone Vz: 0.000")
+        
+        # Store labels for dynamic display
+        self.joint_labels = [self.joint1_pos_label, self.joint2_pos_label, 
+                           self.joint1_vel_label, self.joint2_vel_label]
+        self.drone_labels = [self.drone_x_label, self.drone_y_label, self.drone_z_label,
+                           self.drone_vx_label, self.drone_vy_label, self.drone_vz_label]
+        
+        # Initially show joint labels
+        for label in self.joint_labels:
             state_layout.addWidget(label)
         
         info_layout.addWidget(state_group)
+        self.state_group = state_group
+        self.state_layout = state_layout
         
         # Target information
         target_group = QGroupBox("Target Information")
@@ -694,10 +972,14 @@ class MPCDisplayGUI(QMainWindow):
     def update_display(self, data):
         """Update display with new data"""
         try:
+            # Update robot model info if changed
+            self.update_robot_model_info(data)
+            
             # Add new data
             current_time = data.get('timestamp', time.time())
             self.time_data.append(current_time)
             
+            # Joint data
             if data.get('joint_states'):
                 self.position_data.append(data['joint_states']['position'])
                 self.velocity_data.append(data['joint_states']['velocity'])
@@ -705,8 +987,33 @@ class MPCDisplayGUI(QMainWindow):
                 self.position_data.append(np.array([0.0, 0.0]))
                 self.velocity_data.append(np.array([0.0, 0.0]))
             
+            # Drone data
+            if data.get('drone_states'):
+                self.drone_position_data.append(data['drone_states']['position'])
+                self.drone_velocity_data.append(data['drone_states']['velocity'])
+                self.drone_orientation_data.append(data['drone_states']['orientation'])
+                self.drone_angular_velocity_data.append(data['drone_states']['angular_velocity'])
+            else:
+                self.drone_position_data.append(np.array([0.0, 0.0, 0.0]))
+                self.drone_velocity_data.append(np.array([0.0, 0.0, 0.0]))
+                self.drone_orientation_data.append(np.array([0.0, 0.0, 0.0, 1.0]))
+                self.drone_angular_velocity_data.append(np.array([0.0, 0.0, 0.0]))
+            
+            # Drone target data
+            if data.get('drone_target_state'):
+                self.drone_target_position_data.append(data['drone_target_state']['position'])
+                self.drone_target_velocity_data.append(data['drone_target_state']['velocity'])
+            else:
+                self.drone_target_position_data.append(np.array([0.0, 0.0, 0.0]))
+                self.drone_target_velocity_data.append(np.array([0.0, 0.0, 0.0]))
+            
             if data.get('control_input') is not None:
-                self.control_data.append(data['control_input'])
+                control = data['control_input']
+                # Pad or truncate control input to ensure consistent storage
+                if len(control) >= 2:
+                    self.control_data.append(control[:2])  # Store first 2 for joint display
+                else:
+                    self.control_data.append(np.array([0.0, 0.0]))
             else:
                 self.control_data.append(np.array([0.0, 0.0]))
             
@@ -729,6 +1036,12 @@ class MPCDisplayGUI(QMainWindow):
                 self.velocity_data = self.velocity_data[-self.max_data_points:]
                 self.control_data = self.control_data[-self.max_data_points:]
                 self.target_data = self.target_data[-self.max_data_points:]
+                self.drone_position_data = self.drone_position_data[-self.max_data_points:]
+                self.drone_velocity_data = self.drone_velocity_data[-self.max_data_points:]
+                self.drone_target_position_data = self.drone_target_position_data[-self.max_data_points:]
+                self.drone_target_velocity_data = self.drone_target_velocity_data[-self.max_data_points:]
+                self.drone_orientation_data = self.drone_orientation_data[-self.max_data_points:]
+                self.drone_angular_velocity_data = self.drone_angular_velocity_data[-self.max_data_points:]
                 self.cost_data = self.cost_data[-self.max_data_points:]
                 self.solve_time_data = self.solve_time_data[-self.max_data_points:]
                 self.iterations_data = self.iterations_data[-self.max_data_points:]
@@ -742,6 +1055,16 @@ class MPCDisplayGUI(QMainWindow):
     def update_info_labels(self, data):
         """Update information labels"""
         try:
+            if self.display_mode == 'joint':
+                self.update_joint_info_labels(data)
+            else:  # drone mode
+                self.update_drone_info_labels(data)
+        except Exception as e:
+            print(f"Error updating info labels: {e}")
+            
+    def update_joint_info_labels(self, data):
+        """Update joint information labels"""
+        try:
             if data.get('joint_states'):
                 pos = data['joint_states']['position']
                 vel = data['joint_states']['velocity']
@@ -750,88 +1073,241 @@ class MPCDisplayGUI(QMainWindow):
                 self.joint2_pos_label.setText(f"Joint 2 Position: {pos[1]:.3f}")
                 self.joint1_vel_label.setText(f"Joint 1 Velocity: {vel[0]:.3f}")
                 self.joint2_vel_label.setText(f"Joint 2 Velocity: {vel[1]:.3f}")
-            
-            if data.get('target_state') is not None:
+                
+                # Update common labels
+                self.update_common_info_labels(data)
+                
+                # Calculate joint errors
+                if data.get('joint_states') and data.get('target_state') is not None:
+                    pos = data['joint_states']['position']
+                    vel = data['joint_states']['velocity']
+                    target = data['target_state']
+                    
+                    pos_error1 = pos[0] - target[0]
+                    pos_error2 = pos[1] - target[1]
+                    vel_error1 = vel[0]  # Assuming target velocity is 0
+                    vel_error2 = vel[1]
+                    
+                    self.pos_error1_label.setText(f"Position Error 1: {pos_error1:.3f}")
+                    self.pos_error2_label.setText(f"Position Error 2: {pos_error2:.3f}")
+                    self.vel_error1_label.setText(f"Velocity Error 1: {vel_error1:.3f}")
+                    self.vel_error2_label.setText(f"Velocity Error 2: {vel_error2:.3f}")
+                    
+        except Exception as e:
+            print(f"Error updating joint info labels: {e}")
+    
+    def update_drone_info_labels(self, data):
+        """Update drone information labels"""
+        try:
+            if data.get('drone_states'):
+                pos = data['drone_states']['position']
+                vel = data['drone_states']['velocity']
+                
+                self.drone_x_label.setText(f"Drone X: {pos[0]:.3f}")
+                self.drone_y_label.setText(f"Drone Y: {pos[1]:.3f}")
+                self.drone_z_label.setText(f"Drone Z: {pos[2]:.3f}")
+                self.drone_vx_label.setText(f"Drone Vx: {vel[0]:.3f}")
+                self.drone_vy_label.setText(f"Drone Vy: {vel[1]:.3f}")
+                self.drone_vz_label.setText(f"Drone Vz: {vel[2]:.3f}")
+                
+                # Update common labels
+                self.update_common_info_labels(data)
+                
+                # Calculate drone errors
+                if data.get('drone_target_state') is not None:
+                    target_pos = data['drone_target_state']['position']
+                    target_vel = data['drone_target_state']['velocity']
+                    
+                    pos_error_x = pos[0] - target_pos[0]
+                    pos_error_y = pos[1] - target_pos[1]
+                    pos_error_z = pos[2] - target_pos[2]
+                    vel_error_x = vel[0] - target_vel[0]
+                    vel_error_y = vel[1] - target_vel[1]
+                    vel_error_z = vel[2] - target_vel[2]
+                    
+                    self.pos_error1_label.setText(f"Position Error X: {pos_error_x:.3f}")
+                    self.pos_error2_label.setText(f"Position Error Y: {pos_error_y:.3f}")
+                    self.vel_error1_label.setText(f"Velocity Error X: {vel_error_x:.3f}")
+                    self.vel_error2_label.setText(f"Velocity Error Y: {vel_error_y:.3f}")
+                    
+        except Exception as e:
+            print(f"Error updating drone info labels: {e}")
+    
+    def update_common_info_labels(self, data):
+        """Update common information labels (cost, solve time, etc.)"""
+        try:
+            if data.get('target_state') is not None and self.display_mode == 'joint':
                 target = data['target_state']
                 self.target1_label.setText(f"Target 1: {target[0]:.3f}")
                 self.target2_label.setText(f"Target 2: {target[1]:.3f}")
+            elif data.get('drone_target_state') is not None and self.display_mode == 'drone':
+                target_pos = data['drone_target_state']['position']
+                self.target1_label.setText(f"Target X: {target_pos[0]:.3f}")
+                self.target2_label.setText(f"Target Y: {target_pos[1]:.3f}")
             
             if data.get('control_input') is not None:
                 control = data['control_input']
-                self.control1_label.setText(f"Control 1: {control[0]:.3f}")
-                self.control2_label.setText(f"Control 2: {control[1]:.3f}")
-                control_mag = np.linalg.norm(control)
-                self.control_mag_label.setText(f"Control Magnitude: {control_mag:.3f}")
+                if self.display_mode == 'joint' and len(control) >= 8:
+                    # For s500_uam, show arm joint controls (indices 6:8)
+                    self.control1_label.setText(f"Joint Control 1: {control[6]:.3f}")
+                    self.control2_label.setText(f"Joint Control 2: {control[7]:.3f}")
+                    control_mag = np.linalg.norm(control[6:8])
+                    self.control_mag_label.setText(f"Joint Control Magnitude: {control_mag:.3f}")
+                elif self.display_mode == 'drone':
+                    # Show first few control inputs for drone
+                    self.control1_label.setText(f"Control 1: {control[0]:.3f}")
+                    if len(control) > 1:
+                        self.control2_label.setText(f"Control 2: {control[1]:.3f}")
+                    else:
+                        self.control2_label.setText(f"Control 2: 0.000")
+                    control_mag = np.linalg.norm(control[:min(4, len(control))])
+                    self.control_mag_label.setText(f"Control Magnitude: {control_mag:.3f}")
+                else:
+                    # Fallback
+                    self.control1_label.setText(f"Control 1: {control[0]:.3f}")
+                    if len(control) > 1:
+                        self.control2_label.setText(f"Control 2: {control[1]:.3f}")
+                    else:
+                        self.control2_label.setText(f"Control 2: 0.000")
+                    control_mag = np.linalg.norm(control)
+                    self.control_mag_label.setText(f"Control Magnitude: {control_mag:.3f}")
             
             self.cost_label.setText(f"Current Cost: {data.get('mpc_cost', 0.0):.6f}")
             self.solve_time_label.setText(f"Solve Time: {data.get('solve_time', 0.0)*1000:.1f} ms")
             self.iterations_label.setText(f"Iterations: {data.get('iterations', 0)}")
             
-            # Calculate errors
-            if data.get('joint_states') and data.get('target_state') is not None:
-                pos = data['joint_states']['position']
-                vel = data['joint_states']['velocity']
-                target = data['target_state']
-                
-                pos_error1 = pos[0] - target[0]
-                pos_error2 = pos[1] - target[1]
-                vel_error1 = vel[0]  # Assuming target velocity is 0
-                vel_error2 = vel[1]
-                
-                self.pos_error1_label.setText(f"Position Error 1: {pos_error1:.3f}")
-                self.pos_error2_label.setText(f"Position Error 2: {pos_error2:.3f}")
-                self.vel_error1_label.setText(f"Velocity Error 1: {vel_error1:.3f}")
-                self.vel_error2_label.setText(f"Velocity Error 2: {vel_error2:.3f}")
-            
         except Exception as e:
-            print(f"Error updating info labels: {e}")
+            print(f"Error updating common info labels: {e}")
+    
+    def update_state_labels_display(self):
+        """Update which state labels are displayed based on current mode"""
+        try:
+            # Clear current labels
+            for label in self.joint_labels + self.drone_labels:
+                label.setParent(None)
+            
+            # Add appropriate labels based on mode
+            if self.display_mode == 'joint':
+                for label in self.joint_labels:
+                    self.state_layout.addWidget(label)
+            else:  # drone mode
+                for label in self.drone_labels:
+                    self.state_layout.addWidget(label)
+                    
+        except Exception as e:
+            print(f"Error updating state labels display: {e}")
     
     def update_plots(self):
         """Update all plots"""
         try:
             if len(self.time_data) > 1:
                 time_array = np.array(self.time_data)
-                position_array = np.array(self.position_data)
-                velocity_array = np.array(self.velocity_data)
-                control_array = np.array(self.control_data)
-                target_array = np.array(self.target_data)
                 cost_array = np.array(self.cost_data)
                 solve_time_array = np.array(self.solve_time_data)
                 iterations_array = np.array(self.iterations_data)
                 
-                # Update position tracking plot
-                self.position_curves['joint1_actual'].setData(time_array, position_array[:, 0])
-                self.position_curves['joint2_actual'].setData(time_array, position_array[:, 1])
-                self.position_curves['joint1_target'].setData(time_array, target_array[:, 0])
-                self.position_curves['joint2_target'].setData(time_array, target_array[:, 1])
+                if self.display_mode == 'joint':
+                    self.update_joint_plots(time_array)
+                else:  # drone mode
+                    self.update_drone_plots(time_array)
                 
-                # Update velocity plot
-                self.velocity_curves['joint1'].setData(time_array, velocity_array[:, 0])
-                self.velocity_curves['joint2'].setData(time_array, velocity_array[:, 1])
-                # Add target velocities (typically 0 for position control)
-                target_velocity = np.zeros_like(time_array)
-                self.velocity_curves['joint1_target'].setData(time_array, target_velocity)
-                self.velocity_curves['joint2_target'].setData(time_array, target_velocity)
-                
-                # Update control plot
-                self.control_curves['joint1'].setData(time_array, control_array[:, 0])
-                self.control_curves['joint2'].setData(time_array, control_array[:, 1])
-                
-                # Update cost plot
+                # Update common plots (cost, solve time, iterations)
                 self.cost_curve.setData(time_array, cost_array)
-                
-                # Update solve time plot
                 self.solve_time_curve.setData(time_array, solve_time_array * 1000)  # Convert to ms
-                
-                # Update iterations plot
                 self.iterations_curve.setData(time_array, iterations_array)
                 
-                # Update predicted positions plot (all steps)
-                if hasattr(self.ros_subscriber, 'predicted_states') and self.ros_subscriber.predicted_states is not None:
-                    predicted_states = self.ros_subscriber.predicted_states
-                    if len(predicted_states) > 0:
-                        steps = np.arange(len(predicted_states))
-                        # States format: [pos1, pos2, vel1, vel2]
+                # Update predicted states and controls plots with latest data
+                if hasattr(self.ros_subscriber, 'predicted_states') or hasattr(self.ros_subscriber, 'predicted_controls'):
+                    predicted_states = getattr(self.ros_subscriber, 'predicted_states', None)
+                    predicted_controls = getattr(self.ros_subscriber, 'predicted_controls', None)
+                    self.update_predicted_plots(predicted_states, predicted_controls)
+                
+                # Auto-scale if enabled
+                if self.auto_scale_check.isChecked():
+                    for plot in self.plots.values():
+                        plot.autoRange()
+            
+        except Exception as e:
+            print(f"Error updating plots: {e}")
+    
+    def update_joint_plots(self, time_array):
+        """Update joint-specific plots"""
+        try:
+            position_array = np.array(self.position_data)
+            velocity_array = np.array(self.velocity_data)
+            control_array = np.array(self.control_data)
+            target_array = np.array(self.target_data)
+            
+            # Update position tracking plot
+            self.position_curves['joint1_actual'].setData(time_array, position_array[:, 0])
+            self.position_curves['joint2_actual'].setData(time_array, position_array[:, 1])
+            self.position_curves['joint1_target'].setData(time_array, target_array[:, 0])
+            self.position_curves['joint2_target'].setData(time_array, target_array[:, 1])
+            
+            # Update velocity plot
+            self.velocity_curves['joint1'].setData(time_array, velocity_array[:, 0])
+            self.velocity_curves['joint2'].setData(time_array, velocity_array[:, 1])
+            # Add target velocities (typically 0 for position control)
+            target_velocity = np.zeros_like(time_array)
+            self.velocity_curves['joint1_target'].setData(time_array, target_velocity)
+            self.velocity_curves['joint2_target'].setData(time_array, target_velocity)
+            
+            # Update control plot
+            self.control_curves['joint1'].setData(time_array, control_array[:, 0])
+            self.control_curves['joint2'].setData(time_array, control_array[:, 1])
+            
+        except Exception as e:
+            print(f"Error updating joint plots: {e}")
+    
+    def update_drone_plots(self, time_array):
+        """Update drone-specific plots"""
+        try:
+            drone_position_array = np.array(self.drone_position_data)
+            drone_velocity_array = np.array(self.drone_velocity_data)
+            drone_target_position_array = np.array(self.drone_target_position_data)
+            drone_target_velocity_array = np.array(self.drone_target_velocity_data)
+            drone_orientation_array = np.array(self.drone_orientation_data)
+            
+            # Update drone position plot
+            self.drone_position_curves['x_actual'].setData(time_array, drone_position_array[:, 0])
+            self.drone_position_curves['y_actual'].setData(time_array, drone_position_array[:, 1])
+            self.drone_position_curves['z_actual'].setData(time_array, drone_position_array[:, 2])
+            self.drone_position_curves['x_target'].setData(time_array, drone_target_position_array[:, 0])
+            self.drone_position_curves['y_target'].setData(time_array, drone_target_position_array[:, 1])
+            self.drone_position_curves['z_target'].setData(time_array, drone_target_position_array[:, 2])
+            
+            # Update drone velocity plot
+            self.drone_velocity_curves['vx_actual'].setData(time_array, drone_velocity_array[:, 0])
+            self.drone_velocity_curves['vy_actual'].setData(time_array, drone_velocity_array[:, 1])
+            self.drone_velocity_curves['vz_actual'].setData(time_array, drone_velocity_array[:, 2])
+            self.drone_velocity_curves['vx_target'].setData(time_array, drone_target_velocity_array[:, 0])
+            self.drone_velocity_curves['vy_target'].setData(time_array, drone_target_velocity_array[:, 1])
+            self.drone_velocity_curves['vz_target'].setData(time_array, drone_target_velocity_array[:, 2])
+            
+            # Update drone orientation plot
+            self.drone_orientation_curves['roll'].setData(time_array, drone_orientation_array[:, 0])
+            self.drone_orientation_curves['pitch'].setData(time_array, drone_orientation_array[:, 1])
+            self.drone_orientation_curves['yaw'].setData(time_array, drone_orientation_array[:, 2])
+            
+        except Exception as e:
+            print(f"Error updating drone plots: {e}")
+    
+    def update_predicted_plots(self, predicted_states=None, predicted_controls=None):
+        """Update predicted states and controls plots"""
+        try:
+            # Use passed data or fallback to subscriber data
+            if predicted_states is None and hasattr(self.ros_subscriber, 'predicted_states'):
+                predicted_states = self.ros_subscriber.predicted_states
+            if predicted_controls is None and hasattr(self.ros_subscriber, 'predicted_controls'):
+                predicted_controls = self.ros_subscriber.predicted_controls
+                
+            # Update predicted positions plot (all steps)
+            if predicted_states is not None and len(predicted_states) > 0:
+                steps = np.arange(len(predicted_states))
+                
+                if self.display_mode == 'joint':
+                    # States format for joints: state[7:9] for joint positions (s500_uam)
+                    if self.current_robot_model == 's500_uam':
                         self.predicted_positions_curves['joint1'].setData(steps, predicted_states[:, 7])
                         self.predicted_positions_curves['joint2'].setData(steps, predicted_states[:, 8])
                         
@@ -843,31 +1319,93 @@ class MPCDisplayGUI(QMainWindow):
                             target_joint2 = np.full(len(predicted_states), current_target[1])
                             self.predicted_positions_curves['joint1_target'].setData(target_steps, target_joint1)
                             self.predicted_positions_curves['joint2_target'].setData(target_steps, target_joint2)
+                        
+                        # Update predicted velocities for joints (s500_uam: state[15:17])
+                        self.predicted_velocities_curves['joint1'].setData(steps, predicted_states[:, 15])
+                        self.predicted_velocities_curves['joint2'].setData(steps, predicted_states[:, 16])
                 
-                # Update predicted velocities plot (all steps)
-                if hasattr(self.ros_subscriber, 'predicted_states') and self.ros_subscriber.predicted_states is not None:
-                    predicted_states = self.ros_subscriber.predicted_states
-                    if len(predicted_states) > 0:
-                        steps = np.arange(len(predicted_states))
-                        # States format: [pos1, pos2, vel1, vel2]
-                        self.predicted_velocities_curves['joint1'].setData(steps, predicted_states[:, -2])
-                        self.predicted_velocities_curves['joint2'].setData(steps, predicted_states[:, -1])
-                
-                # Update predicted controls plot (all steps)
-                if hasattr(self.ros_subscriber, 'predicted_controls') and self.ros_subscriber.predicted_controls is not None:
-                    predicted_controls = self.ros_subscriber.predicted_controls
-                    if len(predicted_controls) > 0:
-                        steps = np.arange(len(predicted_controls))
-                        self.predicted_controls_curves['joint1'].setData(steps, predicted_controls[:, -2])
-                        self.predicted_controls_curves['joint2'].setData(steps, predicted_controls[:, -1])
-                
-                # Auto-scale if enabled
-                if self.auto_scale_check.isChecked():
-                    for plot in self.plots.values():
-                        plot.autoRange()
-            
+                else:  # drone mode
+                    # States format for drone: state[0:3] for position
+                    self.drone_predicted_positions_curves['x_predicted'].setData(steps, predicted_states[:, 0])  # X position
+                    self.drone_predicted_positions_curves['y_predicted'].setData(steps, predicted_states[:, 1])  # Y position
+                    self.drone_predicted_positions_curves['z_predicted'].setData(steps, predicted_states[:, 2])  # Z position
+                    self.drone_predicted_positions_curves['x_target'].setData(steps, self.drone_target_position_data[:, 0])
+                    self.drone_predicted_positions_curves['y_target'].setData(steps, self.drone_target_position_data[:, 1])
+                    self.drone_predicted_positions_curves['z_target'].setData(steps, self.drone_target_position_data[:, 2])
+                        
+                    # Update predicted velocities for drone
+                    if self.current_robot_model == 's500':
+                        # s500: 13D state [pos(3), quat(4), vel(3), angular_vel(3)]
+                        self.drone_predicted_velocities_curves['vx_predicted'].setData(steps, predicted_states[:, 7])   # Vx
+                        self.drone_predicted_velocities_curves['vy_predicted'].setData(steps, predicted_states[:, 8])   # Vy
+                        self.drone_predicted_velocities_curves['vz_predicted'].setData(steps, predicted_states[:, 9])   # Vz
+                    elif self.current_robot_model == 's500_uam':
+                        # s500_uam: 17D state [pos(3), quat(4), joint_pos(2), vel(3), angular_vel(3), joint_vel(2)]
+                        self.drone_predicted_velocities_curves['vx_predicted'].setData(steps, predicted_states[:, 9])   # Vx
+                        self.drone_predicted_velocities_curves['vy_predicted'].setData(steps, predicted_states[:, 10])  # Vy
+                        self.drone_predicted_velocities_curves['vz_predicted'].setData(steps, predicted_states[:, 11])  # Vz
+        
+            # Update predicted controls plot (all steps)
+            if predicted_controls is not None and len(predicted_controls) > 0:
+                steps = np.arange(len(predicted_controls))
+                if self.display_mode == 'joint' and self.current_robot_model == 's500_uam':
+                    # For s500_uam, joint controls are the last 2 elements
+                    self.predicted_controls_curves['joint1'].setData(steps, predicted_controls[:, -2])
+                    self.predicted_controls_curves['joint2'].setData(steps, predicted_controls[:, -1])
+                    
         except Exception as e:
-            print(f"Error updating plots: {e}")
+            print(f"Error updating predicted plots: {e}")
+    
+    def update_robot_model_info(self, data):
+        """Update robot model information and UI availability"""
+        robot_model = data.get('robot_model')
+        has_arm = data.get('has_arm', False)
+        
+        if robot_model and robot_model != self.current_robot_model:
+            self.current_robot_model = robot_model
+            self.current_has_arm = has_arm
+            
+            # Update robot model display
+            state_dim = data.get('state_dim', 'Unknown')
+            control_dim = data.get('control_dim', 'Unknown')
+            arm_status = "with 2DOF arm" if has_arm else "no arm"
+            self.robot_model_label.setText(f"Robot: {robot_model} ({state_dim}D state, {control_dim}D control, {arm_status})")
+            
+            # Update mode availability
+            # self.update_mode_availability()
+            
+            print(f"Robot model updated: {robot_model}, has_arm: {has_arm}")
+    
+    def update_mode_availability(self):
+        """Update which modes are available based on current robot model"""
+        # Always enable drone mode
+        drone_mode_index = self.plot_mode_combo.findText("Drone Mode")
+        if drone_mode_index >= 0:
+            self.plot_mode_combo.model().item(drone_mode_index).setEnabled(True)
+        
+        # Enable/disable joint mode based on whether robot has arm
+        joint_mode_index = self.plot_mode_combo.findText("Joint Mode")
+        if joint_mode_index >= 0:
+            self.plot_mode_combo.model().item(joint_mode_index).setEnabled(self.current_has_arm)
+            
+        # If current mode is joint but robot has no arm, switch to drone mode
+        if self.display_mode == 'joint' and not self.current_has_arm:
+            self.plot_mode_combo.setCurrentText("Drone Mode")
+            self.change_plot_mode("Drone Mode")
+    
+    def change_plot_mode(self, mode_text):
+        """Change the plot display mode"""
+        if mode_text == "Joint Mode" and self.current_has_arm:
+            self.display_mode = 'joint'
+            self.show_joint_plots()
+        else:  # Drone Mode (default for both s500 and s500_uam)
+            self.display_mode = 'drone'
+            self.show_drone_plots()
+        
+        # Update state labels display
+        self.update_state_labels_display()
+        
+        print(f"Plot mode changed to: {self.display_mode}")
     
     def update_max_points(self, value):
         """Update maximum data points"""
@@ -890,6 +1428,12 @@ class MPCDisplayGUI(QMainWindow):
         self.velocity_data.clear()
         self.control_data.clear()
         self.target_data.clear()
+        self.drone_position_data.clear()
+        self.drone_velocity_data.clear()
+        self.drone_target_position_data.clear()
+        self.drone_target_velocity_data.clear()
+        self.drone_orientation_data.clear()
+        self.drone_angular_velocity_data.clear()
         self.cost_data.clear()
         self.solve_time_data.clear()
         self.iterations_data.clear()
