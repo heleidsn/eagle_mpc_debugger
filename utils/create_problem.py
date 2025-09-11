@@ -114,7 +114,7 @@ def get_opt_traj(robotName, trajectoryName, dt_traj_opt, useSquash, yaml_file_pa
         # For now, we'll implement the modification logic here
         yaml_data = modify_catch_yaml_config(yaml_data, catch_config)
         # save the modified yaml to a file
-        with open(os.path.join(package_path, 'temp_trajectory.yaml'), 'w') as f:
+        with open(os.path.join(package_path, yaml_file_path, 'trajectories', 'temp_trajectory.yaml'), 'w') as f:
             yaml.dump(yaml_data, f)
     
     # Write the processed YAML to a temporary file
@@ -165,30 +165,9 @@ def load_trajectory_from_generated_yaml(dt_traj_opt, useSquash):
     # Construct absolute path for the generated trajectory YAML
     trajectory_config_path = os.path.join(package_path, 'config/yaml/trajectories/temp_trajectory.yaml')
     
-    # First read the YAML file to process paths
-    with open(trajectory_config_path, 'r') as f:
-        yaml_data = yaml.safe_load(f)
-    
-    # Process paths in the YAML data
-    if 'trajectory' in yaml_data and 'robot' in yaml_data['trajectory']:
-        robot_data = yaml_data['trajectory']['robot']
-        if 'urdf' in robot_data:
-            urdf_path = robot_data['urdf']
-            if not urdf_path.startswith('/'):
-                robot_data['urdf'] = os.path.join(package_path, urdf_path)
-        if 'follow' in robot_data:
-            follow_path = robot_data['follow']
-            if not follow_path.startswith('/'):
-                robot_data['follow'] = os.path.join(package_path, follow_path)
-    
-    # Write the processed YAML to a temporary file
-    temp_yaml_path = os.path.join(package_path, 'temp_processed_trajectory.yaml')
-    with open(temp_yaml_path, 'w') as f:
-        yaml.dump(yaml_data, f)
-    
     try:
         trajectory = eagle_mpc.Trajectory()
-        trajectory.autoSetup(temp_yaml_path)
+        trajectory.autoSetup(trajectory_config_path)
         problem = trajectory.createProblem(dt_traj_opt, useSquash, "IntegratedActionModelEuler")
 
         if useSquash:

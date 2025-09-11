@@ -228,9 +228,9 @@
   <transmission name="joint_3_trans">
     <type>transmission_interface/SimpleTransmission</type>
     <joint name="joint_3">
-      <!-- <hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface> -->
+      <hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface>
       <!-- <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface> -->
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <!-- <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface> -->
     </joint>
     <actuator name="joint_3_motor">
       <!-- <hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface>
@@ -243,9 +243,9 @@
   <transmission name="joint_4_trans">
     <type>transmission_interface/SimpleTransmission</type>
     <joint name="joint_4">
-      <!-- <hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface> -->
+      <hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface>
       <!-- <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface> -->
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <!-- <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface> -->
     </joint>
     <actuator name="joint_4_motor">
       <!-- <hardwareInterface>hardware_interface/PositionJointInterface</hardwareInterface>

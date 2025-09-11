@@ -1,13 +1,16 @@
 <?xml version="1.0"?>
 <launch>
+    <!-- settings -->
     <arg name="vehicle" default="s500_uam"/>
     <arg name="world_name" default="table_beer_with_stand"/>
     <arg name="use_camera" default="false"/>
+    <arg name="joint_friction" default="false"/>
     <arg name="arm_control_mode" default="position"/>
     
     <arg name="world" default="$(find eagle_mpc_debugger)/worlds/$(arg world_name).world"/>
     <arg name="sdf" default="$(find eagle_mpc_debugger)/models/sdf/s500_uam/s500_uam_camera.sdf"/>
-    <arg name="sdf_no_camera" default="$(find eagle_mpc_debugger)/models/sdf/s500_uam/s500_uam.sdf"/>
+    <arg name="sdf_no_camera" default="$(find eagle_mpc_debugger)/models/sdf/s500_uam/s500_uam.sdf" if="$(arg joint_friction)"/>
+    <arg name="sdf_no_camera" default="$(find eagle_mpc_debugger)/models/sdf/s500_uam/s500_uam_no_friction.sdf" unless="$(arg joint_friction)"/>
 
     <!-- gazebo configs -->
     <arg name="gui" default="true"/>

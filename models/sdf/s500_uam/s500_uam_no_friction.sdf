@@ -411,8 +411,8 @@
 	      <velocity>1.0</velocity>
         </limit>
         <dynamics>
-          <damping>0.05</damping>
-          <friction>0.01</friction>
+          <damping>0.0</damping>
+          <friction>0.0</friction>
         </dynamics>
       </axis>
     </joint>
@@ -466,8 +466,8 @@
 	      <velocity>1.0</velocity>
         </limit>
         <dynamics>
-          <damping>0.05</damping>
-          <friction>0.01</friction>
+          <damping>0.0</damping>
+          <friction>0.0</friction>
         </dynamics>
       </axis>
     </joint>

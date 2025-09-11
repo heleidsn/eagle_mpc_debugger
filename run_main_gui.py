@@ -16,7 +16,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QFormLayout, QGroupBox, QPushButton, 
                             QLabel, QComboBox, QSpinBox, QDoubleSpinBox, 
-                            QCheckBox, QTextEdit, QMessageBox, QLineEdit)
+                            QCheckBox, QTextEdit, QMessageBox, QLineEdit, QDesktopWidget, QFrame)
 from PyQt5.QtCore import QTimer
 from PyQt5.QtGui import QIcon, QPixmap
 from std_msgs.msg import String
@@ -357,7 +357,12 @@ class EagleMPCDebuggerGUI(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Open Aerial Manipulator Control GUI")
-        self.setGeometry(100, 100, 1600, 800)
+        
+        # Set window size and center it on screen
+        window_width = 1600
+        window_height = 800
+        self.resize(window_width, window_height)
+        self.center_window()
         
         # Set window icon
         icon_path = os.path.join(current_dir, 'resources', 'icon', 'aerial_manipulator_sw.png')
@@ -409,6 +414,22 @@ class EagleMPCDebuggerGUI(QMainWindow):
             
         # Set initial parameter visibility
         self.update_parameter_visibility()
+        
+    def center_window(self):
+        """Center the window on the screen"""
+        # Get the screen geometry
+        desktop = QDesktopWidget()
+        screen_geometry = desktop.screenGeometry()
+        
+        # Get window geometry
+        window_geometry = self.frameGeometry()
+        
+        # Calculate center position
+        center_x = (screen_geometry.width() - window_geometry.width()) // 2
+        center_y = (screen_geometry.height() - window_geometry.height()) // 2
+        
+        # Move window to center
+        self.move(center_x, center_y)
         
     def init_ros_node(self):
         """Initialize ROS node and subscribers"""
@@ -720,13 +741,33 @@ class EagleMPCDebuggerGUI(QMainWindow):
         
         self.As_coef_spin = QDoubleSpinBox()
         self.As_coef_spin.setRange(-10.0, 10.0)
-        self.As_coef_spin.setValue(-1.0)
+        self.As_coef_spin.setValue(-0.1)
         controller_config_layout.addRow("As Coefficient:", self.As_coef_spin)
         
-        self.filter_time_spin = QDoubleSpinBox()
-        self.filter_time_spin.setRange(0.1, 5.0)
-        self.filter_time_spin.setValue(0.4)
-        controller_config_layout.addRow("Filter Time Constant:", self.filter_time_spin)
+        # Filter Time Constants for position, attitude, and arm
+        filter_time_frame = QFrame()
+        filter_time_layout = QHBoxLayout(filter_time_frame)
+        filter_time_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Position filter time constant
+        self.filter_time_position_edit = QLineEdit("0.3")
+        self.filter_time_position_edit.setFixedWidth(60)
+        filter_time_layout.addWidget(QLabel("Pos:"))
+        filter_time_layout.addWidget(self.filter_time_position_edit)
+        
+        # Attitude filter time constant  
+        self.filter_time_attitude_edit = QLineEdit("0.3")
+        self.filter_time_attitude_edit.setFixedWidth(60)
+        filter_time_layout.addWidget(QLabel("Att:"))
+        filter_time_layout.addWidget(self.filter_time_attitude_edit)
+        
+        # Arm filter time constant
+        self.filter_time_arm_edit = QLineEdit("0.3")
+        self.filter_time_arm_edit.setFixedWidth(60)
+        filter_time_layout.addWidget(QLabel("Arm:"))
+        filter_time_layout.addWidget(self.filter_time_arm_edit)
+        
+        controller_config_layout.addRow("Filter Time Constants:", filter_time_frame)
 
         # Add MPC controller button
         self.start_mpc_btn = QPushButton("Start MPC Controller")
@@ -774,6 +815,15 @@ class EagleMPCDebuggerGUI(QMainWindow):
         arm_control_mode_selection_layout.addWidget(arm_control_mode_label)
         arm_control_mode_selection_layout.addWidget(self.arm_control_mode_combo)
         simulation_layout.addLayout(arm_control_mode_selection_layout)
+        
+        # Add joint friction checkbox
+        joint_friction_layout = QHBoxLayout()
+        joint_friction_label = QLabel("Joint Friction:")
+        self.joint_friction_checkbox = QCheckBox()
+        self.joint_friction_checkbox.setChecked(True)  # Default to no friction
+        joint_friction_layout.addWidget(joint_friction_label)
+        joint_friction_layout.addWidget(self.joint_friction_checkbox)
+        simulation_layout.addLayout(joint_friction_layout)
         
         # # ROSCore Control
         # self.start_roscore_btn = QPushButton("Start ROSCore")
@@ -1070,7 +1120,11 @@ class EagleMPCDebuggerGUI(QMainWindow):
             'max_thrust_cmd': 1.0,
             'l1_version': self.l1_version_combo.currentText(),
             'As_coef': self.As_coef_spin.value(),
-            'filter_time_constant': self.filter_time_spin.value()
+            'filter_time_constant': [
+                float(self.filter_time_position_edit.text()),
+                float(self.filter_time_attitude_edit.text()), 
+                float(self.filter_time_arm_edit.text())
+            ]
         }
         
         success, message = self.system_controller.launch_system(config)
@@ -1232,6 +1286,7 @@ class EagleMPCDebuggerGUI(QMainWindow):
             world_name = self.world_combo.currentText()
             use_camera = self.camera_combo.currentText()
             arm_control_mode = self.arm_control_mode_combo.currentText()
+            joint_friction = "true" if self.joint_friction_checkbox.isChecked() else "false"
             
             # Select appropriate launch file based on robot name
             if robot_name == "s500_uam":
@@ -1244,9 +1299,10 @@ class EagleMPCDebuggerGUI(QMainWindow):
                 raise ValueError(f"No simulation launch file available for robot: {robot_name}")
             
             # Launch the simulation script with world parameter
-            cmd = f"roslaunch eagle_mpc_debugger {launch_file} world_name:={world_name} use_camera:={use_camera} arm_control_mode:={arm_control_mode}"
+            cmd = f"roslaunch eagle_mpc_debugger {launch_file} world_name:={world_name} use_camera:={use_camera} arm_control_mode:={arm_control_mode} joint_friction:={joint_friction}"
             self.simulation_process = subprocess.Popen(cmd, shell=True, env=env)
-            self.log_message(f"Simulation environment launched successfully for {robot_name} with world: {world_name}")
+            friction_status = "with friction" if joint_friction == "true" else "without friction"
+            self.log_message(f"Simulation environment launched successfully for {robot_name} with world: {world_name} ({friction_status})")
             self.simulation_status.setText("Running")
         except Exception as e:
             error_msg = f"Failed to launch simulation: {str(e)}"
@@ -1272,7 +1328,7 @@ class EagleMPCDebuggerGUI(QMainWindow):
                 self.simulation_process = None
 
             # Kill all related ROS nodes
-            kill_cmd = "rosnode kill /gazebo /gazebo_gui /rosout /rosmaster /rviz /rviz_gui /robot_state_publisher /joint_state_publisher /joint_state_publisher_gui /move_group /controller_spawner /controller_manager /robot_state_publisher /joint_state_publisher /joint_state_publisher_gui /move_group /controller_spawner /controller_manager /groundtruth_pub"
+            kill_cmd = "rosnode kill /gazebo /gazebo_gui /rviz /rviz_gui /robot_state_publisher /joint_state_publisher /joint_state_publisher_gui /move_group /controller_spawner /controller_manager /robot_state_publisher /joint_state_publisher /joint_state_publisher_gui /move_group /controller_spawner /controller_manager /groundtruth_pub"
             subprocess.run(kill_cmd, shell=True, stderr=subprocess.PIPE)
 
             # Kill all gazebo-related processes
@@ -1285,7 +1341,7 @@ class EagleMPCDebuggerGUI(QMainWindow):
 
             # Kill all ros-related processes
             kill_ros_cmd = "killall -9 rosmaster rosout roscore"
-            subprocess.run(kill_ros_cmd, shell=True, stderr=subprocess.PIPE)
+            # subprocess.run(kill_ros_cmd, shell=True, stderr=subprocess.PIPE)
             
             kill_px4_cmd = "killall -9 px4"
             subprocess.run(kill_px4_cmd, shell=True, stderr=subprocess.PIPE)
@@ -1295,8 +1351,8 @@ class EagleMPCDebuggerGUI(QMainWindow):
             subprocess.run(kill_python_cmd, shell=True, stderr=subprocess.PIPE)
 
             # Clean up any remaining ROS master
-            cleanup_cmd = "killall -9 rosmaster"
-            subprocess.run(cleanup_cmd, shell=True, stderr=subprocess.PIPE)
+            # cleanup_cmd = "killall -9 rosmaster"
+            # subprocess.run(cleanup_cmd, shell=True, stderr=subprocess.PIPE)
 
             # Wait a moment to ensure processes are terminated
             import time
@@ -1331,12 +1387,52 @@ class EagleMPCDebuggerGUI(QMainWindow):
     def start_mpc_controller(self):
         """Start the MPC controller"""
         try:
+            # Check if ROS is running
+            import rospy
+            import rosparam
+            
             # Set up environment variables
             env = os.environ.copy()
             env['PYTHONPATH'] = f"{current_dir}:{env.get('PYTHONPATH', '')}"
             
+            # Collect parameters from GUI
+            robot_name = self.robot_combo.currentText()
+            trajectory_name = self.trajectory_combo.currentText()
+            dt_traj_opt = int(self.dt_spin.value())
+            control_mode = self.control_mode_combo.currentText()
+            arm_enabled = self.arm_enabled_check.isChecked()
+            arm_control_mode = self.arm_control_mode_combo.currentText()
+            l1_version = self.l1_version_combo.currentText()
+            As_coef = self.As_coef_spin.value()
+            
+            # Collect filter time constants as array
+            filter_time_constants = [
+                float(self.filter_time_position_edit.text()),
+                float(self.filter_time_attitude_edit.text()),
+                float(self.filter_time_arm_edit.text())
+            ]
+            
+            # Set ROS parameters for the controller
+            try:
+                param_dict = {
+                    '/trajectory_publisher_mpc/robot_name': robot_name,
+                    '/trajectory_publisher_mpc/trajectory_name': trajectory_name,
+                    '/trajectory_publisher_mpc/dt_traj_opt': dt_traj_opt,
+                    '/trajectory_publisher_mpc/control_mode': control_mode,
+                    '/trajectory_publisher_mpc/arm_enabled': arm_enabled,
+                    '/trajectory_publisher_mpc/arm_control_mode': arm_control_mode,
+                    '/trajectory_publisher_mpc/l1_version': l1_version,
+                    '/trajectory_publisher_mpc/As_coef': As_coef,
+                    '/trajectory_publisher_mpc/filter_time_constant': filter_time_constants
+                }
+                rosparam.upload_params('/', param_dict)
+                self.log_message(f"ROS parameters set: {param_dict}")
+            except Exception as e:
+                self.log_message(f"Warning: Could not set ROS parameters directly: {e}")
+            
             # Launch the MPC controller script
-            cmd = f"python3 {os.path.join(current_dir, 'run_controller.py')}"
+            controller_script = os.path.join(current_dir, 'run_controller.py')
+            cmd = f"python3 {controller_script}"
             self.mpc_controller_process = subprocess.Popen(cmd, shell=True, env=env)
             self.log_message("MPC controller started successfully")
         except Exception as e:

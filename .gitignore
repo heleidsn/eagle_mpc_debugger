@@ -5,3 +5,6 @@ test_data/
 .cspell/custom-dictionary-workspace.txt
 resources/qgroundcontrol/QGroundControl.AppImage
 config/yaml/trajectories/temp_trajectory.yaml
+temp_trajectory.yaml
+.gitignore
+temp_processed_trajectory.yaml
