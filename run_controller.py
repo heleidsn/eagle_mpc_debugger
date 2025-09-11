@@ -74,7 +74,7 @@ class TrajectoryPublisher:
 
         self.control_mode = rospy.get_param('~control_mode', 'MPC')  # MPC, Geometric, PX4, MPC_L1
         self.arm_enabled = rospy.get_param('~arm_enabled', True)
-        self.arm_control_mode = rospy.get_param('~arm_control_mode', 'position')  # position, velocity, position_velocity, position_velocity_effort, effort
+        self.arm_control_mode = rospy.get_param('~arm_control_mode', 'effort')  # position, velocity, position_velocity, position_velocity_effort, effort
         
         # Set the parameters according to the environment
         if self.env_info['is_jetson']:
@@ -1173,8 +1173,8 @@ class TrajectoryPublisher:
             # a = 0.55221504
             a = 0.56
             b = 0.0
-            
-            torque_in_Nm_raw = np.array([self.control_command[-2] + self.l1_controller.u_ad[-2], self.control_command[-1] + self.l1_controller.u_ad[-1]])
+
+            torque_in_Nm_raw = np.array([self.control_command_mpc[-2] + self.l1_controller.u_ad[-2], self.control_command_mpc[-1] + self.l1_controller.u_ad[-1]])
             # torque_in_Nm_raw = np.array([ self.l1_controller.u_ad[-2], self.l1_controller.u_ad[-1]])
             
             # Apply delay to torque if enabled
@@ -1219,8 +1219,23 @@ class TrajectoryPublisher:
                 self.joint1_pub.publish(Float64(joint_msg.velocity[0]))
                 self.joint2_pub.publish(Float64(joint_msg.velocity[1]))
             elif self.arm_control_mode == 'effort':
-                self.joint1_pub.publish(Float64(torque_in_Nm[0]))
-                self.joint2_pub.publish(Float64(torque_in_Nm[1]))
+                # print(f"torque_in_Nm: {torque_in_Nm}")
+                if self.px4_state.mode == "OFFBOARD":
+                    self.joint1_pub.publish(Float64(torque_in_Nm[0]))
+                    self.joint2_pub.publish(Float64(torque_in_Nm[1]))
+                else:
+                    # calculate effort using PD controller
+                    error = self.traj_state_ref[0][7:9] - self.state[7:9]
+                    velocity = self.state[-2:]
+                    
+                    # PD controller gains for joint1 and joint2
+                    kp = np.array([10.0, 4.0])  # Proportional gains
+                    kd = np.array([0.05, 0.01])    # Derivative gains
+                    
+                    # create PD controller for arm: effort = Kp * error - Kd * velocity
+                    effort = kp * error - kd * velocity
+                    self.joint1_pub.publish(Float64(effort[0]))
+                    self.joint2_pub.publish(Float64(effort[1]))
             # print('publish arm control command: ', joint_msg.position)  
               
     def publish_mpc_control_command(self, u_mpc, u_ad, u_tracking):
