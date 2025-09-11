@@ -6,6 +6,11 @@ trajectory:
 
   initial_state: [-1.5, -0.5, 1.5, 0, 0, 0, 1, -1.2, -0.6, 0, 0, 0, 0, 0, 0, 0, 0]
 
+  # problem_params:
+  #   dt: 50
+  #   use_squash: true
+  #   integrator: "IntegratedActionModelEuler"
+
   stages:
     - name: "approach"
       duration: 3000 #ms
@@ -14,7 +19,7 @@ trajectory:
         - name: "state_reg"
           type: "ResidualModelState"
           weight: 1
-          reference: [0, -0.5, 1.1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+          reference: [0, -0.5, 1.2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
           activation: "ActivationModelWeightedQuad"
           weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 
@@ -39,7 +44,7 @@ trajectory:
         - name: "state_quadrotor"
           type: "ResidualModelState"
           weight: 1
-          reference: [0, -0.5, 1.1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]  # note the reference attitude using quaternion
+          reference: [0, -0.5, 1.2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]  # note the reference attitude using quaternion
           activation: "ActivationModelWeightedQuad"
           weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 
@@ -98,7 +103,7 @@ trajectory:
         - name: "state_reg"
           type: "ResidualModelState"
           weight: 1
-          reference: [0, -0.5, 1.5, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
+          reference: [0, -0.5, 1.5, 0, 0, 0, 1, -1.2, -0.6, 1, 0, 0, 0, 0, 0, 0, 0]
           activation: "ActivationModelWeightedQuad"
           weights: [1, 1, 1, 1, 1, 1, 10, 10, 1, 1, 1, 1, 1, 1, 10, 10]
 

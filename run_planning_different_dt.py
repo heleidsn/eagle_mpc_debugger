@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-24 10:31:39
-LastEditTime: 2025-04-19 15:13:30
+LastEditTime: 2025-09-10 16:40:23
 Description: Run planning to generate planning results and save them to file
 Github: https://github.com/heleidsn
 '''
@@ -211,6 +211,26 @@ def main():
     parser.add_argument('--config-path', type=str, default='config/yaml',
                       help='Path to MPC configuration files')
     
+    # Catch task specific parameters
+    parser.add_argument('--catch-initial-state', type=float, nargs=17,
+                      default=[-1.5, 0, 1.5, 0, 0, 0, 1, -1.2, -0.6, 0, 0, 0, 0, 0, 0, 0, 0],
+                      help='Initial state for catch task [x,y,z,qx,qy,qz,qw,j1,j2,vx,vy,vz,wx,wy,wz,vj1,vj2]')
+    parser.add_argument('--catch-target-gripper-pos', type=float, nargs=3,
+                      default=[0.12, 0, 0.83],
+                      help='Target gripper position for catch task [x,y,z]')
+    parser.add_argument('--catch-target-gripper-orient', type=float, nargs=4,
+                      default=[0, 0, 0, 1],
+                      help='Target gripper orientation for catch task [qx,qy,qz,qw]')
+    parser.add_argument('--catch-final-state', type=float, nargs=17,
+                      default=[1.5, 0, 1.5, 0, 0, 0, 1, -1.2, -0.6, 0, 0, 0, 0, 0, 0, 0, 0],
+                      help='Final state for catch task [x,y,z,qx,qy,qz,qw,j1,j2,vx,vy,vz,wx,wy,wz,vj1,vj2]')
+    parser.add_argument('--catch-pre-grasp-time', type=int, default=3000,
+                      help='Pre-grasp time duration (ms)')
+    parser.add_argument('--catch-grasp-time', type=int, default=500,
+                      help='Grasp time duration (ms)')
+    parser.add_argument('--catch-post-grasp-time', type=int, default=3000,
+                      help='Post-grasp time duration (ms)')
+    
     args = parser.parse_args()
     
     # Settings
@@ -219,8 +239,22 @@ def main():
     
     robot_name = args.robot
     trajectory_name = args.trajectory
-    dt_values = [5, 10, 20, 30]  # Different dt values to compare
+    dt_values = [5, 10, 20, 30, 50, 100]  # Different dt values to compare
     useSquash = args.use_squash
+    
+    # Check if this is a catch task
+    is_catch_task = 'catch' in trajectory_name.lower()
+    
+    # Catch task configuration
+    catch_config = {
+        'initial_state': args.catch_initial_state,
+        'target_gripper_pos': args.catch_target_gripper_pos,
+        'target_gripper_orient': args.catch_target_gripper_orient,
+        'final_state': args.catch_final_state,
+        'pre_grasp_time': args.catch_pre_grasp_time,
+        'grasp_time': args.catch_grasp_time,
+        'post_grasp_time': args.catch_post_grasp_time
+    }
     
     gepetto_vis = args.gepetto_vis
     
@@ -239,6 +273,17 @@ def main():
     print(f"Parameters:")
     print(f"  useSquash: {useSquash}")
     
+    # Display catch configuration if it's a catch task
+    if is_catch_task:
+        print(f"\nCatch Task Configuration:")
+        print(f"  Initial state: {catch_config['initial_state']}")
+        print(f"  Target gripper position: {catch_config['target_gripper_pos']}")
+        print(f"  Target gripper orientation: {catch_config['target_gripper_orient']}")
+        print(f"  Final state: {catch_config['final_state']}")
+        print(f"  Pre-grasp time: {catch_config['pre_grasp_time']} ms")
+        print(f"  Grasp time: {catch_config['grasp_time']} ms")
+        print(f"  Post-grasp time: {catch_config['post_grasp_time']} ms")
+    
     trajectories = []
     for dt_traj_opt in dt_values:
         print(f"  dt_traj_opt: {dt_traj_opt} ms")
@@ -248,7 +293,8 @@ def main():
             trajectory_name, 
             dt_traj_opt, 
             useSquash,
-            mpc_yaml_path
+            mpc_yaml_path,
+            catch_config if is_catch_task else None
         )
         
         # create mpc controller to get tau_f

@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-24 10:31:39
-LastEditTime: 2025-06-16 14:29:20
+LastEditTime: 2025-09-10 19:16:39
 Description: Run planning to generate planning results and save them to file
 Github: https://github.com/heleidsn
 '''
@@ -20,12 +20,12 @@ import argparse
 import example_robot_data
 import crocoddyl
 import time
-# import gepetto
+import gepetto
 import pinocchio as pin
 
 import tkinter as tk
 
-def plot_trajectory(trajectory, trajectory_obj, traj_state_ref, control_force_torque, dt_traj_opt, state_array,  save_dir=None):
+def plot_trajectory(trajectory, trajectory_obj, traj_state_ref, control_force_torque, dt_traj_opt, state_array, save_dir=None, is_catch_task=False, catch_config=None):
     """Plot optimized trajectory results.
     
     Args:
@@ -33,7 +33,10 @@ def plot_trajectory(trajectory, trajectory_obj, traj_state_ref, control_force_to
         traj_state_ref: Reference state trajectory
         control_force_torque: Control inputs in force/torque format
         dt_traj_opt: Time step for trajectory optimization
+        state_array: State array for forward kinematics
         save_dir: Directory to save plots (optional)
+        is_catch_task: Whether this is a catch task (optional)
+        catch_config: Catch task configuration dictionary (optional)
     """
     # Create time vector
     n_points_control = len(control_force_torque)
@@ -51,19 +54,44 @@ def plot_trajectory(trajectory, trajectory_obj, traj_state_ref, control_force_to
     n_rotors = trajectory_obj.platform_params.n_rotors
     
     # Define key points from configuration
-    start_pose_drone = [-1.5, 0, 1.5]
-    start_joint_angle = [-1.2, -0.6]
-    
-    final_pose_drone = [1.5, 0, 1.5]
-    final_joint_angle = [-1.2, -0.6]
-    
-    grasp_time = 3.0
-    grasp_duration = 0.5
-    
-    object_pose = [0, 0, 0.8]
-    
-    grasp_pose_drone = None
-    grasp_joint_angle = None
+    if is_catch_task and catch_config is not None:
+        # Use parameters from catch_config for catch tasks
+        start_pose_drone = catch_config['initial_state'][:3]  # x, y, z from initial state
+        start_joint_angle = catch_config['initial_state'][7:9]  # joint angles from initial state
+        
+        final_pose_drone = catch_config['final_state'][:3]  # x, y, z from final state
+        final_joint_angle = catch_config['final_state'][7:9]  # joint angles from final state
+        
+        # Calculate grasp timing from catch_config
+        grasp_time = catch_config['pre_grasp_time'] / 1000.0  # Convert to seconds
+        grasp_duration = catch_config['grasp_time'] / 1000.0  # Convert to seconds
+        
+        # Use target gripper position as object pose approximation
+        object_pose = catch_config['target_gripper_pos']
+        
+        # Set grasp pose based on target position (approximate drone position for grasping)
+        # For now, we'll estimate drone position from gripper target
+        # This could be improved by calculating actual drone position from inverse kinematics
+        grasp_pose_drone = catch_config['target_gripper_pos'].copy()
+        grasp_pose_drone[2] += 0.7  # Approximate offset between gripper and drone base
+        
+        # Estimate grasp joint angle (could be improved with actual IK solution)
+        grasp_joint_angle = [-1.2, -0.6]  # Default grasp configuration
+    else:
+        # Default values for non-catch tasks
+        start_pose_drone = [-1.5, 0, 1.5]
+        start_joint_angle = [-1.2, -0.6]
+        
+        final_pose_drone = [1.5, 0, 1.5]
+        final_joint_angle = [-1.2, -0.6]
+        
+        grasp_time = 3.0
+        grasp_duration = 0.5
+        
+        object_pose = [0, 0, 0.8]
+        
+        grasp_pose_drone = None
+        grasp_joint_angle = None
     
     
     # State labels (convert radians to degrees for roll, pitch, yaw)
@@ -214,14 +242,15 @@ def plot_trajectory(trajectory, trajectory_obj, traj_state_ref, control_force_to
         # First row: Position and velocity
         for i in range(3):  # x, y, z positions and velocities
             ax = plt.subplot(2, 3, i + 1)
-            # Add background color for grasping phase only if joint_num > 0
-            if joint_num > 0:
+            # Add background color for grasping phase only if this is a catch task
+            if is_catch_task:
                 ax.axvspan(grasp_time, grasp_time + grasp_duration, color='yellow', alpha=0.2, label='Grasping Phase')
             ax.plot(time_state, gripper_positions[:, i], 'b-', label='Position')
             ax.plot(time_state, gripper_linear_vel[:, i], 'r--', label='Velocity')
             
-            # Add markers for object pose
-            ax.plot(grasp_time, object_pose[i], 'ro', label='Object Pose', markersize=6)
+            # Add markers for object pose only for catch tasks
+            if is_catch_task:
+                ax.plot(grasp_time, object_pose[i], 'ro', label='Object Pose', markersize=6)
             
             ax.set_xlabel('Time (s)')
             ax.set_ylabel(f'Gripper {state_labels[i]}')
@@ -233,8 +262,8 @@ def plot_trajectory(trajectory, trajectory_obj, traj_state_ref, control_force_to
         for i in range(3):  # roll, pitch, yaw angles and angular velocities
             ax = plt.subplot(2, 3, i + 4)
             
-            # Add background color for grasping phase only if joint_num > 0
-            if joint_num > 0:
+            # Add background color for grasping phase only if this is a catch task
+            if is_catch_task:
                 ax.axvspan(grasp_time, grasp_time + grasp_duration, color='yellow', alpha=0.2, label='Grasping Phase')
             
             # Get angles and make them continuous
@@ -312,8 +341,9 @@ def plot_trajectory(trajectory, trajectory_obj, traj_state_ref, control_force_to
             
             ax.plot(time_state, angular_vel, 'r--', label='Angular Velocity')
             
-            # Add markers for gripper orientation at key points
-            ax.plot(grasp_time, 0, 'ro', label='Grasp Point', markersize=6)
+            # Add markers for gripper orientation at key points only for catch tasks
+            if is_catch_task:
+                ax.plot(grasp_time, 0, 'ro', label='Grasp Point', markersize=6)
             
             ax.set_xlabel('Time (s)')
             ax.set_ylabel(f'Gripper {state_labels[i+3]}')
@@ -339,8 +369,8 @@ def plot_trajectory(trajectory, trajectory_obj, traj_state_ref, control_force_to
     # Plot drone states
     for i in range(6):  # Plot position and orientation states
         ax = plt.subplot(total_rows, 3, i + 1)
-        # Add background color for grasping phase only if joint_num > 0
-        if joint_num > 0:
+        # Add background color for grasping phase only if this is a catch task
+        if is_catch_task:
             ax.axvspan(grasp_time, grasp_time + grasp_duration, color='yellow', alpha=0.2, label='Grasping Phase')
         state_data = [s[i] for s in traj_state_ref[:n_points_state]]
         vel_data = [s[i+state_num] for s in traj_state_ref[:n_points_state]]
@@ -359,13 +389,11 @@ def plot_trajectory(trajectory, trajectory_obj, traj_state_ref, control_force_to
         if i < 3:  # Position states
             ax.plot(time_state[0], start_pose_drone[i], 'go', label='Initial Point', markersize=6)
             ax.plot(time_state[-1], final_pose_drone[i], 'mo', label='Final Point', markersize=6)
-            if grasp_pose_drone is not None:
-                ax.plot(time_state[len(time_state)//2], grasp_pose_drone[i], 'ro', label='Grasp Point', markersize=6)
+            
         elif i < 6:  # Orientation states
             ax.plot(time_state[0], 0, 'go', label='Initial Point', markersize=6)
             ax.plot(time_state[-1], 0, 'mo', label='Final Point', markersize=6)
-            if grasp_pose_drone is not None:
-                ax.plot(time_state[len(time_state)//2], 0, 'ro', label='Grasp Point', markersize=6)
+
         
         if i in [0, 1, 2]:  # Position states
             ax.plot(time_state, vel_world_data, 'g--', label='Velocity (world)')
@@ -379,8 +407,8 @@ def plot_trajectory(trajectory, trajectory_obj, traj_state_ref, control_force_to
     # Plot joint states
     for i in range(joint_num):
         ax = plt.subplot(total_rows, 3, 6 + i + 1)
-        # Add background color for grasping phase only if joint_num > 0
-        if joint_num > 0:
+        # Add background color for grasping phase only if this is a catch task
+        if is_catch_task:
             ax.axvspan(grasp_time, grasp_time + grasp_duration, color='yellow', alpha=0.2, label='Grasping Phase')
         joint_angle_data = [s[i+6] for s in traj_state_ref[:n_points_state]]  # Joint angles start at index 6
         joint_vel_data = [s[i+state_num+6] for s in traj_state_ref[:n_points_state]]  # Joint velocities start at state_num+7
@@ -396,8 +424,6 @@ def plot_trajectory(trajectory, trajectory_obj, traj_state_ref, control_force_to
         # Add markers for key points
         ax.plot(time_state[0], np.degrees(start_joint_angle[i]), 'go', label='Initial Point', markersize=6)
         ax.plot(time_state[-1], np.degrees(final_joint_angle[i]), 'mo', label='Final Point', markersize=6)
-        if grasp_joint_angle is not None:
-            ax.plot(grasp_time, np.degrees(grasp_joint_angle[i]), 'ro', label='Grasp Point', markersize=6)
         
         ax.set_xlabel('Time (s)')
         ax.set_ylabel(f'Joint {i+1} (deg)')
@@ -414,8 +440,8 @@ def plot_trajectory(trajectory, trajectory_obj, traj_state_ref, control_force_to
     
     # Plot rotor thrusts (first subplot)
     ax = plt.subplot(2, 2, 1)
-    # Add background color for grasping phase only if joint_num > 0
-    if joint_num > 0:
+    # Add background color for grasping phase only if this is a catch task
+    if is_catch_task:
         ax.axvspan(grasp_time, grasp_time + grasp_duration, color='yellow', alpha=0.2, label='Grasping Phase')
     for i in range(n_rotors):  # Plot all rotor thrusts
         rotor_data = [u[i] for u in trajectory.us_squash[:n_points_control]]
@@ -428,8 +454,8 @@ def plot_trajectory(trajectory, trajectory_obj, traj_state_ref, control_force_to
     
     # Plot joint controls (second subplot)
     ax = plt.subplot(2, 2, 2)
-    # Add background color for grasping phase only if joint_num > 0
-    if joint_num > 0:
+    # Add background color for grasping phase only if this is a catch task
+    if is_catch_task:
         ax.axvspan(grasp_time, grasp_time + grasp_duration, color='yellow', alpha=0.2, label='Grasping Phase')
     for i in range(joint_num):  # Plot all joint controls
         joint_data = [u[i+n_rotors] for u in trajectory.us_squash[:n_points_control]]
@@ -442,8 +468,8 @@ def plot_trajectory(trajectory, trajectory_obj, traj_state_ref, control_force_to
     
     # Plot all force components in one subplot
     ax = plt.subplot(2, 2, 3)
-    # Add background color for grasping phase only if joint_num > 0
-    if joint_num > 0:
+    # Add background color for grasping phase only if this is a catch task
+    if is_catch_task:
         ax.axvspan(grasp_time, grasp_time + grasp_duration, color='yellow', alpha=0.2, label='Grasping Phase')
     force_labels = ['F_x', 'F_y', 'F_z']
     for i in range(3):
@@ -457,8 +483,8 @@ def plot_trajectory(trajectory, trajectory_obj, traj_state_ref, control_force_to
     
     # Plot all torque components in one subplot
     ax = plt.subplot(2, 2, 4)
-    # Add background color for grasping phase only if joint_num > 0
-    if joint_num > 0:
+    # Add background color for grasping phase only if this is a catch task
+    if is_catch_task:
         ax.axvspan(grasp_time, grasp_time + grasp_duration, color='yellow', alpha=0.2, label='Grasping Phase')
     torque_labels = ['τ_x', 'τ_y', 'τ_z']
     for i in range(3):
@@ -497,9 +523,9 @@ def main():
     parser.add_argument('--robot', type=str, default='s500_uam',
                       choices=['s500', 's500_uam', 'hexacopter370_flying_arm_3'],
                       help='Robot model to use')
-    parser.add_argument('--trajectory', type=str, default='catch_vicon_real',
+    parser.add_argument('--trajectory', type=str, default='catch_vicon',
                       help='Trajectory name')
-    parser.add_argument('--dt', type=int, default=50,
+    parser.add_argument('--dt', type=int, default=20,
                       help='Time step for trajectory optimization (ms)')
     parser.add_argument('--use-squash', action='store_true', default=True,
                       help='Use squash function for control inputs')
@@ -510,6 +536,26 @@ def main():
     parser.add_argument('--config-path', type=str, default='config/yaml',
                       help='Path to MPC configuration files')
     
+    # Catch task specific parameters
+    parser.add_argument('--catch-initial-state', type=float, nargs=17,
+                      default=[-1.5, 0, 1.5, 0, 0, 0, 1, -1.2, -0.6, 0, 0, 0, 0, 0, 0, 0, 0],
+                      help='Initial state for catch task [x,y,z,qx,qy,qz,qw,j1,j2,vx,vy,vz,wx,wy,wz,vj1,vj2]')
+    parser.add_argument('--catch-target-gripper-pos', type=float, nargs=3,
+                      default=[0.12, 0, 0.83],
+                      help='Target gripper position for catch task [x,y,z]')
+    parser.add_argument('--catch-target-gripper-orient', type=float, nargs=4,
+                      default=[0, 0, 0, 1],
+                      help='Target gripper orientation for catch task [qx,qy,qz,qw]')
+    parser.add_argument('--catch-final-state', type=float, nargs=17,
+                      default=[1.5, 0, 1.5, 0, 0, 0, 1, -1.2, -0.6, 0, 0, 0, 0, 0, 0, 0, 0],
+                      help='Final state for catch task [x,y,z,qx,qy,qz,qw,j1,j2,vx,vy,vz,wx,wy,wz,vj1,vj2]')
+    parser.add_argument('--catch-pre-grasp-time', type=int, default=3000,
+                      help='Pre-grasp time duration (ms)')
+    parser.add_argument('--catch-grasp-time', type=int, default=500,
+                      help='Grasp time duration (ms)')
+    parser.add_argument('--catch-post-grasp-time', type=int, default=3000,
+                      help='Post-grasp time duration (ms)')
+    
     args = parser.parse_args()
     
     # Settings
@@ -519,6 +565,21 @@ def main():
     trajectory_name = args.trajectory
     dt_traj_opt = args.dt
     useSquash = args.use_squash
+    
+    # Check if this is a catch task
+    is_catch_task = False
+    is_catch_task = 'catch' in trajectory_name.lower()
+    
+    # Catch task configuration
+    catch_config = {
+        'initial_state': args.catch_initial_state,
+        'target_gripper_pos': args.catch_target_gripper_pos,
+        'target_gripper_orient': args.catch_target_gripper_orient,
+        'final_state': args.catch_final_state,
+        'pre_grasp_time': args.catch_pre_grasp_time,
+        'grasp_time': args.catch_grasp_time,
+        'post_grasp_time': args.catch_post_grasp_time
+    }
     
     gepetto_vis = args.gepetto_vis
     
@@ -539,13 +600,25 @@ def main():
     print(f"  save_file: {save_file}")
     print(f"  config_path: {mpc_yaml_path}")
     
+    # Display catch configuration if it's a catch task
+    if is_catch_task:
+        print(f"\nCatch Task Configuration:")
+        print(f"  Initial state: {catch_config['initial_state']}")
+        print(f"  Target gripper position: {catch_config['target_gripper_pos']}")
+        print(f"  Target gripper orientation: {catch_config['target_gripper_orient']}")
+        print(f"  Final state: {catch_config['final_state']}")
+        print(f"  Pre-grasp time: {catch_config['pre_grasp_time']} ms")
+        print(f"  Grasp time: {catch_config['grasp_time']} ms")
+        print(f"  Post-grasp time: {catch_config['post_grasp_time']} ms")
+    
     # Run trajectory optimization
     trajectory, traj_state_ref, _, trajectory_obj = get_opt_traj(
         robot_name,
         trajectory_name, 
         dt_traj_opt, 
         useSquash,
-        mpc_yaml_path
+        mpc_yaml_path,
+        catch_config if is_catch_task else None
     )
     
     # Get tau_f from MPC yaml file
@@ -592,7 +665,9 @@ def main():
         control_force_torque,
         dt_traj_opt,
         state_array,
-        save_dir
+        save_dir,
+        is_catch_task,
+        catch_config
     )
     
     if gepetto_vis:

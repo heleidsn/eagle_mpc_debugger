@@ -91,8 +91,51 @@ class SystemController:
             env = os.environ.copy()
             env['PYTHONPATH'] = f"{current_dir}:{env.get('PYTHONPATH', '')}"
             
-            # Launch the planning script with command line arguments
-            cmd = f"python3 {os.path.join(current_dir, 'run_planning.py')} --robot {config['robot_name']} --trajectory {config['trajectory_name']} --dt {config['dt_traj_opt']} {'--use-squash' if config['use_squash'] else ''}"
+            # Build command line arguments
+            cmd_parts = [
+                f"python3 {os.path.join(current_dir, 'run_planning.py')}",
+                f"--robot {config['robot_name']}",
+                f"--trajectory {config['trajectory_name']}",
+                f"--dt {config['dt_traj_opt']}"
+            ]
+            
+            if config.get('use_squash', False):
+                cmd_parts.append('--use-squash')
+            
+            if config.get('gepetto_vis', False):
+                cmd_parts.append('--gepetto-vis')
+                
+            if config.get('save_results', False):
+                cmd_parts.append('--save')
+            
+            # Add catch-specific parameters if they exist
+            if 'catch_initial_state' in config:
+                initial_state_str = ' '.join(map(str, config['catch_initial_state']))
+                cmd_parts.append(f"--catch-initial-state {initial_state_str}")
+                
+            if 'catch_target_gripper_pos' in config:
+                target_pos_str = ' '.join(map(str, config['catch_target_gripper_pos']))
+                cmd_parts.append(f"--catch-target-gripper-pos {target_pos_str}")
+                
+            if 'catch_target_gripper_orient' in config:
+                target_orient_str = ' '.join(map(str, config['catch_target_gripper_orient']))
+                cmd_parts.append(f"--catch-target-gripper-orient {target_orient_str}")
+                
+            if 'catch_final_state' in config:
+                final_state_str = ' '.join(map(str, config['catch_final_state']))
+                cmd_parts.append(f"--catch-final-state {final_state_str}")
+                
+            if 'catch_pre_grasp_time' in config:
+                cmd_parts.append(f"--catch-pre-grasp-time {config['catch_pre_grasp_time']}")
+                
+            if 'catch_grasp_time' in config:
+                cmd_parts.append(f"--catch-grasp-time {config['catch_grasp_time']}")
+                
+            if 'catch_post_grasp_time' in config:
+                cmd_parts.append(f"--catch-post-grasp-time {config['catch_post_grasp_time']}")
+            
+            # Join command parts
+            cmd = ' '.join(cmd_parts)
             self.planning_process = subprocess.Popen(cmd, shell=True, env=env)
             return True, "Planning process started"
         except Exception as e:
@@ -105,8 +148,51 @@ class SystemController:
             env = os.environ.copy()
             env['PYTHONPATH'] = f"{current_dir}:{env.get('PYTHONPATH', '')}"
             
-            # Launch the planning script with command line arguments
-            cmd = f"python3 {os.path.join(current_dir, 'scripts/run_planning_different_dt.py')} --robot {config['robot_name']} --trajectory {config['trajectory_name']} --dt {config['dt_traj_opt']} {'--use-squash' if config['use_squash'] else ''}"
+            # Build command line arguments  
+            cmd_parts = [
+                f"python3 {os.path.join(current_dir, 'run_planning_different_dt.py')}",
+                f"--robot {config['robot_name']}",
+                f"--trajectory {config['trajectory_name']}",
+                f"--dt {config['dt_traj_opt']}"
+            ]
+            
+            if config.get('use_squash', False):
+                cmd_parts.append('--use-squash')
+            
+            if config.get('gepetto_vis', False):
+                cmd_parts.append('--gepetto-vis')
+                
+            if config.get('save_results', False):
+                cmd_parts.append('--save')
+            
+            # Add catch-specific parameters if they exist
+            if 'catch_initial_state' in config:
+                initial_state_str = ' '.join(map(str, config['catch_initial_state']))
+                cmd_parts.append(f"--catch-initial-state {initial_state_str}")
+                
+            if 'catch_target_gripper_pos' in config:
+                target_pos_str = ' '.join(map(str, config['catch_target_gripper_pos']))
+                cmd_parts.append(f"--catch-target-gripper-pos {target_pos_str}")
+                
+            if 'catch_target_gripper_orient' in config:
+                target_orient_str = ' '.join(map(str, config['catch_target_gripper_orient']))
+                cmd_parts.append(f"--catch-target-gripper-orient {target_orient_str}")
+                
+            if 'catch_final_state' in config:
+                final_state_str = ' '.join(map(str, config['catch_final_state']))
+                cmd_parts.append(f"--catch-final-state {final_state_str}")
+                
+            if 'catch_pre_grasp_time' in config:
+                cmd_parts.append(f"--catch-pre-grasp-time {config['catch_pre_grasp_time']}")
+                
+            if 'catch_grasp_time' in config:
+                cmd_parts.append(f"--catch-grasp-time {config['catch_grasp_time']}")
+                
+            if 'catch_post_grasp_time' in config:
+                cmd_parts.append(f"--catch-post-grasp-time {config['catch_post_grasp_time']}")
+            
+            # Join command parts
+            cmd = ' '.join(cmd_parts)
             self.planning_process = subprocess.Popen(cmd, shell=True, env=env)
             return True, "Planning process with different DT started"
         except Exception as e:
@@ -320,6 +406,9 @@ class EagleMPCDebuggerGUI(QMainWindow):
         # Initialize ROS node only if roscore is running
         if self.roscore_controller.is_roscore_running():
             self.init_ros_node()
+            
+        # Set initial parameter visibility
+        self.update_parameter_visibility()
         
     def init_ros_node(self):
         """Initialize ROS node and subscribers"""
@@ -364,6 +453,7 @@ class EagleMPCDebuggerGUI(QMainWindow):
         
         # Trajectory selection
         self.trajectory_combo = QComboBox()
+        self.trajectory_combo.currentTextChanged.connect(self.update_parameter_visibility)
         self.update_trajectory_options(self.robot_combo.currentText())
         task_config_layout.addRow("Trajectory:", self.trajectory_combo)
         
@@ -396,25 +486,197 @@ class EagleMPCDebuggerGUI(QMainWindow):
         planning_group = QGroupBox("Planning Control")
         planning_layout = QVBoxLayout()
         
+        # Planning Parameters Group
+        self.planning_params_group = QGroupBox("Planning Parameters")
+        planning_params_layout = QVBoxLayout()
+        
+        # Create a grid layout for better alignment
+        grid_layout = QFormLayout()
+        grid_layout.setFieldGrowthPolicy(QFormLayout.FieldsStayAtSizeHint)
+        grid_layout.setLabelAlignment(Qt.AlignLeft)
+        
+        # Drone initial position (x, y, z) - in one row
+        drone_initial_widget = QWidget()
+        drone_initial_layout = QHBoxLayout(drone_initial_widget)
+        drone_initial_layout.setContentsMargins(0, 0, 0, 0)
+        drone_initial_layout.setSpacing(5)
+        
+        self.drone_initial_pos_x = QLineEdit()
+        self.drone_initial_pos_x.setText("-1.5")
+        self.drone_initial_pos_x.setFixedWidth(70)
+        drone_initial_layout.addWidget(self.drone_initial_pos_x)
+        
+        self.drone_initial_pos_y = QLineEdit()
+        self.drone_initial_pos_y.setText("0.0")
+        self.drone_initial_pos_y.setFixedWidth(70)
+        drone_initial_layout.addWidget(self.drone_initial_pos_y)
+        
+        self.drone_initial_pos_z = QLineEdit()
+        self.drone_initial_pos_z.setText("1.5")
+        self.drone_initial_pos_z.setFixedWidth(70)
+        drone_initial_layout.addWidget(self.drone_initial_pos_z)
+        
+        drone_initial_layout.addStretch()
+        grid_layout.addRow("Drone Initial (m): [X, Y, Z]", drone_initial_widget)
+        
+        # Arm initial angles (joint1, joint2) - in one row
+        arm_initial_widget = QWidget()
+        arm_initial_layout = QHBoxLayout(arm_initial_widget)
+        arm_initial_layout.setContentsMargins(0, 0, 0, 0)
+        arm_initial_layout.setSpacing(5)
+        
+        self.arm_initial_joint1 = QLineEdit()
+        self.arm_initial_joint1.setText("-1.2")
+        self.arm_initial_joint1.setFixedWidth(70)
+        arm_initial_layout.addWidget(self.arm_initial_joint1)
+        
+        self.arm_initial_joint2 = QLineEdit()
+        self.arm_initial_joint2.setText("-0.6")
+        self.arm_initial_joint2.setFixedWidth(70)
+        arm_initial_layout.addWidget(self.arm_initial_joint2)
+        
+        arm_initial_layout.addStretch()
+        grid_layout.addRow("Arm Initial (rad): [J1, J2]", arm_initial_widget)
+        
+        # Drone final position (x, y, z) - in one row
+        drone_final_widget = QWidget()
+        drone_final_layout = QHBoxLayout(drone_final_widget)
+        drone_final_layout.setContentsMargins(0, 0, 0, 0)
+        drone_final_layout.setSpacing(5)
+        
+        self.drone_final_pos_x = QLineEdit()
+        self.drone_final_pos_x.setText("1.5")
+        self.drone_final_pos_x.setFixedWidth(70)
+        drone_final_layout.addWidget(self.drone_final_pos_x)
+        
+        self.drone_final_pos_y = QLineEdit()
+        self.drone_final_pos_y.setText("0.0")
+        self.drone_final_pos_y.setFixedWidth(70)
+        drone_final_layout.addWidget(self.drone_final_pos_y)
+        
+        self.drone_final_pos_z = QLineEdit()
+        self.drone_final_pos_z.setText("1.5")
+        self.drone_final_pos_z.setFixedWidth(70)
+        drone_final_layout.addWidget(self.drone_final_pos_z)
+        
+        drone_final_layout.addStretch()
+        grid_layout.addRow("Drone Final (m): [X, Y, Z]", drone_final_widget)
+        
+        # Arm final angles (joint1, joint2) - in one row
+        arm_final_widget = QWidget()
+        arm_final_layout = QHBoxLayout(arm_final_widget)
+        arm_final_layout.setContentsMargins(0, 0, 0, 0)
+        arm_final_layout.setSpacing(5)
+        
+        self.arm_final_joint1 = QLineEdit()
+        self.arm_final_joint1.setText("-1.2")
+        self.arm_final_joint1.setFixedWidth(70)
+        arm_final_layout.addWidget(self.arm_final_joint1)
+        
+        self.arm_final_joint2 = QLineEdit()
+        self.arm_final_joint2.setText("-0.6")
+        self.arm_final_joint2.setFixedWidth(70)
+        arm_final_layout.addWidget(self.arm_final_joint2)
+        
+        arm_final_layout.addStretch()
+        grid_layout.addRow("Arm Final (rad): [J1, J2]", arm_final_widget)
+        
+        # Target object position (x, y, z) - in one row
+        target_pos_widget = QWidget()
+        target_pos_layout = QHBoxLayout(target_pos_widget)
+        target_pos_layout.setContentsMargins(0, 0, 0, 0)
+        target_pos_layout.setSpacing(5)
+        
+        self.target_pos_x = QLineEdit()
+        self.target_pos_x.setText("0.0")
+        self.target_pos_x.setFixedWidth(70)
+        target_pos_layout.addWidget(self.target_pos_x)
+        
+        self.target_pos_y = QLineEdit()
+        self.target_pos_y.setText("0.0")
+        self.target_pos_y.setFixedWidth(70)
+        target_pos_layout.addWidget(self.target_pos_y)
+        
+        self.target_pos_z = QLineEdit()
+        self.target_pos_z.setText("0.8")
+        self.target_pos_z.setFixedWidth(70)
+        target_pos_layout.addWidget(self.target_pos_z)
+        
+        target_pos_layout.addStretch()
+        grid_layout.addRow("Target Pos (m): [X, Y, Z]", target_pos_widget)
+        
+        # Create target orientation fields but don't display them (for backward compatibility)
+        self.target_orient_x = QLineEdit()
+        self.target_orient_x.setText("0.0")
+        self.target_orient_x.hide()
+        
+        self.target_orient_y = QLineEdit()
+        self.target_orient_y.setText("0.0")
+        self.target_orient_y.hide()
+        
+        self.target_orient_z = QLineEdit()
+        self.target_orient_z.setText("0.0")
+        self.target_orient_z.hide()
+        
+        self.target_orient_w = QLineEdit()
+        self.target_orient_w.setText("1.0")
+        self.target_orient_w.hide()
+        
+        # Catch timing parameters - in one row
+        timing_widget = QWidget()
+        timing_layout = QHBoxLayout(timing_widget)
+        timing_layout.setContentsMargins(0, 0, 0, 0)
+        timing_layout.setSpacing(5)
+        
+        self.catch_pre_grasp_time = QLineEdit()
+        self.catch_pre_grasp_time.setText("3000")
+        self.catch_pre_grasp_time.setFixedWidth(70)
+        timing_layout.addWidget(self.catch_pre_grasp_time)
+        
+        self.catch_grasp_time = QLineEdit()
+        self.catch_grasp_time.setText("500")
+        self.catch_grasp_time.setFixedWidth(70)
+        timing_layout.addWidget(self.catch_grasp_time)
+        
+        self.catch_post_grasp_time = QLineEdit()
+        self.catch_post_grasp_time.setText("3000")
+        self.catch_post_grasp_time.setFixedWidth(70)
+        timing_layout.addWidget(self.catch_post_grasp_time)
+        
+        timing_layout.addStretch()
+        grid_layout.addRow("Timing (ms): [Pre, Grasp, Post]", timing_widget)
+        
+        planning_params_layout.addLayout(grid_layout)
+        
+        self.planning_params_group.setLayout(planning_params_layout)
+        planning_layout.addWidget(self.planning_params_group)
+        
+        # Planning Control Buttons
+        planning_buttons_group = QGroupBox("Planning Control")
+        planning_buttons_layout = QVBoxLayout()
+        
         self.plan_btn = QPushButton("Run Planning")
         self.plan_btn.clicked.connect(self.run_planning)
-        planning_layout.addWidget(self.plan_btn)
+        planning_buttons_layout.addWidget(self.plan_btn)
         
         self.plan_dt_btn = QPushButton("Run Planning (Different DT)")
         self.plan_dt_btn.clicked.connect(self.run_planning_different_dt)
-        planning_layout.addWidget(self.plan_dt_btn)
+        planning_buttons_layout.addWidget(self.plan_dt_btn)
         
         self.stop_plan_btn = QPushButton("Stop Planning")
         self.stop_plan_btn.clicked.connect(self.stop_planning)
-        planning_layout.addWidget(self.stop_plan_btn)
+        planning_buttons_layout.addWidget(self.stop_plan_btn)
         
         self.launch_gepetto_btn = QPushButton("Launch Gepetto-GUI")
         self.launch_gepetto_btn.clicked.connect(self.launch_gepetto_gui)
-        planning_layout.addWidget(self.launch_gepetto_btn)
+        planning_buttons_layout.addWidget(self.launch_gepetto_btn)
         
         self.close_gepetto_btn = QPushButton("Close Gepetto-GUI")
         self.close_gepetto_btn.clicked.connect(self.close_gepetto_gui)
-        planning_layout.addWidget(self.close_gepetto_btn)
+        planning_buttons_layout.addWidget(self.close_gepetto_btn)
+        
+        planning_buttons_group.setLayout(planning_buttons_layout)
+        planning_layout.addWidget(planning_buttons_group)
         
         planning_group.setLayout(planning_layout)
         layout.addWidget(planning_group)
@@ -671,14 +933,74 @@ class EagleMPCDebuggerGUI(QMainWindow):
         """Add a message to the log display"""
         self.log_text.append(message)
         
+    def get_catch_parameters(self):
+        """Get catch-specific parameters from GUI"""
+        try:
+            return {
+                'catch_initial_state': [
+                    float(self.drone_initial_pos_x.text()),  # x
+                    float(self.drone_initial_pos_y.text()),  # y
+                    float(self.drone_initial_pos_z.text()),  # z
+                    0.0, 0.0, 0.0, 1.0,  # qx, qy, qz, qw (default orientation)
+                    float(self.arm_initial_joint1.text()),  # joint1
+                    float(self.arm_initial_joint2.text()),  # joint2
+                    0.0, 0.0, 0.0,  # vx, vy, vz (velocity)
+                    0.0, 0.0, 0.0,  # wx, wy, wz (angular velocity)
+                    0.0, 0.0  # vjoint1, vjoint2 (joint velocities)
+                ],
+                'catch_target_gripper_pos': [
+                    float(self.target_pos_x.text()),
+                    float(self.target_pos_y.text()),
+                    float(self.target_pos_z.text())
+                ],
+                'catch_target_gripper_orient': [
+                    float(self.target_orient_x.text()),
+                    float(self.target_orient_y.text()),
+                    float(self.target_orient_z.text()),
+                    float(self.target_orient_w.text())
+                ],
+                'catch_final_state': [
+                    float(self.drone_final_pos_x.text()),  # x
+                    float(self.drone_final_pos_y.text()),  # y
+                    float(self.drone_final_pos_z.text()),  # z
+                    0.0, 0.0, 0.0, 1.0,  # qx, qy, qz, qw (default orientation)
+                    float(self.arm_final_joint1.text()),  # joint1
+                    float(self.arm_final_joint2.text()),  # joint2
+                    0.0, 0.0, 0.0,  # vx, vy, vz (velocity)
+                    0.0, 0.0, 0.0,  # wx, wy, wz (angular velocity)
+                    0.0, 0.0  # vjoint1, vjoint2 (joint velocities)
+                ],
+                'catch_pre_grasp_time': int(self.catch_pre_grasp_time.text()),
+                'catch_grasp_time': int(self.catch_grasp_time.text()),
+                'catch_post_grasp_time': int(self.catch_post_grasp_time.text())
+            }
+        except ValueError as e:
+            self.log_message(f"Error parsing parameters: {str(e)}")
+            # Return default values in case of parse error
+            return {
+                'catch_initial_state': [-1.5, 0, 1.5, 0, 0, 0, 1, -1.2, -0.6, 0, 0, 0, 0, 0, 0, 0, 0],
+                'catch_target_gripper_pos': [0.12, 0, 0.83],
+                'catch_target_gripper_orient': [0, 0, 0, 1],
+                'catch_final_state': [1.5, 0, 1.5, 0, 0, 0, 1, -1.2, -0.6, 0, 0, 0, 0, 0, 0, 0, 0],
+                'catch_pre_grasp_time': 3000,
+                'catch_grasp_time': 500,
+                'catch_post_grasp_time': 3000
+            }
+        
     def run_planning(self):
         """Run the standard planning process"""
         config = {
             'robot_name': self.robot_combo.currentText(),
             'trajectory_name': self.trajectory_combo.currentText(),
             'dt_traj_opt': self.dt_spin.value(),
-            'use_squash': self.use_squash_check.isChecked()
+            'use_squash': self.use_squash_check.isChecked(),
+            'gepetto_vis': self.gepetto_vis_check.isChecked(),
+            'save_results': self.save_results_check.isChecked()
         }
+        
+        # Add catch-specific parameters if needed
+        if 'catch' in self.trajectory_combo.currentText().lower():
+            config.update(self.get_catch_parameters())
         
         success, message = self.system_controller.launch_planning(config)
         if success:
@@ -693,8 +1015,14 @@ class EagleMPCDebuggerGUI(QMainWindow):
             'robot_name': self.robot_combo.currentText(),
             'trajectory_name': self.trajectory_combo.currentText(),
             'dt_traj_opt': self.dt_spin.value(),
-            'use_squash': self.use_squash_check.isChecked()
+            'use_squash': self.use_squash_check.isChecked(),
+            'gepetto_vis': self.gepetto_vis_check.isChecked(),
+            'save_results': self.save_results_check.isChecked()
         }
+        
+        # Add catch-specific parameters if needed
+        if 'catch' in self.trajectory_combo.currentText().lower():
+            config.update(self.get_catch_parameters())
         
         success, message = self.system_controller.launch_planning_different_dt(config)
         if success:
@@ -879,6 +1207,18 @@ class EagleMPCDebuggerGUI(QMainWindow):
             icon_pixmap = QPixmap(icon_path)
             scaled_pixmap = icon_pixmap.scaled(300, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             self.icon_label.setPixmap(scaled_pixmap)
+            
+        # Update parameter visibility after robot change
+        self.update_parameter_visibility()
+        
+    def update_parameter_visibility(self):
+        """Update parameter visibility based on selected trajectory"""
+        trajectory_name = self.trajectory_combo.currentText()
+        is_catch_trajectory = 'catch' in trajectory_name.lower()
+        
+        # Show/hide planning parameters based on trajectory type
+        if hasattr(self, 'planning_params_group'):
+            self.planning_params_group.setVisible(is_catch_trajectory)
 
     def launch_simulation(self):
         """Launch the simulation environment"""
