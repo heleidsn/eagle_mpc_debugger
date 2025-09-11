@@ -17,7 +17,7 @@ from nav_msgs.msg import Odometry, Path
 from geometry_msgs.msg import PoseStamped
 from geometry_msgs.msg import TwistStamped
 from eagle_mpc_msgs.msg import MpcState
-from utils.create_problem import get_opt_traj, create_mpc_controller, create_state_update_model, create_state_update_model_quadrotor
+from utils.create_problem import get_opt_traj, create_mpc_controller, create_state_update_model, create_state_update_model_quadrotor, load_trajectory_from_generated_yaml
 from utils.u_convert import thrustToForceTorqueAll
 
 # from controller_msgs.msg import FlatTarget
@@ -547,12 +547,17 @@ class TrajectoryPublisher:
         """Load and initialize trajectory"""
         try:
             # Get trajectory from eagle_mpc
-            self.traj_solver, self.traj_state_ref, traj_problem, self.trajectory_obj = get_opt_traj(
-                self.robot_name,
-                self.trajectory_name,
+            # self.traj_solver, self.traj_state_ref, traj_problem, self.trajectory_obj = get_opt_traj(
+            #     self.robot_name,
+            #     self.trajectory_name,
+            #     self.dt_traj_opt,
+            #     self.use_squash,
+            #     self.yaml_path
+            # )
+            
+            self.traj_solver, self.traj_state_ref, traj_problem, self.trajectory_obj = load_trajectory_from_generated_yaml(
                 self.dt_traj_opt,
-                self.use_squash,
-                self.yaml_path
+                self.use_squash
             )
             
             self.trajectory_duration = self.trajectory_obj.duration  # ms
@@ -686,11 +691,11 @@ class TrajectoryPublisher:
                 self.state_update_model.calc(self.state_update_data, self.state.copy(), u_total)
                 self.state_next = self.state_update_data.xnext.copy()
 
-            print(f"state     : {self.state}")
-            print(f"u_total   : {u_total}")
-            print(f"u_mpc     : {self.l1_controller.u_mpc}")
-            print(f"u_ad      : {self.l1_controller.u_ad}")
-            print(f"state_next: {self.state_next}")
+            # print(f"state     : {self.state}")
+            # print(f"u_total   : {u_total}")
+            # print(f"u_mpc     : {self.l1_controller.u_mpc}")
+            # print(f"u_ad      : {self.l1_controller.u_ad}")
+            # print(f"state_next: {self.state_next}")
             
             # 3. Publish control command
             self.publish_mpc_control_command(self.l1_controller.u_mpc, self.l1_controller.u_ad, self.l1_controller.u_tracking)

@@ -4,3 +4,4 @@ build/*
 test_data/
 .cspell/custom-dictionary-workspace.txt
 resources/qgroundcontrol/QGroundControl.AppImage
+config/yaml/trajectories/temp_trajectory.yaml
