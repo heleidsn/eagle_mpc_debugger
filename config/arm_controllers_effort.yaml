@@ -9,11 +9,11 @@ gazebo_ros_control:
       i: 0.0
       d: 0.0
     joint_3:
-      p: 10.0
+      p: 0.1
       i: 0.0
       d: 0.0
     joint_4:
-      p: 10.0
+      p: 0.1
       i: 0.0
       d: 0.0
 
@@ -31,9 +31,9 @@ joint_2_controller:
   joint: joint_2
 
 joint_3_controller:
-  type: effort_controllers/JointEffortController
+  type: position_controllers/JointPositionController
   joint: joint_3
 
 joint_4_controller:
-  type: effort_controllers/JointEffortController
+  type: position_controllers/JointPositionController
   joint: joint_4
