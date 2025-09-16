@@ -280,6 +280,9 @@ class NumericSimulator:
         self.mpc_iterations = []
         self.trajectory_index_data = []
         
+        # Tracking error data storage
+        self.tracking_error_data = []
+        
         # L1 controller data storage
         self.l1_u_ad_data = []
         self.l1_u_baseline_data = []
@@ -305,6 +308,112 @@ class NumericSimulator:
         traj_index = min(traj_index, len(self.traj_state_ref) - 1)
         
         return self.traj_state_ref[traj_index], traj_index
+    
+    def calculate_tracking_errors(self, current_state, current_time):
+        """Calculate tracking errors for current state"""
+        # Get reference state
+        ref_state, _ = self.get_reference_state(current_time)
+        
+        # Calculate position error
+        position_error = current_state[:3] - ref_state[:3]
+        position_error_norm = np.linalg.norm(position_error)
+        
+        # Convert quaternions to Euler angles for attitude error calculation
+        from scipy.spatial.transform import Rotation as R
+        
+        try:
+            # Current state quaternion
+            current_quat = current_state[3:7]
+            current_euler = R.from_quat(current_quat).as_euler('xyz', degrees=True)
+            
+            # Reference state quaternion
+            ref_quat = ref_state[3:7]
+            ref_euler = R.from_quat(ref_quat).as_euler('xyz', degrees=True)
+            
+            # Calculate attitude error
+            attitude_error = current_euler - ref_euler
+            attitude_error_norm = np.linalg.norm(attitude_error)
+            
+        except Exception as e:
+            print(f"Warning: Could not compute attitude error: {e}")
+            attitude_error = np.zeros(3)
+            attitude_error_norm = 0.0
+        
+        # Calculate arm joint errors if robot has arm
+        arm_joint_error = np.zeros(2)
+        arm_joint_error_norm = 0.0
+        if self.robot.nq > 7 and len(current_state) > 8 and len(ref_state) > 8:
+            try:
+                arm_joint_error = np.degrees(current_state[7:9]) - np.degrees(ref_state[7:9])
+                arm_joint_error_norm = np.linalg.norm(arm_joint_error)
+            except Exception as e:
+                print(f"Warning: Could not compute arm joint error: {e}")
+        
+        # Calculate end-effector tracking error if robot has arm
+        gripper_pos_error = np.zeros(3)
+        gripper_pos_error_norm = 0.0
+        gripper_pitch_error = 0.0
+        
+        if self.robot.nq > 7:  # Has arm joints
+            try:
+                gripper_frame_id = self.robot.getFrameId("gripper_link")
+                
+                # Calculate actual gripper pose
+                q_actual = np.zeros(self.robot.nq)
+                q_actual[:len(current_state[:self.robot.nq])] = current_state[:self.robot.nq]
+                pin.forwardKinematics(self.robot, self.robot_data, q_actual)
+                pin.updateFramePlacements(self.robot, self.robot_data)
+                gripper_pose_actual = self.robot_data.oMf[gripper_frame_id].copy()
+                
+                # Calculate reference gripper pose
+                q_ref = np.zeros(self.robot.nq)
+                q_ref[:len(ref_state[:self.robot.nq])] = ref_state[:self.robot.nq]
+                pin.forwardKinematics(self.robot, self.robot_data, q_ref)
+                pin.updateFramePlacements(self.robot, self.robot_data)
+                gripper_pose_ref = self.robot_data.oMf[gripper_frame_id].copy()
+                
+                # Position error
+                gripper_pos_error = gripper_pose_actual.translation - gripper_pose_ref.translation
+                gripper_pos_error_norm = np.linalg.norm(gripper_pos_error)
+                
+                # Orientation error (only pitch angle)
+                gripper_rot_actual = R.from_matrix(gripper_pose_actual.rotation)
+                gripper_rot_ref = R.from_matrix(gripper_pose_ref.rotation)
+                # Extract only pitch angle (rotation around y-axis, index 1 in 'xyz' euler)
+                gripper_pitch_actual = gripper_rot_actual.as_euler('xyz', degrees=True)[1]
+                gripper_pitch_ref = gripper_rot_ref.as_euler('xyz', degrees=True)[1]
+                gripper_pitch_error = gripper_pitch_actual - gripper_pitch_ref
+                
+                # Debug: print first few calculations
+                if current_time < 1.0:  # Only print for first second
+                    print(f"Debug gripper error at t={current_time:.3f}:")
+                    print(f"  nq: {self.robot.nq}, current_state length: {len(current_state)}")
+                    print(f"  Arm joints actual: {q_actual[7:9] if self.robot.nq > 8 else 'N/A'}")
+                    print(f"  Arm joints ref: {q_ref[7:9] if self.robot.nq > 8 else 'N/A'}")
+                    print(f"  Gripper pos error: {gripper_pos_error}")
+                    print(f"  Gripper pos error norm: {gripper_pos_error_norm}")
+                
+            except Exception as e:
+                print(f"Warning: Could not compute gripper tracking error: {e}")
+        else:
+            # Debug: check why condition is not met
+            print(f"Debug: Robot nq={self.robot.nq}, not computing gripper error (needs nq > 7)")
+        
+        # Package tracking error data
+        tracking_error = {
+            'time': current_time,
+            'position_error': position_error.copy(),
+            'position_error_norm': position_error_norm,
+            'attitude_error': attitude_error.copy(),
+            'attitude_error_norm': attitude_error_norm,
+            'arm_joint_error': arm_joint_error.copy(),
+            'arm_joint_error_norm': arm_joint_error_norm,
+            'gripper_pos_error': gripper_pos_error.copy(),
+            'gripper_pos_error_norm': gripper_pos_error_norm,
+            'gripper_pitch_error': gripper_pitch_error
+        }
+        
+        return tracking_error
     
     def solve_mpc(self, current_state, current_time):
         """Solve MPC optimization problem"""
@@ -338,7 +447,7 @@ class NumericSimulator:
             
             # Get control command
             control_squash = self.mpc_controller.solver.us_squash[0]
-            print(f"control_squash: {control_squash}")
+            # print(f"control_squash: {control_squash}")
             
             # Convert to force/torque
             control_ft = thrustToForceTorqueAll(
@@ -346,7 +455,7 @@ class NumericSimulator:
                 self.platform_params.tau_f
             )
             
-            print(f"control_ft: {control_ft}")
+            # print(f"control_ft: {control_ft}")
             
             # Extract only the arm joint torques for 2DOF arm simulation
             if self.control_dim == 2 and len(control_ft) > 2:
@@ -585,6 +694,12 @@ class NumericSimulator:
             
             # Add noise if enabled
             next_state = self.add_noise(next_state)
+            
+            # Calculate and store tracking errors after next state is computed
+            # Only record when control was updated (every control_interval steps)
+            if sim_step % self.control_interval == 0:
+                tracking_error = self.calculate_tracking_errors(next_state, current_time + self.simulation_dt)
+                self.tracking_error_data.append(tracking_error)
             
             # Update for next iteration
             current_state = next_state
@@ -947,8 +1062,8 @@ class NumericSimulator:
         # Calculate end-effector (gripper) tracking errors if robot has arm
         gripper_pos_actual = []
         gripper_pos_ref = []
-        gripper_euler_actual = []
-        gripper_euler_ref = []
+        gripper_pitch_actual = []
+        gripper_pitch_ref = []
         
         if self.robot.nq > 7:  # Has arm joints, calculate gripper tracking errors
             try:
@@ -964,7 +1079,8 @@ class NumericSimulator:
                     gripper_pose_actual = self.robot_data.oMf[gripper_frame_id]
                     gripper_pos_actual.append(gripper_pose_actual.translation.copy())
                     gripper_rot_actual = R.from_matrix(gripper_pose_actual.rotation)
-                    gripper_euler_actual.append(gripper_rot_actual.as_euler('xyz', degrees=True))
+                    # Only store pitch angle (index 1 in 'xyz' euler)
+                    gripper_pitch_actual.append(gripper_rot_actual.as_euler('xyz', degrees=True)[1])
                     
                     # Calculate reference gripper pose
                     q_ref = np.zeros(self.robot.nq)
@@ -974,12 +1090,13 @@ class NumericSimulator:
                     gripper_pose_ref = self.robot_data.oMf[gripper_frame_id]
                     gripper_pos_ref.append(gripper_pose_ref.translation.copy())
                     gripper_rot_ref = R.from_matrix(gripper_pose_ref.rotation)
-                    gripper_euler_ref.append(gripper_rot_ref.as_euler('xyz', degrees=True))
+                    # Only store pitch angle (index 1 in 'xyz' euler)
+                    gripper_pitch_ref.append(gripper_rot_ref.as_euler('xyz', degrees=True)[1])
                 
                 gripper_pos_actual = np.array(gripper_pos_actual)
                 gripper_pos_ref = np.array(gripper_pos_ref)
-                gripper_euler_actual = np.array(gripper_euler_actual)
-                gripper_euler_ref = np.array(gripper_euler_ref)
+                gripper_pitch_actual = np.array(gripper_pitch_actual)
+                gripper_pitch_ref = np.array(gripper_pitch_ref)
                 
                 print("Successfully computed gripper tracking errors")
                 
@@ -987,10 +1104,13 @@ class NumericSimulator:
                 print(f"Warning: Could not compute gripper tracking errors: {e}")
                 gripper_pos_actual = None
                 gripper_pos_ref = None
-                gripper_euler_actual = None
-                gripper_euler_ref = None
+                gripper_pitch_actual = None
+                gripper_pitch_ref = None
         else:
             gripper_pos_actual = None
+            gripper_pos_ref = None
+            gripper_pitch_actual = None
+            gripper_pitch_ref = None
         
         # === Figure 1: States and Controls ===
         fig, axes = plt.subplots(3, 3, figsize=(15, 10))
@@ -1151,14 +1271,32 @@ class NumericSimulator:
         fig2, axes2 = plt.subplots(3, 3, figsize=(15, 10))
         fig2.suptitle('Tracking Errors', fontsize=16)
         
-        # Calculate tracking errors
-        position_errors = state_array[:, :3] - ref_state_array[:, :3]
-        attitude_errors = actual_euler - ref_euler
+        # Use recorded tracking error data (computed during simulation)
+        if len(self.tracking_error_data) > 0:
+            tracking_error_time = np.array([te['time'] for te in self.tracking_error_data])
+            position_errors = np.array([te['position_error'] for te in self.tracking_error_data])
+            attitude_errors = np.array([te['attitude_error'] for te in self.tracking_error_data])
+            position_error_norm = np.array([te['position_error_norm'] for te in self.tracking_error_data])
+            attitude_error_norm = np.array([te['attitude_error_norm'] for te in self.tracking_error_data])
+            
+            # Extract arm joint errors if available
+            arm_errors = np.array([te['arm_joint_error'] for te in self.tracking_error_data])
+            
+            # Extract gripper errors if available
+            gripper_pos_errors = np.array([te['gripper_pos_error'] for te in self.tracking_error_data])
+            gripper_pitch_errors = np.array([te['gripper_pitch_error'] for te in self.tracking_error_data])
+            gripper_pos_error_norm = np.array([te['gripper_pos_error_norm'] for te in self.tracking_error_data])
+            
+            print(f"Using recorded tracking error data: {len(self.tracking_error_data)} control steps")
+        else:
+            # This should not happen in normal operation
+            print("Warning: No tracking error data available, skipping tracking error plots")
+            return
         
         # Combined Position tracking errors (X, Y, Z in one plot)
-        axes2[0, 0].plot(time_array, position_errors[:, 0], 'b-', linewidth=2, label='X Error')
-        axes2[0, 0].plot(time_array, position_errors[:, 1], 'r-', linewidth=2, label='Y Error')
-        axes2[0, 0].plot(time_array, position_errors[:, 2], 'g-', linewidth=2, label='Z Error')
+        axes2[0, 0].plot(tracking_error_time, position_errors[:, 0], 'b-', linewidth=2, label='X Error')
+        axes2[0, 0].plot(tracking_error_time, position_errors[:, 1], 'r-', linewidth=2, label='Y Error')
+        axes2[0, 0].plot(tracking_error_time, position_errors[:, 2], 'g-', linewidth=2, label='Z Error')
         axes2[0, 0].set_xlabel('Time (s)')
         axes2[0, 0].set_ylabel('Position Error (m)')
         axes2[0, 0].legend(fontsize=8)
@@ -1173,7 +1311,7 @@ class NumericSimulator:
         for i in range(3):
             angle_idx = angle_order[i]
             color = angle_colors[i]
-            axes2[0, 1].plot(time_array, attitude_errors[:, angle_idx], color=color, linewidth=2, label=f'{angle_labels[i]} Error')
+            axes2[0, 1].plot(tracking_error_time, attitude_errors[:, angle_idx], color=color, linewidth=2, label=f'{angle_labels[i]} Error')
         axes2[0, 1].set_xlabel('Time (s)')
         axes2[0, 1].set_ylabel('Attitude Error (deg)')
         axes2[0, 1].legend(fontsize=8)
@@ -1181,10 +1319,9 @@ class NumericSimulator:
         axes2[0, 1].set_title('Base Attitude Tracking Errors (Pitch, Roll, Yaw)')
         
         # Arm joint tracking errors (if available)
-        if self.robot.nq > 7:
-            arm_errors = np.degrees(state_array[:, 7:9]) - np.degrees(ref_state_array[:, 7:9])
-            axes2[0, 2].plot(time_array, arm_errors[:, 0], 'b-', linewidth=2, label='Joint 1 Error')
-            axes2[0, 2].plot(time_array, arm_errors[:, 1], 'r-', linewidth=2, label='Joint 2 Error')
+        if self.robot.nq > 7 and arm_errors is not None:
+            axes2[0, 2].plot(tracking_error_time, arm_errors[:, 0], 'b-', linewidth=2, label='Joint 1 Error')
+            axes2[0, 2].plot(tracking_error_time, arm_errors[:, 1], 'r-', linewidth=2, label='Joint 2 Error')
             axes2[0, 2].set_xlabel('Time (s)')
             axes2[0, 2].set_ylabel('Joint Angle Error (deg)')
             axes2[0, 2].legend(fontsize=8)
@@ -1195,11 +1332,10 @@ class NumericSimulator:
             axes2[0, 2].set_title('Arm Joint Errors (N/A)')
         
         # End-effector position tracking errors (if gripper data available)
-        if gripper_pos_actual is not None and gripper_pos_ref is not None:
-            gripper_pos_errors = gripper_pos_actual - gripper_pos_ref
-            axes2[1, 0].plot(time_array, gripper_pos_errors[:, 0], 'b-', linewidth=2, label='EE X Error')
-            axes2[1, 0].plot(time_array, gripper_pos_errors[:, 1], 'r-', linewidth=2, label='EE Y Error')
-            axes2[1, 0].plot(time_array, gripper_pos_errors[:, 2], 'g-', linewidth=2, label='EE Z Error')
+        if gripper_pos_errors is not None and len(gripper_pos_errors) > 0:
+            axes2[1, 0].plot(tracking_error_time, gripper_pos_errors[:, 0], 'b-', linewidth=2, label='EE X Error')
+            axes2[1, 0].plot(tracking_error_time, gripper_pos_errors[:, 1], 'r-', linewidth=2, label='EE Y Error')
+            axes2[1, 0].plot(tracking_error_time, gripper_pos_errors[:, 2], 'g-', linewidth=2, label='EE Z Error')
             axes2[1, 0].set_xlabel('Time (s)')
             axes2[1, 0].set_ylabel('EE Position Error (m)')
             axes2[1, 0].legend(fontsize=8)
@@ -1209,30 +1345,24 @@ class NumericSimulator:
             axes2[1, 0].text(0.5, 0.5, 'No end-effector data', ha='center', va='center', transform=axes2[1, 0].transAxes)
             axes2[1, 0].set_title('End-Effector Position Errors (N/A)')
         
-        # End-effector orientation tracking errors (if gripper data available)
-        if gripper_euler_actual is not None and gripper_euler_ref is not None:
-            gripper_euler_errors = gripper_euler_actual - gripper_euler_ref
-            for i in range(3):
-                angle_idx = angle_order[i]
-                color = angle_colors[i]
-                axes2[1, 1].plot(time_array, gripper_euler_errors[:, angle_idx], color=color, linewidth=2, label=f'EE {angle_labels[i]} Error')
+        # End-effector pitch tracking error (if gripper data available)
+        if gripper_pitch_errors is not None and len(gripper_pitch_errors) > 0:
+            axes2[1, 1].plot(tracking_error_time, gripper_pitch_errors, 'g-', linewidth=2, label='EE Pitch Error')
             axes2[1, 1].set_xlabel('Time (s)')
-            axes2[1, 1].set_ylabel('EE Orientation Error (deg)')
+            axes2[1, 1].set_ylabel('EE Pitch Error (deg)')
             axes2[1, 1].legend(fontsize=8)
             axes2[1, 1].grid(True)
-            axes2[1, 1].set_title('End-Effector Orientation Tracking Errors')
+            axes2[1, 1].set_title('End-Effector Pitch Tracking Error')
         else:
             axes2[1, 1].text(0.5, 0.5, 'No end-effector data', ha='center', va='center', transform=axes2[1, 1].transAxes)
-            axes2[1, 1].set_title('End-Effector Orientation Errors (N/A)')
+            axes2[1, 1].set_title('End-Effector Pitch Error (N/A)')
         
         # Position error magnitude
-        position_error_norm = np.linalg.norm(position_errors, axis=1)
-        axes2[1, 2].plot(time_array, position_error_norm, 'm-', linewidth=2, label='Base Position')
+        axes2[1, 2].plot(tracking_error_time, position_error_norm, 'm-', linewidth=2, label='Base Position')
         
         # End-effector position error magnitude (if available)
-        if gripper_pos_actual is not None and gripper_pos_ref is not None:
-            gripper_pos_error_norm = np.linalg.norm(gripper_pos_errors, axis=1)
-            axes2[1, 2].plot(time_array, gripper_pos_error_norm, 'c-', linewidth=2, label='End-Effector')
+        if gripper_pos_error_norm is not None and len(gripper_pos_error_norm) > 0:
+            axes2[1, 2].plot(tracking_error_time, gripper_pos_error_norm, 'c-', linewidth=2, label='End-Effector')
         
         axes2[1, 2].set_xlabel('Time (s)')
         axes2[1, 2].set_ylabel('Position Error Magnitude (m)')
@@ -1241,13 +1371,11 @@ class NumericSimulator:
         axes2[1, 2].set_title('Position Error Magnitudes')
         
         # Attitude error magnitude
-        attitude_error_norm = np.linalg.norm(attitude_errors, axis=1)
-        axes2[2, 0].plot(time_array, attitude_error_norm, 'c-', linewidth=2, label='Base Attitude')
+        axes2[2, 0].plot(tracking_error_time, attitude_error_norm, 'c-', linewidth=2, label='Base Attitude')
         
-        # End-effector orientation error magnitude (if available)
-        if gripper_euler_actual is not None and gripper_euler_ref is not None:
-            gripper_euler_error_norm = np.linalg.norm(gripper_euler_errors, axis=1)
-            axes2[2, 0].plot(time_array, gripper_euler_error_norm, 'm-', linewidth=2, label='End-Effector')
+        # End-effector pitch error magnitude (if available)
+        if gripper_pitch_errors is not None and len(gripper_pitch_errors) > 0:
+            axes2[2, 0].plot(tracking_error_time, np.abs(gripper_pitch_errors), 'm-', linewidth=2, label='End-Effector Pitch')
         
         axes2[2, 0].set_xlabel('Time (s)')
         axes2[2, 0].set_ylabel('Attitude Error Magnitude (deg)')
@@ -1271,26 +1399,27 @@ class NumericSimulator:
             axes2[2, 1].set_title('Velocity Errors (N/A)')
         
         # Combined tracking error summary (RMS values over time windows)
-        if gripper_pos_actual is not None:
-            # Calculate RMS errors over sliding windows
-            window_size = max(1, len(time_array) // 20)  # 20 windows
+        if gripper_pos_error_norm is not None and len(gripper_pos_error_norm) > 0:
+            # Calculate RMS errors over sliding windows using MPC horizon length as window size
+            mpc_horizon_length = len(self.mpc_controller.solver.xs)
+            window_size = max(1, mpc_horizon_length)  # Use MPC horizon as window size
             rms_pos_base = []
             rms_pos_ee = []
             rms_att_base = []
             rms_att_ee = []
             time_windows = []
             
-            for i in range(0, len(time_array), window_size):
-                end_idx = min(i + window_size, len(time_array))
-                time_windows.append(time_array[i:end_idx].mean())
+            for i in range(0, len(tracking_error_time), window_size):
+                end_idx = min(i + window_size, len(tracking_error_time))
+                time_windows.append(tracking_error_time[i:end_idx].mean())
                 
                 # Base position and attitude RMS
                 rms_pos_base.append(np.sqrt(np.mean(position_error_norm[i:end_idx]**2)))
                 rms_att_base.append(np.sqrt(np.mean(attitude_error_norm[i:end_idx]**2)))
                 
-                # End-effector position and attitude RMS
+                # End-effector position and pitch RMS
                 rms_pos_ee.append(np.sqrt(np.mean(gripper_pos_error_norm[i:end_idx]**2)))
-                rms_att_ee.append(np.sqrt(np.mean(gripper_euler_error_norm[i:end_idx]**2)))
+                rms_att_ee.append(np.sqrt(np.mean(gripper_pitch_errors[i:end_idx]**2)))
             
             axes2[2, 2].plot(time_windows, rms_pos_base, 'b-', linewidth=2, marker='o', label='Base Position RMS')
             axes2[2, 2].plot(time_windows, rms_pos_ee, 'r-', linewidth=2, marker='s', label='EE Position RMS')
@@ -1300,8 +1429,32 @@ class NumericSimulator:
             axes2[2, 2].grid(True)
             axes2[2, 2].set_title('RMS Tracking Error Evolution')
         else:
-            axes2[2, 2].text(0.5, 0.5, 'No RMS summary', ha='center', va='center', transform=axes2[2, 2].transAxes)
-            axes2[2, 2].set_title('RMS Error Summary (N/A)')
+            # Fallback: Calculate base RMS only when no gripper data
+            if len(tracking_error_time) > 0:
+                mpc_horizon_length = len(self.mpc_controller.solver.xs)
+                window_size = max(1, mpc_horizon_length)  # Use MPC horizon as window size
+                rms_pos_base = []
+                rms_att_base = []
+                time_windows = []
+                
+                for i in range(0, len(tracking_error_time), window_size):
+                    end_idx = min(i + window_size, len(tracking_error_time))
+                    time_windows.append(tracking_error_time[i:end_idx].mean())
+                    
+                    # Base position and attitude RMS only
+                    rms_pos_base.append(np.sqrt(np.mean(position_error_norm[i:end_idx]**2)))
+                    rms_att_base.append(np.sqrt(np.mean(attitude_error_norm[i:end_idx]**2)))
+                
+                axes2[2, 2].plot(time_windows, rms_pos_base, 'b-', linewidth=2, marker='o', label='Base Position RMS')
+                axes2[2, 2].plot(time_windows, rms_att_base, 'c-', linewidth=2, marker='^', label='Base Attitude RMS')
+                axes2[2, 2].set_xlabel('Time (s)')
+                axes2[2, 2].set_ylabel('RMS Error')
+                axes2[2, 2].legend(fontsize=8)
+                axes2[2, 2].grid(True)
+                axes2[2, 2].set_title('Base RMS Tracking Error Evolution')
+            else:
+                axes2[2, 2].text(0.5, 0.5, 'No tracking error data', ha='center', va='center', transform=axes2[2, 2].transAxes)
+                axes2[2, 2].set_title('RMS Error Summary (N/A)')
         
         plt.tight_layout()
         
@@ -1588,6 +1741,119 @@ class NumericSimulator:
             # Show plots interactively
             plt.show()
     
+    def plot_planned_trajectory(self, save_dir=None):
+        """Plot only the planned trajectory without simulation results"""
+        print("Plotting planned trajectory...")
+        
+        # Create time array for the full trajectory
+        total_time = self.simulation_time
+        time_array = np.arange(0, total_time, self.simulation_dt)
+        
+        # Create reference trajectory
+        ref_states = []
+        for t in time_array:
+            ref_state, _ = self.get_reference_state(t)
+            ref_states.append(ref_state)
+        ref_state_array = np.array(ref_states)
+        
+        # Convert quaternions to Euler angles
+        from scipy.spatial.transform import Rotation as R
+        ref_quats = ref_state_array[:, 3:7]
+        ref_euler = R.from_quat(ref_quats).as_euler('xyz', degrees=True)
+        
+        # === Figure: Planned Trajectory ===
+        fig, axes = plt.subplots(3, 3, figsize=(15, 10))
+        fig.suptitle(f'Planned Trajectory - {self.robot_name} ({self.trajectory_name})', fontsize=16)
+        
+        # === First Row: Position and Attitude ===
+        # Position (X, Y, Z)
+        position_labels = ['X Position (m)', 'Y Position (m)', 'Z Position (m)']
+        position_colors = ['b', 'r', 'g']
+        for i in range(3):
+            ax = axes[0, i]
+            ax.plot(time_array, ref_state_array[:, i], color=position_colors[i], linewidth=2, label='Planned')
+            ax.set_xlabel('Time (s)', fontsize=9)
+            ax.set_ylabel(position_labels[i], fontsize=9)
+            ax.legend(fontsize=8)
+            ax.grid(True, alpha=0.3)
+            ax.set_title(position_labels[i], fontsize=10)
+        
+        # === Second Row: Attitude ===
+        # Attitude (Pitch, Roll, Yaw)
+        attitude_labels = ['Pitch (deg)', 'Roll (deg)', 'Yaw (deg)']
+        angle_order = [1, 0, 2]  # pitch, roll, yaw from xyz Euler
+        for i in range(3):
+            ax = axes[1, i]
+            angle_idx = angle_order[i]
+            ax.plot(time_array, ref_euler[:, angle_idx], color=position_colors[i], linewidth=2, label='Planned')
+            ax.set_xlabel('Time (s)', fontsize=9)
+            ax.set_ylabel(attitude_labels[i], fontsize=9)
+            ax.legend(fontsize=8)
+            ax.grid(True, alpha=0.3)
+            ax.set_title(attitude_labels[i], fontsize=10)
+        
+        # === Third Row: Arm Joints or Velocities ===
+        if self.robot.nq > 7:  # Has arm joints
+            # Arm joint angles
+            joint_labels = ['Joint 1 (deg)', 'Joint 2 (deg)']
+            for i in range(2):
+                ax = axes[2, i]
+                if (7 + i) < ref_state_array.shape[1]:
+                    ax.plot(time_array, np.degrees(ref_state_array[:, 7 + i]), 
+                           color=position_colors[i], linewidth=2, label='Planned')
+                    ax.set_xlabel('Time (s)', fontsize=9)
+                    ax.set_ylabel(joint_labels[i], fontsize=9)
+                    ax.legend(fontsize=8)
+                    ax.grid(True, alpha=0.3)
+                    ax.set_title(joint_labels[i], fontsize=10)
+                else:
+                    ax.text(0.5, 0.5, 'N/A', ha='center', va='center', transform=ax.transAxes)
+                    ax.set_title(joint_labels[i] + ' (N/A)', fontsize=10)
+            
+            # 3D trajectory plot
+            ax = fig.add_subplot(3, 3, 9, projection='3d')
+            ax.plot(ref_state_array[:, 0], ref_state_array[:, 1], ref_state_array[:, 2], 
+                   'b-', linewidth=2, label='Planned Path')
+            ax.scatter(ref_state_array[0, 0], ref_state_array[0, 1], ref_state_array[0, 2], 
+                      color='g', s=100, label='Start', marker='o')
+            ax.scatter(ref_state_array[-1, 0], ref_state_array[-1, 1], ref_state_array[-1, 2], 
+                      color='r', s=100, label='End', marker='s')
+            ax.set_xlabel('X (m)', fontsize=9)
+            ax.set_ylabel('Y (m)', fontsize=9)
+            ax.set_zlabel('Z (m)', fontsize=9)
+            ax.set_ylim(-1.0, 1.0)
+            ax.legend(fontsize=8)
+            ax.set_title('3D Trajectory', fontsize=10)
+        else:
+            # Linear velocities for non-arm robots
+            velocity_labels = ['VX (m/s)', 'VY (m/s)', 'VZ (m/s)']
+            velocity_indices = [9, 10, 11]
+            for i in range(3):
+                ax = axes[2, i]
+                vel_idx = velocity_indices[i]
+                if vel_idx < ref_state_array.shape[1]:
+                    ax.plot(time_array, ref_state_array[:, vel_idx], 
+                           color=position_colors[i], linewidth=2, label='Planned')
+                    ax.set_xlabel('Time (s)', fontsize=9)
+                    ax.set_ylabel(velocity_labels[i], fontsize=9)
+                    ax.legend(fontsize=8)
+                    ax.grid(True, alpha=0.3)
+                    ax.set_title(velocity_labels[i], fontsize=10)
+                else:
+                    ax.text(0.5, 0.5, 'N/A', ha='center', va='center', transform=ax.transAxes)
+                    ax.set_title(velocity_labels[i] + ' (N/A)', fontsize=10)
+        
+        plt.tight_layout()
+        
+        # Save or show plot
+        if save_dir is not None:
+            fig_path = save_dir / '0_planned_trajectory.png'
+            fig.savefig(fig_path, dpi=300, bbox_inches='tight')
+            print(f"  - Planned trajectory plot saved: {fig_path}")
+            plt.close(fig)
+        else:
+            plt.show()
+
     def save_and_plot(self):
         """Save simulation results to files"""
         if not self.save_results and self.plot_results:
@@ -1633,6 +1899,32 @@ class NumericSimulator:
                     np.save(save_dir / 'l1_sig_hat_data.npy', self.l1_sig_hat_data)
                 if len(self.l1_z_hat_data) > 0:
                     np.save(save_dir / 'l1_z_hat_data.npy', self.l1_z_hat_data)
+            
+            # Save tracking error data if available
+            if len(self.tracking_error_data) > 0:
+                # Convert tracking error data to numpy format
+                tracking_error_times = np.array([te['time'] for te in self.tracking_error_data])
+                position_errors = np.array([te['position_error'] for te in self.tracking_error_data])
+                attitude_errors = np.array([te['attitude_error'] for te in self.tracking_error_data])
+                position_error_norms = np.array([te['position_error_norm'] for te in self.tracking_error_data])
+                attitude_error_norms = np.array([te['attitude_error_norm'] for te in self.tracking_error_data])
+                arm_joint_errors = np.array([te['arm_joint_error'] for te in self.tracking_error_data])
+                arm_joint_error_norms = np.array([te['arm_joint_error_norm'] for te in self.tracking_error_data])
+                gripper_pos_errors = np.array([te['gripper_pos_error'] for te in self.tracking_error_data])
+                gripper_pos_error_norms = np.array([te['gripper_pos_error_norm'] for te in self.tracking_error_data])
+                gripper_pitch_errors = np.array([te['gripper_pitch_error'] for te in self.tracking_error_data])
+                
+                # Save tracking error arrays
+                np.save(save_dir / 'tracking_error_times.npy', tracking_error_times)
+                np.save(save_dir / 'position_errors.npy', position_errors)
+                np.save(save_dir / 'attitude_errors.npy', attitude_errors)
+                np.save(save_dir / 'position_error_norms.npy', position_error_norms)
+                np.save(save_dir / 'attitude_error_norms.npy', attitude_error_norms)
+                np.save(save_dir / 'arm_joint_errors.npy', arm_joint_errors)
+                np.save(save_dir / 'arm_joint_error_norms.npy', arm_joint_error_norms)
+                np.save(save_dir / 'gripper_pos_errors.npy', gripper_pos_errors)
+                np.save(save_dir / 'gripper_pos_error_norms.npy', gripper_pos_error_norms)
+                np.save(save_dir / 'gripper_pitch_errors.npy', gripper_pitch_errors)
         
         # Save configuration
         config_dict = {
@@ -1726,7 +2018,7 @@ def create_default_config(filename='numeric_sim_config.yaml'):
 def main():
     """Main function"""
     parser = argparse.ArgumentParser(description='Numeric simulation for MPC controller')
-    parser.add_argument('--config', type=str, default='numeric_sim_config.yaml',
+    parser.add_argument('--config', type=str, default='numeric_sim_config_catch.yaml',
                        help='Configuration file path')
     parser.add_argument('--create-config', action='store_true',
                        help='Create default configuration file and exit')
@@ -1740,6 +2032,8 @@ def main():
                        help='Disable plotting')
     parser.add_argument('--no-save', action='store_true',
                        help='Disable saving results')
+    parser.add_argument('--plot-trajectory-only', action='store_true',
+                       help='Only plot the planned trajectory without running simulation')
     
     args = parser.parse_args()
     
@@ -1763,6 +2057,25 @@ def main():
             simulator.plot_results = False
         if args.no_save:
             simulator.save_results = False
+        
+        # Check if only plotting trajectory
+        if args.plot_trajectory_only:
+            print("Plotting planned trajectory only (no simulation)...")
+            
+            # Create save directory if saving is enabled
+            save_dir = None
+            if simulator.save_results:
+                from datetime import datetime
+                results_dir = Path(simulator.results_dir)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                save_dir = results_dir / f"{simulator.robot_name}_{simulator.trajectory_name}_trajectory_{timestamp}"
+                save_dir.mkdir(parents=True, exist_ok=True)
+                print(f"Trajectory plot will be saved to: {save_dir}")
+            
+            # Plot only the planned trajectory
+            simulator.plot_planned_trajectory(save_dir)
+            print("Trajectory plotting completed!")
+            return
         
         # Run simulation
         simulator.simulate()
