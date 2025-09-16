@@ -230,6 +230,8 @@ def main():
                       help='Grasp time duration (ms)')
     parser.add_argument('--catch-post-grasp-time', type=int, default=3000,
                       help='Post-grasp time duration (ms)')
+    parser.add_argument('--catch-gripper-pitch-angle', type=float, default=0.0,
+                      help='Gripper pitch angle for catch task (degrees)')
     
     args = parser.parse_args()
     
@@ -245,11 +247,26 @@ def main():
     # Check if this is a catch task
     is_catch_task = 'catch' in trajectory_name.lower()
     
+    # Process gripper pitch angle to update orientation if provided
+    gripper_pitch_angle = args.catch_gripper_pitch_angle
+    if gripper_pitch_angle != 0.0:
+        # Convert degrees to radians and calculate quaternion for pitch rotation
+        import math
+        pitch_radians = math.radians(gripper_pitch_angle)
+        qx = 0.0
+        qy = math.sin(pitch_radians / 2.0)
+        qz = 0.0
+        qw = math.cos(pitch_radians / 2.0)
+        updated_gripper_orient = [qx, qy, qz, qw]
+    else:
+        updated_gripper_orient = args.catch_target_gripper_orient
+    
     # Catch task configuration
     catch_config = {
         'initial_state': args.catch_initial_state,
         'target_gripper_pos': args.catch_target_gripper_pos,
-        'target_gripper_orient': args.catch_target_gripper_orient,
+        'target_gripper_orient': updated_gripper_orient,  # Use updated orientation
+        'gripper_pitch_angle': gripper_pitch_angle,  # Store original pitch angle
         'final_state': args.catch_final_state,
         'pre_grasp_time': args.catch_pre_grasp_time,
         'grasp_time': args.catch_grasp_time,
@@ -279,6 +296,7 @@ def main():
         print(f"  Initial state: {catch_config['initial_state']}")
         print(f"  Target gripper position: {catch_config['target_gripper_pos']}")
         print(f"  Target gripper orientation: {catch_config['target_gripper_orient']}")
+        print(f"  Gripper pitch angle: {catch_config['gripper_pitch_angle']} degrees")
         print(f"  Final state: {catch_config['final_state']}")
         print(f"  Pre-grasp time: {catch_config['pre_grasp_time']} ms")
         print(f"  Grasp time: {catch_config['grasp_time']} ms")

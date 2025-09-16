@@ -133,6 +133,9 @@ class SystemController:
                 
             if 'catch_post_grasp_time' in config:
                 cmd_parts.append(f"--catch-post-grasp-time {config['catch_post_grasp_time']}")
+                
+            if 'catch_gripper_pitch_angle' in config:
+                cmd_parts.append(f"--catch-gripper-pitch-angle {config['catch_gripper_pitch_angle']}")
             
             # Join command parts
             cmd = ' '.join(cmd_parts)
@@ -190,6 +193,9 @@ class SystemController:
                 
             if 'catch_post_grasp_time' in config:
                 cmd_parts.append(f"--catch-post-grasp-time {config['catch_post_grasp_time']}")
+                
+            if 'catch_gripper_pitch_angle' in config:
+                cmd_parts.append(f"--catch-gripper-pitch-angle {config['catch_gripper_pitch_angle']}")
             
             # Join command parts
             cmd = ' '.join(cmd_parts)
@@ -643,6 +649,21 @@ class EagleMPCDebuggerGUI(QMainWindow):
         self.target_orient_w.setText("1.0")
         self.target_orient_w.hide()
         
+        # Gripper pitch angle parameter
+        gripper_pitch_widget = QWidget()
+        gripper_pitch_layout = QHBoxLayout(gripper_pitch_widget)
+        gripper_pitch_layout.setContentsMargins(0, 0, 0, 0)
+        gripper_pitch_layout.setSpacing(5)
+        
+        self.gripper_pitch_angle = QLineEdit()
+        self.gripper_pitch_angle.setText("0.0")
+        self.gripper_pitch_angle.setFixedWidth(70)
+        gripper_pitch_layout.addWidget(self.gripper_pitch_angle)
+        
+        gripper_pitch_layout.addWidget(QLabel("degrees"))
+        gripper_pitch_layout.addStretch()
+        grid_layout.addRow("Gripper Pitch Angle:", gripper_pitch_widget)
+        
         # Catch timing parameters - in one row
         timing_widget = QWidget()
         timing_layout = QHBoxLayout(timing_widget)
@@ -986,6 +1007,18 @@ class EagleMPCDebuggerGUI(QMainWindow):
     def get_catch_parameters(self):
         """Get catch-specific parameters from GUI"""
         try:
+            # Convert gripper pitch angle from degrees to quaternion
+            import math
+            pitch_degrees = float(self.gripper_pitch_angle.text())
+            pitch_radians = math.radians(pitch_degrees)
+            
+            # Create quaternion for pitch rotation (rotation around Y axis)
+            # q = [qx, qy, qz, qw] where qx=0, qy=sin(pitch/2), qz=0, qw=cos(pitch/2)
+            qx = 0.0
+            qy = math.sin(pitch_radians / 2.0)
+            qz = 0.0
+            qw = math.cos(pitch_radians / 2.0)
+            
             return {
                 'catch_initial_state': [
                     float(self.drone_initial_pos_x.text()),  # x
@@ -1003,12 +1036,8 @@ class EagleMPCDebuggerGUI(QMainWindow):
                     float(self.target_pos_y.text()),
                     float(self.target_pos_z.text())
                 ],
-                'catch_target_gripper_orient': [
-                    float(self.target_orient_x.text()),
-                    float(self.target_orient_y.text()),
-                    float(self.target_orient_z.text()),
-                    float(self.target_orient_w.text())
-                ],
+                'catch_target_gripper_orient': [qx, qy, qz, qw],  # Use calculated quaternion from pitch angle
+                'catch_gripper_pitch_angle': pitch_degrees,  # Also pass the pitch angle in degrees for reference
                 'catch_final_state': [
                     float(self.drone_final_pos_x.text()),  # x
                     float(self.drone_final_pos_y.text()),  # y
