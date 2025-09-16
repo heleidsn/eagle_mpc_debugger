@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-24 10:31:39
-LastEditTime: 2025-09-10 19:16:39
+LastEditTime: 2025-09-13 13:46:36
 Description: Run planning to generate planning results and save them to file
 Github: https://github.com/heleidsn
 '''
@@ -386,13 +386,14 @@ def plot_trajectory(trajectory, trajectory_obj, traj_state_ref, control_force_to
         ax.plot(time_state, vel_data, 'r--', label='Velocity (body)')
         
         # Add markers for key points
-        if i < 3:  # Position states
-            ax.plot(time_state[0], start_pose_drone[i], 'go', label='Initial Point', markersize=6)
-            ax.plot(time_state[-1], final_pose_drone[i], 'mo', label='Final Point', markersize=6)
-            
-        elif i < 6:  # Orientation states
-            ax.plot(time_state[0], 0, 'go', label='Initial Point', markersize=6)
-            ax.plot(time_state[-1], 0, 'mo', label='Final Point', markersize=6)
+        if is_catch_task:
+            if i < 3:  # Position states
+                ax.plot(time_state[0], start_pose_drone[i], 'go', label='Initial Point', markersize=6)
+                ax.plot(time_state[-1], final_pose_drone[i], 'mo', label='Final Point', markersize=6)
+                
+            elif i < 6:  # Orientation states
+                ax.plot(time_state[0], 0, 'go', label='Initial Point', markersize=6)
+                ax.plot(time_state[-1], 0, 'mo', label='Final Point', markersize=6)
 
         
         if i in [0, 1, 2]:  # Position states
@@ -422,8 +423,9 @@ def plot_trajectory(trajectory, trajectory_obj, traj_state_ref, control_force_to
         ax.plot(time_state, joint_vel_data, 'r--', label='Joint Velocity')
         
         # Add markers for key points
-        ax.plot(time_state[0], np.degrees(start_joint_angle[i]), 'go', label='Initial Point', markersize=6)
-        ax.plot(time_state[-1], np.degrees(final_joint_angle[i]), 'mo', label='Final Point', markersize=6)
+        if is_catch_task:
+            ax.plot(time_state[0], np.degrees(start_joint_angle[i]), 'go', label='Initial Point', markersize=6)
+            ax.plot(time_state[-1], np.degrees(final_joint_angle[i]), 'mo', label='Final Point', markersize=6)
         
         ax.set_xlabel('Time (s)')
         ax.set_ylabel(f'Joint {i+1} (deg)')
@@ -523,9 +525,9 @@ def main():
     parser.add_argument('--robot', type=str, default='s500_uam',
                       choices=['s500', 's500_uam', 'hexacopter370_flying_arm_3'],
                       help='Robot model to use')
-    parser.add_argument('--trajectory', type=str, default='catch_vicon',
+    parser.add_argument('--trajectory', type=str, default='hover',   # hover, catch_vicon
                       help='Trajectory name')
-    parser.add_argument('--dt', type=int, default=20,
+    parser.add_argument('--dt', type=int, default=50,
                       help='Time step for trajectory optimization (ms)')
     parser.add_argument('--use-squash', action='store_true', default=True,
                       help='Use squash function for control inputs')
