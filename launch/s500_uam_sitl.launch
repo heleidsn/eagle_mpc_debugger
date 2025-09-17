@@ -36,7 +36,7 @@
     <arg name="x" default="-1.5"/>
     <arg name="y" default="0"/>
     <arg name="z" default="0.37" if="$(eval arg('world_name') == 'table_beer_with_stand')"/>
-    <arg name="z" default="0.5" unless="$(eval arg('world_name') == 'table_beer_with_stand')"/>
+    <arg name="z" default="0.2" unless="$(eval arg('world_name') == 'table_beer_with_stand')"/>
     <arg name="joint_1_pos" default="-1.2"/>
     <arg name="joint_2_pos" default="-0.6"/>
     <arg name="joint_3_pos" default="0.0"/>

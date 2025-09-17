@@ -43,16 +43,23 @@ def modify_catch_yaml_config(yaml_data, catch_config):
                 #         target_pos = catch_config['target_gripper_pos']
                 #         intermediate_pos = [(initial_pos[i] + target_pos[i]) / 2 for i in range(3)]
                 #         cost['reference'][:3] = intermediate_pos
-            
-            # Modify grasp stage
-            elif 'grasp' in stage_name and 'after' not in stage_name:
-                stage['duration'] = catch_config['grasp_time']
+                
+            # Modify pre_grasp stage
+            elif stage_name == 'pre_grasp':   # define pitch angle before grasp
                 # Update gripper target position and orientation
                 for cost in stage.get('costs', []):
                     if cost.get('name') == 'translation_ee':
                         cost['position'] = catch_config['target_gripper_pos']   
                     if cost.get('name') == 'rotation_ee':
                         cost['orientation'] = catch_config['target_gripper_orient']
+            
+            # Modify grasp stage
+            elif stage_name == 'grasp':  # constrain position and velocity of the gripper
+                stage['duration'] = catch_config['grasp_time']
+                # Update gripper target position and orientation
+                for cost in stage.get('costs', []):
+                    if cost.get('name') == 'translation_ee':
+                        cost['position'] = catch_config['target_gripper_pos']
             
             # Modify move_away or post-grasp stage
             elif 'move_away' in stage_name:
