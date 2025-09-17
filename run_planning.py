@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2025-02-24 10:31:39
-LastEditTime: 2025-09-16 21:15:12
+LastEditTime: 2025-09-17 15:22:26
 Description: Run planning to generate planning results and save them to file
 Github: https://github.com/heleidsn
 '''
@@ -557,7 +557,7 @@ def main():
                       help='Grasp time duration (ms)')
     parser.add_argument('--catch-post-grasp-time', type=int, default=3000,
                       help='Post-grasp time duration (ms)')
-    parser.add_argument('--catch-gripper-pitch-angle', type=float, default=-10.0,
+    parser.add_argument('--catch-gripper-pitch-angle', type=float, default=0.0,
                       help='Gripper pitch angle for catch task (degrees)')
     
     args = parser.parse_args()

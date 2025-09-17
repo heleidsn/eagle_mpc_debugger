@@ -1,0 +1,50 @@
+trajectory:
+  robot:
+    name: "s500_uam"
+    urdf: "models/urdf/s500_uam_simple.urdf"
+    follow: "config/yaml/multicopter/s500.yaml"
+
+  initial_state: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+  stages:
+    - name: "navigation"
+      duration: 1000 #ms
+      transition: true
+      costs:
+        - name: "reg_state"
+          type: "ResidualModelState"
+          weight: 10
+          reference: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+          activation: "ActivationModelWeightedQuad"
+          weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+
+        - name: "reg_control"
+          type: "ResidualModelControl"
+          weight: 0
+          reference: [0, 0, 0, 0, 0, 0]
+          activation: "ActivationModelWeightedQuad"
+          weights: [0, 0, 0, 0, 1, 1]
+
+    # - name: "hover"
+    #   duration: 0 #ms
+    #   costs:
+    #     - name: "placement_base_link"
+    #       type: "ResidualModelFramePlacement"
+    #       weight: 100
+    #       link_name: "base_link"
+    #       position: [0, 0, 0]
+    #       orientation: [0, 0, 0, 1] # x,y,z,w
+
+    #     - name: "motion_base_link"
+    #       type: "ResidualModelFrameVelocity"
+    #       weight: 100
+    #       link_name: "base_link"
+    #       linear: [0, 0, 0]
+    #       angular: [0, 0, 0]
+
+    #     - name: "reg_control"
+    #       type: "ResidualModelControl"
+    #       weight: 5e-2
+    #       reference: [0, 0, 0, 0, 0, 0]
+    #       activation: "ActivationModelWeightedQuad"
+    #       weights: [1, 1, 1, 1, 1, 1]

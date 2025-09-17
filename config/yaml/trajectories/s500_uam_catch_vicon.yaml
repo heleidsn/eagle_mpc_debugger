@@ -18,8 +18,8 @@ trajectory:
       costs:
         - name: "state_reg"
           type: "ResidualModelState"
-          weight: 1
-          reference: [0, 0, 1.2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+          weight: 10
+          reference: [0, 0, 1.5, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
           activation: "ActivationModelWeightedQuad"
           weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 
@@ -43,8 +43,8 @@ trajectory:
       costs:
         - name: "state_quadrotor"
           type: "ResidualModelState"
-          weight: 1
-          reference: [0, 0, 1.2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]  # note the reference attitude using quaternion
+          weight: 0
+          reference: [0, 0, 1.4, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]  # note the reference attitude using quaternion
           activation: "ActivationModelWeightedQuad"
           weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 
@@ -54,6 +54,20 @@ trajectory:
           reference: [5, 5, 5, 5, 0, 0]
           activation: "ActivationModelWeightedQuad"
           weights: [1, 1, 1, 1, 10, 10]
+
+        # Position of the gripper
+        - name: "translation_ee"
+          type: "ResidualModelFrameTranslation"
+          weight: 1000
+          link_name: "gripper_link"
+          position: [0, 0, 0.82]
+
+        # Rotation of the gripper
+        - name: "rotation_ee"
+          type: "ResidualModelFrameRotation"
+          weight: 1000
+          link_name: "gripper_link"
+          orientation: [0, 0, 0, 1]
 
     - name: "grasp"
       duration: 500 #ms
@@ -85,7 +99,7 @@ trajectory:
           type: "ResidualModelFrameTranslation"
           weight: 1000
           link_name: "gripper_link"
-          position: [0.12, 0, 0.83]
+          position: [0.0, 0, 0.83]
 
         - name: "motion_ee"
           type: "ResidualModelFrameVelocity"
@@ -103,9 +117,9 @@ trajectory:
         - name: "state_reg"
           type: "ResidualModelState"
           weight: 1
-          reference: [0, 0, 1.5, 0, 0, 0, 1, -1.2, -0.6, 1, 0, 0, 0, 0, 0, 0, 0]
+          reference: [0, 0, 1.5, 0, 0, 0, 1, -0, -0.6, 1, 0, 0, 0, 0, 0, 0, 0]
           activation: "ActivationModelWeightedQuad"
-          weights: [1, 1, 1, 1, 1, 1, 10, 10, 1, 1, 1, 1, 1, 1, 10, 10]
+          weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 
         - name: "state_limits"
           type: "ResidualModelState"
@@ -136,8 +150,8 @@ trajectory:
       costs:
         - name: "state_all"
           type: "ResidualModelState"
-          weight: 1000
-          reference: [1.5, 0, 1.5, 0, 0, 0, 1, -1.2, -0.6, 0, 0, 0, 0, 0, 0, 0, 0]
+          weight: 2000
+          reference: [1.5, 0, 1.5, 0, 0, 0, 1, 0, -0.6, 0, 0, 0, 0, 0, 0, 0, 0]
           activation: "ActivationModelWeightedQuad"
           weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 
@@ -164,9 +178,9 @@ trajectory:
 
         - name: "reg_control"
           type: "ResidualModelControl"
-          weight: 0.1
+          weight: 0
           reference: [5, 5, 5, 5, 0, 0]
           activation: "ActivationModelWeightedQuad"
-          weights: [1, 1, 1, 1, 100, 100]
+          weights: [1, 1, 1, 1, 1, 1]
 
       

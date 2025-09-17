@@ -74,7 +74,7 @@ class TrajectoryPublisher:
 
         self.control_mode = rospy.get_param('~control_mode', 'MPC')  # MPC, Geometric, PX4, MPC_L1
         self.arm_enabled = rospy.get_param('~arm_enabled', True)
-        self.arm_control_mode = rospy.get_param('~arm_control_mode', 'effort')  # position, velocity, position_velocity, position_velocity_effort, effort
+        self.arm_control_mode = rospy.get_param('~arm_control_mode', 'position')  # position, velocity, position_velocity, position_velocity_effort, effort
         
         # Set the parameters according to the environment
         if self.env_info['is_jetson']:
@@ -82,6 +82,7 @@ class TrajectoryPublisher:
             self.control_rate = rospy.get_param('~control_rate', 50.0)
             self.odom_source = rospy.get_param('~odom_source', 'mavros')
             self.use_simulation = rospy.get_param('~use_simulation', False)
+            self.platform_name = 'jetson'
             
             rospy.logwarn("Jetson detected - forcing use_simulation to False")
         else:
@@ -89,6 +90,7 @@ class TrajectoryPublisher:
             self.control_rate = rospy.get_param('~control_rate', 50.0)
             self.odom_source = rospy.get_param('~odom_source', 'gazebo')
             self.use_simulation = rospy.get_param('~use_simulation', True)
+            self.platform_name = 'pc'
             
             rospy.logwarn("PC detected - forcing use_simulation to True")
         
@@ -103,10 +105,10 @@ class TrajectoryPublisher:
         self.publish_reference_trajectory_enabled = rospy.get_param('~publish_reference_trajectory', False)
         
         # Control limits for controller
-        self.max_thrust = rospy.get_param('~max_thrust', 8.0664 * 4)
+        self.max_thrust = rospy.get_param('~max_thrust', 7.43 * 4)
         self.max_angular_velocity = rospy.get_param('~max_angular_velocity', math.radians(120))  # rad/s
         self.min_thrust_cmd = rospy.get_param('~min_thrust_cmd', 0.0)  # Minimum thrust command pass to px4
-        self.max_thrust_cmd = rospy.get_param('~max_thrust_cmd', 0.99)  # Maximum thrust command pass to px4
+        self.max_thrust_cmd = rospy.get_param('~max_thrust_cmd', 0.9)  # Maximum thrust command pass to px4
         
         # for L1 controller
         self.l1_version = rospy.get_param('~l1_version', 'v2')  # v1, v2, v3
@@ -277,6 +279,32 @@ class TrajectoryPublisher:
         self.l1_times = deque(maxlen=100)   # Store last 100 L1 computation times
         self.mpc_avg_time = 0.0
         self.l1_avg_time = 0.0
+        
+        # Data recording variables
+        self.recording_enabled = False
+        self.recording_start_time = None
+        self.trajectory_end_time = None
+        self.recording_stop_delay = 2.0  # Stop recording 2 seconds after trajectory ends
+        self.recorded_data = {
+            'time': [],
+            'position': [],
+            'velocity': [],
+            'angular_velocity': [],
+            'orientation': [],
+            'arm_joint_positions': [],
+            'arm_joint_velocities': [],
+            'mpc_control_ft': [],
+            'l1_control_ad': [],
+            'l1_control_tracking': [],
+            'reference_position': [],
+            'reference_velocity': [],
+            'reference_orientation': [],
+            'reference_arm_positions': [],
+            'mpc_solve_time': [],
+            'mpc_cost': [],
+            'gripper_position': [],
+            'trajectory_index': []
+        }
         
         # --------------------------------------timer--------------------------------------
         # Timer 1: for publishing trajectory
@@ -628,6 +656,12 @@ class TrajectoryPublisher:
                 self.traj_finished = True
                 self.trajectory_started_last = False
                 self.traj_ref_index = len(self.traj_state_ref)-1
+                
+                # Record trajectory end time for data recording
+                if self.trajectory_end_time is None:
+                    self.trajectory_end_time = rospy.Time.now()
+                    rospy.loginfo("Trajectory finished - will stop recording in 2 seconds")
+                
                 rospy.loginfo("Trajectory finished")
                 
             rospy.loginfo(f"Trajectory index: {self.traj_ref_index}/ {len(self.traj_state_ref)}")
@@ -779,6 +813,9 @@ class TrajectoryPublisher:
         if self.publish_wholebody_state_enabled:
             self.publish_wholebody_state_target()
             self.publish_wholebody_state_current()
+            
+        # Handle data recording
+        self.handle_data_recording()
 
     def get_mpc_command(self):
         """Get MPC control command."""
@@ -1278,22 +1315,9 @@ class TrajectoryPublisher:
             dt = 1 / self.control_rate
             rate_ad = pin.aba(model, data, q, v, u_ad)
             
-            # Calculate angular velocity with limits
-            self.roll_rate_ref = np.clip(
-                self.roll_rate_ref_next_step + rate_ad[3] * dt,
-                -self.max_angular_velocity,
-                self.max_angular_velocity
-            )
-            self.pitch_rate_ref = np.clip(
-                self.pitch_rate_ref_next_step + rate_ad[4] * dt,
-                -self.max_angular_velocity,
-                self.max_angular_velocity
-            )
-            self.yaw_rate_ref = np.clip(
-                self.yaw_rate_ref_next_step + rate_ad[5] * dt,
-                -self.max_angular_velocity,
-                self.max_angular_velocity
-            )
+            self.roll_rate_ref = self.roll_rate_ref_next_step + rate_ad[3] * dt
+            self.pitch_rate_ref = self.pitch_rate_ref_next_step + rate_ad[4] * dt
+            self.yaw_rate_ref = self.yaw_rate_ref_next_step + rate_ad[5] * dt
         else:
             assert False, f"Invalid method: {self.l1_control_method}"
         
@@ -1305,6 +1329,11 @@ class TrajectoryPublisher:
         
         # 设置 type_mask，忽略姿态，仅使用角速度 + 推力
         att_msg.type_mask = AttitudeTarget.IGNORE_ATTITUDE 
+        
+        # add limit to body rate
+        self.roll_rate_ref = np.clip(self.roll_rate_ref, -self.max_angular_velocity, self.max_angular_velocity)
+        self.pitch_rate_ref = np.clip(self.pitch_rate_ref, -self.max_angular_velocity, self.max_angular_velocity)
+        self.yaw_rate_ref = np.clip(self.yaw_rate_ref, -self.max_angular_velocity, self.max_angular_velocity)
         
         # 机体系角速度 (rad/s)
         att_msg.body_rate = Vector3(self.roll_rate_ref, self.pitch_rate_ref, self.yaw_rate_ref)
@@ -1663,6 +1692,9 @@ class TrajectoryPublisher:
         # Set the grasp start time
         self.grasp_start_time = self.controller_start_time + self.grasp_time
         
+        # Initialize data recording
+        self.start_data_recording()
+        
         return TriggerResponse(success=True, message="Trajectory started")
 
     def publish_wholebody_state_target(self):
@@ -1948,6 +1980,155 @@ class TrajectoryPublisher:
             'architecture': platform.machine(),
             'platform': platform.platform()
         }
+    
+    def start_data_recording(self):
+        """Initialize data recording when trajectory starts"""
+        rospy.loginfo("Starting data recording...")
+        self.recording_enabled = True
+        self.recording_start_time = rospy.Time.now()
+        self.trajectory_end_time = None
+        
+        # Clear previous recorded data
+        for key in self.recorded_data.keys():
+            self.recorded_data[key] = []
+            
+    def stop_data_recording(self):
+        """Stop data recording and save data"""
+        if not self.recording_enabled:
+            return
+            
+        rospy.loginfo("Stopping data recording and saving data...")
+        self.recording_enabled = False
+        
+        # Save data to file
+        self.save_recorded_data()
+        
+    def handle_data_recording(self):
+        """Handle data recording logic in main control loop"""
+        # Check if we should stop recording (2 seconds after trajectory ends)
+        if (self.recording_enabled and 
+            self.trajectory_end_time is not None and 
+            (rospy.Time.now() - self.trajectory_end_time).to_sec() >= self.recording_stop_delay):
+            self.stop_data_recording()
+            return
+            
+        # Record data if recording is enabled
+        if self.recording_enabled:
+            self.record_current_data()
+            
+    def record_current_data(self):
+        """Record current state and control data"""
+        current_time = rospy.Time.now()
+        time_since_start = (current_time - self.recording_start_time).to_sec()
+        
+        # Get current reference state
+        ref_state = self.traj_state_ref[self.traj_ref_index]
+        nq = self.mpc_controller.robot_model.nq
+        
+        # Record time
+        self.recorded_data['time'].append(time_since_start)
+        
+        # Record current state
+        self.recorded_data['position'].append(self.state[0:3].copy())
+        self.recorded_data['velocity'].append(self.state[nq:nq+3].copy())
+        self.recorded_data['angular_velocity'].append(self.state[nq+3:nq+6].copy())
+        self.recorded_data['orientation'].append(self.state[3:7].copy())  # quaternion
+        
+        # Record arm joint states
+        if self.arm_enabled:
+            self.recorded_data['arm_joint_positions'].append(self.state[7:7+self.arm_joint_number].copy())
+            self.recorded_data['arm_joint_velocities'].append(self.state[-self.arm_joint_number:].copy())
+        else:
+            self.recorded_data['arm_joint_positions'].append([0.0, 0.0])
+            self.recorded_data['arm_joint_velocities'].append([0.0, 0.0])
+            
+        # Record control commands
+        if hasattr(self, 'mpc_control_command_ft'):
+            self.recorded_data['mpc_control_ft'].append(self.mpc_control_command_ft.copy())
+        else:
+            self.recorded_data['mpc_control_ft'].append(np.zeros(6))
+            
+        if hasattr(self, 'l1_controller') and self.l1_controller is not None:
+            self.recorded_data['l1_control_ad'].append(self.l1_controller.u_ad.copy())
+            self.recorded_data['l1_control_tracking'].append(self.l1_controller.u_tracking.copy())
+        else:
+            self.recorded_data['l1_control_ad'].append(np.zeros(6))
+            self.recorded_data['l1_control_tracking'].append(np.zeros(6))
+            
+        # Record reference states
+        self.recorded_data['reference_position'].append(ref_state[0:3].copy())
+        self.recorded_data['reference_velocity'].append(ref_state[nq:nq+3].copy())
+        self.recorded_data['reference_orientation'].append(ref_state[3:7].copy())
+        if self.arm_enabled:
+            self.recorded_data['reference_arm_positions'].append(ref_state[7:7+self.arm_joint_number].copy())
+        else:
+            self.recorded_data['reference_arm_positions'].append([0.0, 0.0])
+            
+        # Record MPC performance data
+        self.recorded_data['mpc_solve_time'].append(self.solving_time)
+        self.recorded_data['mpc_cost'].append(self.mpc_final_cost)
+        
+        # Record gripper position
+        if hasattr(self, 'gripper_position_cmd'):
+            self.recorded_data['gripper_position'].append(self.gripper_position_cmd)
+        else:
+            self.recorded_data['gripper_position'].append(0.0)
+            
+        # Record trajectory index
+        self.recorded_data['trajectory_index'].append(self.traj_ref_index)
+        
+    def save_recorded_data(self):
+        """Save recorded data to numpy file"""
+        if not self.recorded_data['time']:
+            rospy.logwarn("No data to save!")
+            return
+            
+        # Create catch_test directory if it doesn't exist
+        catch_test_dir = os.path.join(os.path.dirname(__file__), 'results', 'catch_test')
+        if not os.path.exists(catch_test_dir):
+            os.makedirs(catch_test_dir)
+            
+        # Generate timestamp and experiment folder name
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        if self.enable_l1_control:
+            control_mode = 'l1'
+        else:
+            control_mode = 'mpc'
+        experiment_folder_name = f"{timestamp}_{self.robot_name}_{self.platform_name}_{control_mode}_{self.arm_control_mode}"
+        experiment_dir = os.path.join(catch_test_dir, experiment_folder_name)
+        
+        # Create experiment directory
+        if not os.path.exists(experiment_dir):
+            os.makedirs(experiment_dir)
+            
+        # Generate filename
+        filename = f"{self.robot_name}_{self.trajectory_name}_trajectory_data.npz"
+        filepath = os.path.join(experiment_dir, filename)
+        
+        # Convert lists to numpy arrays
+        save_data = {}
+        for key, values in self.recorded_data.items():
+            if values:  # Check if list is not empty
+                save_data[key] = np.array(values)
+            else:
+                save_data[key] = np.array([])
+                
+        # Add metadata
+        save_data['metadata'] = {
+            'robot_name': self.robot_name,
+            'trajectory_name': self.trajectory_name,
+            'control_rate': self.control_rate,
+            'recording_duration': save_data['time'][-1] if len(save_data['time']) > 0 else 0,
+            'num_samples': len(save_data['time']),
+            'dt_traj_opt': self.dt_traj_opt,
+            'control_mode': self.control_mode,
+            'arm_enabled': self.arm_enabled
+        }
+        
+        # Save to file
+        np.savez_compressed(filepath, **save_data)
+        rospy.loginfo(f"Data saved to: {filepath}")
+        
 
 if __name__ == '__main__':
     try:
