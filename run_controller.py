@@ -289,7 +289,7 @@ class TrajectoryPublisher:
         self.recording_enabled = False
         self.recording_start_time = None
         self.trajectory_end_time = None
-        self.recording_stop_delay = 2.0  # Stop recording 2 seconds after trajectory ends
+        self.recording_stop_delay = 3.0  # Stop recording 2 seconds after trajectory ends
         self.recorded_data = {
             'time': [],
             'position': [],
@@ -301,6 +301,8 @@ class TrajectoryPublisher:
             'mpc_control_ft': [],
             'l1_control_ad': [],
             'l1_control_tracking': [],
+            'l1_sig_hat': [],
+            'l1_solve_time': [],
             'reference_position': [],
             'reference_velocity': [],
             'reference_orientation': [],
@@ -308,7 +310,15 @@ class TrajectoryPublisher:
             'mpc_solve_time': [],
             'mpc_cost': [],
             'gripper_position': [],
-            'trajectory_index': []
+            'gripper_pitch': [],
+            'ref_gripper_pitch': [],
+            'gripper_tracking_error': [],
+            'ref_gripper_position': [],
+            'trajectory_index': [],
+            # Final control commands
+            'body_rate_commands': [],
+            'thrust_command': [],
+            'arm_joint_commands': []
         }
         
         # --------------------------------------timer--------------------------------------
@@ -349,6 +359,7 @@ class TrajectoryPublisher:
         
         # Add debugging statistics
         self.solve_times = deque(maxlen=100)  # Store last 100 solve times
+        self.l1_solve_time = 0.0  # L1 controller solve time
         self.timeout_count = 0  # Count of timeouts
         self.error_count = 0  # Count of solver errors
         self.last_solve_status = None  # Last solver status
@@ -696,6 +707,14 @@ class TrajectoryPublisher:
             if self.traj_finished:
                 vel_world = np.zeros(3)
                 acc_world = np.zeros(3)
+            
+            # Record control commands (for PX4/Geometric modes, record zeros as these are high-level commands)
+            if self.recording_enabled:
+                self.recorded_data['body_rate_commands'].append([0.0, 0.0, 0.0])  # High-level control, no direct body rate
+                self.recorded_data['thrust_command'].append(0.0)  # High-level control, no direct thrust
+                # Record arm joint commands (zeros for high-level control modes)
+                if self.arm_enabled:
+                    self.recorded_data['arm_joint_commands'].append([0.0, 0.0])
             
             # Publish control command
             if self.control_mode == 'PX4':
@@ -1098,6 +1117,9 @@ class TrajectoryPublisher:
         self.l1_controller.update_u_ad()
         t6 = time.time()
         
+        # Record L1 solve time
+        self.l1_solve_time = t6 - t1
+        
         
         # resume gazebo simulation
         # if self.use_simulation:
@@ -1250,6 +1272,32 @@ class TrajectoryPublisher:
         joint_msg.effort[1] = np.clip(joint_msg.effort[1], -effort_limit, effort_limit)
         
         self.arm_control_pub.publish(joint_msg)
+        
+        # Record arm joint commands
+        if self.recording_enabled:
+            if self.arm_control_mode == 'position':
+                arm_commands = [joint_msg.position[0], joint_msg.position[1]]
+            elif self.arm_control_mode == 'velocity':
+                arm_commands = [joint_msg.velocity[0], joint_msg.velocity[1]]
+            elif self.arm_control_mode == 'effort':
+                if self.px4_state.mode == "OFFBOARD":
+                    arm_commands = [torque_in_Nm[0], torque_in_Nm[1]]
+                else:
+                    # calculate effort using PD controller
+                    error = self.traj_state_ref[0][7:9] - self.state[7:9]
+                    velocity = self.state[-2:]
+                    
+                    # PD controller gains for joint1 and joint2
+                    kp = np.array([10.0, 4.0])  # Proportional gains
+                    kd = np.array([0.05, 0.01])    # Derivative gains
+                    
+                    # create PD controller for arm: effort = Kp * error - Kd * velocity
+                    effort = kp * error - kd * velocity
+                    arm_commands = [effort[0], effort[1]]
+            else:
+                arm_commands = [0.0, 0.0]
+            
+            self.recorded_data['arm_joint_commands'].append(arm_commands)
              
         if self.use_simulation:
             # Control arm joints
@@ -1348,6 +1396,11 @@ class TrajectoryPublisher:
         
         # 对推力进行限幅
         att_msg.thrust = np.clip(att_msg.thrust, self.min_thrust_cmd, self.max_thrust_cmd)
+
+        # Record final control commands
+        if self.recording_enabled:
+            self.recorded_data['body_rate_commands'].append([self.roll_rate_ref, self.pitch_rate_ref, self.yaw_rate_ref])
+            self.recorded_data['thrust_command'].append(att_msg.thrust)
 
         self.body_rate_thrust_pub.publish(att_msg)
             
@@ -2056,9 +2109,13 @@ class TrajectoryPublisher:
         if hasattr(self, 'l1_controller') and self.l1_controller is not None:
             self.recorded_data['l1_control_ad'].append(self.l1_controller.u_ad.copy())
             self.recorded_data['l1_control_tracking'].append(self.l1_controller.u_tracking.copy())
+            self.recorded_data['l1_sig_hat'].append(self.l1_controller.sig_hat.copy())
+            self.recorded_data['l1_solve_time'].append(self.l1_solve_time)
         else:
             self.recorded_data['l1_control_ad'].append(np.zeros(6))
             self.recorded_data['l1_control_tracking'].append(np.zeros(6))
+            self.recorded_data['l1_sig_hat'].append(np.zeros(12))  # Assuming 12-dim state
+            self.recorded_data['l1_solve_time'].append(0.0)
             
         # Record reference states
         self.recorded_data['reference_position'].append(ref_state[0:3].copy())
@@ -2073,11 +2130,53 @@ class TrajectoryPublisher:
         self.recorded_data['mpc_solve_time'].append(self.solving_time)
         self.recorded_data['mpc_cost'].append(self.mpc_final_cost)
         
-        # Record gripper position
-        if hasattr(self, 'gripper_position_cmd'):
-            self.recorded_data['gripper_position'].append(self.gripper_position_cmd)
-        else:
-            self.recorded_data['gripper_position'].append(0.0)
+        # Record gripper position, pitch angle and tracking error
+        gripper_position = [0.0, 0.0, 0.0]  # Default 3D position
+        gripper_pitch = 0.0  # Default pitch angle in radians
+        ref_gripper_pitch = 0.0  # Default reference pitch angle in radians
+        gripper_tracking_error = 0.0
+        ref_gripper_position = [0.0, 0.0, 0.0]  # Default reference position
+        
+        if self.arm_enabled:
+            try:
+                # Calculate gripper position and orientation using forward kinematics
+                model = self.trajectory_obj.robot_model
+                data = model.createData()
+                pin.forwardKinematics(model, data, self.state[:model.nq])
+                pin.updateFramePlacements(model, data)
+                
+                gripper_frame_id = model.getFrameId("gripper_link")
+                if gripper_frame_id < model.nframes:
+                    gripper_pose = data.oMf[gripper_frame_id]
+                    
+                    # Convert quaternion to Euler angles (roll, pitch, yaw)
+                    gripper_euler = pin.rpy.matrixToRpy(gripper_pose.rotation)
+                    gripper_pitch = gripper_euler[1]  # Extract pitch angle (index 1)
+                    gripper_position = gripper_pose.translation.tolist()
+                    
+                    # Calculate gripper tracking error (position error)
+                    if self.traj_ref_index < len(self.traj_state_ref):
+                        # Get reference gripper position and orientation from reference trajectory
+                        ref_data = model.createData()
+                        pin.forwardKinematics(model, ref_data, self.traj_state_ref[self.traj_ref_index][:model.nq])
+                        pin.updateFramePlacements(model, ref_data)
+                        ref_gripper_pose = ref_data.oMf[gripper_frame_id]
+                        ref_gripper_position = ref_gripper_pose.translation.tolist()
+                        
+                        # Extract reference pitch angle
+                        ref_gripper_euler = pin.rpy.matrixToRpy(ref_gripper_pose.rotation)
+                        ref_gripper_pitch = ref_gripper_euler[1]  # Extract pitch angle (index 1)
+                        
+                        # Calculate position error
+                        gripper_tracking_error = np.linalg.norm(np.array(gripper_position) - np.array(ref_gripper_position))
+            except Exception as e:
+                rospy.logwarn(f"Failed to calculate gripper position/orientation/error: {e}")
+        
+        self.recorded_data['gripper_position'].append(gripper_position)
+        self.recorded_data['gripper_pitch'].append(gripper_pitch)
+        self.recorded_data['ref_gripper_pitch'].append(ref_gripper_pitch)
+        self.recorded_data['gripper_tracking_error'].append(gripper_tracking_error)
+        self.recorded_data['ref_gripper_position'].append(ref_gripper_position)
             
         # Record trajectory index
         self.recorded_data['trajectory_index'].append(self.traj_ref_index)
@@ -2099,7 +2198,7 @@ class TrajectoryPublisher:
             control_mode = 'l1'
         else:
             control_mode = 'mpc'
-        experiment_folder_name = f"{timestamp}_{self.robot_name}_{self.platform_name}_{control_mode}_{self.arm_control_mode}"
+        experiment_folder_name = f"{timestamp}_{self.arm_control_mode}_{control_mode}"
         experiment_dir = os.path.join(catch_test_dir, experiment_folder_name)
         
         # Create experiment directory
