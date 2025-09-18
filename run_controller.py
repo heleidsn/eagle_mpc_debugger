@@ -47,6 +47,7 @@ from eagle_mpc_viz import WholeBodyStatePublisher
 from eagle_mpc_viz import WholeBodyTrajectoryPublisher
 
 from collections import deque
+from plot_trajectory_data import TrajectoryDataPlotter
 
 
 class TrajectoryPublisher:
@@ -247,6 +248,10 @@ class TrajectoryPublisher:
         rospy.Service('open_gripper', Trigger, self.open_gripper_callback)
         rospy.Service('close_gripper', Trigger, self.close_gripper_callback)
         rospy.Service('reset_beer', Trigger, self.reset_beer_callback)
+        
+        # Data recording and plotting services
+        rospy.Service('save_recorded_data', Trigger, self.save_recorded_data_service)
+        rospy.Service('plot_trajectory_data', Trigger, self.plot_trajectory_data_service)
         
         # Wait for Gazebo services
         if self.use_simulation:
@@ -2001,7 +2006,7 @@ class TrajectoryPublisher:
         self.recording_enabled = False
         
         # Save data to file
-        self.save_recorded_data()
+        # self.save_recorded_data()
         
     def handle_data_recording(self):
         """Handle data recording logic in main control loop"""
@@ -2128,6 +2133,62 @@ class TrajectoryPublisher:
         # Save to file
         np.savez_compressed(filepath, **save_data)
         rospy.loginfo(f"Data saved to: {filepath}")
+        
+        # Store the latest saved file path for plotting service
+        self.latest_saved_file = filepath
+        
+    def save_recorded_data_service(self, req):
+        """Service callback to save recorded data"""
+        try:
+            if not self.recorded_data['time']:
+                return TriggerResponse(success=False, message="No data to save!")
+            
+            self.save_recorded_data()
+            return TriggerResponse(success=True, message=f"Data saved successfully to: {self.latest_saved_file}")
+        except Exception as e:
+            rospy.logerr(f"Failed to save data: {e}")
+            return TriggerResponse(success=False, message=f"Failed to save data: {e}")
+    
+    def plot_trajectory_data_service(self, req):
+        """Service callback to plot trajectory data"""
+        try:
+            # Check if we have a saved file to plot
+            if not hasattr(self, 'latest_saved_file') or not self.latest_saved_file:
+                # Try to find the most recent data file
+                catch_test_dir = os.path.join(os.path.dirname(__file__), 'results', 'catch_test')
+                if not os.path.exists(catch_test_dir):
+                    return TriggerResponse(success=False, message="No data directory found!")
+                
+                # Find the most recent experiment directory
+                experiment_dirs = [d for d in os.listdir(catch_test_dir) 
+                                 if os.path.isdir(os.path.join(catch_test_dir, d)) and d.startswith('202')]
+                if not experiment_dirs:
+                    return TriggerResponse(success=False, message="No experiment data found!")
+                
+                # Get the most recent directory
+                experiment_dirs.sort()
+                latest_dir = os.path.join(catch_test_dir, experiment_dirs[-1])
+                
+                # Find the data file in the directory
+                data_files = [f for f in os.listdir(latest_dir) if f.endswith('.npz')]
+                if not data_files:
+                    return TriggerResponse(success=False, message="No data file found in latest experiment!")
+                
+                self.latest_saved_file = os.path.join(latest_dir, data_files[0])
+            
+            # Check if file exists
+            if not os.path.exists(self.latest_saved_file):
+                return TriggerResponse(success=False, message=f"Data file not found: {self.latest_saved_file}")
+            
+            # Create plotter and process the file
+            plotter = TrajectoryDataPlotter()
+            plotter.process_single_file(self.latest_saved_file, show_plots=False, save_plots=True)
+            
+            return TriggerResponse(success=True, message=f"Plots generated successfully from: {self.latest_saved_file}")
+            
+        except Exception as e:
+            rospy.logerr(f"Failed to plot data: {e}")
+            return TriggerResponse(success=False, message=f"Failed to plot data: {e}")
         
 
 if __name__ == '__main__':

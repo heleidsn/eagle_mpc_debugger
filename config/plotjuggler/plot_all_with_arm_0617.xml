@@ -3,104 +3,104 @@
  <tabbed_widget name="Main Window" parent="main_window">
   <Tab tab_name="State tracking" containers="1">
    <Container>
-    <DockSplitter count="1" orientation="-" sizes="1">
-     <DockSplitter count="3" orientation="|" sizes="0.333235;0.33353;0.333235">
-      <DockSplitter count="4" orientation="-" sizes="0.25;0.25;0.25;0.25">
+    <DockSplitter orientation="-" count="1" sizes="1">
+     <DockSplitter orientation="|" count="3" sizes="0.333121;0.333758;0.333121">
+      <DockSplitter orientation="-" count="4" sizes="0.249874;0.250379;0.249874;0.249874">
        <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="119.640000" left="0.000000" top="1.634908" bottom="-2.592602"/>
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-1.501907" right="-606.199000" left="-636.198000" top="-1.448112"/>
          <limitY/>
-         <curve name="/mpc/state/state_ref[0]" color="#000000"/>
-         <curve name="/mpc/state/state[0]" color="#ff0004"/>
+         <curve color="#000000" name="/mpc/state/state_ref[0]"/>
+         <curve color="#ff0004" name="/mpc/state/state[0]"/>
         </plot>
        </DockArea>
        <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="119.640000" left="0.000000" top="0.012527" bottom="-0.009785"/>
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.006494" right="-606.199000" left="-636.198000" top="0.003729"/>
          <limitY/>
-         <curve name="/mpc/state/state_ref[3]" color="#000000"/>
-         <curve name="/mpc/state/state[3]" color="#d62728"/>
+         <curve color="#000000" name="/mpc/state/state_ref[3]"/>
+         <curve color="#d62728" name="/mpc/state/state[3]"/>
         </plot>
        </DockArea>
        <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="119.640000" left="0.000000" top="0.078666" bottom="-1.232729"/>
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-1.933597" right="-606.199000" left="-636.198000" top="-1.156371"/>
          <limitY/>
-         <curve name="/mpc/state/state_ref[6]" color="#17242d"/>
-         <curve name="/mpc/state/state[6]" color="#ff0007"/>
+         <curve color="#17242d" name="/mpc/state/state_ref[6]"/>
+         <curve color="#ff0007" name="/mpc/state/state[6]"/>
         </plot>
        </DockArea>
        <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="119.640000" left="0.000000" top="1.869577" bottom="-2.509975"/>
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-1.298347" right="-606.199000" left="-636.198000" top="-1.212743"/>
          <limitY/>
-         <curve name="/mpc/state/gripper_position[0]" color="#17becf"/>
-        </plot>
-       </DockArea>
-      </DockSplitter>
-      <DockSplitter count="4" orientation="-" sizes="0.25;0.25;0.25;0.25">
-       <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="119.640000" left="0.000000" top="0.016929" bottom="-0.019791"/>
-         <limitY/>
-         <curve name="/mpc/state/state_ref[1]" color="#000000"/>
-         <curve name="/mpc/state/state[1]" color="#ff0300"/>
-        </plot>
-       </DockArea>
-       <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="119.640000" left="0.000000" top="1.003117" bottom="-0.885118"/>
-         <limitY/>
-         <curve name="/mpc/state/state_ref[4]" color="#000000"/>
-         <curve name="/mpc/state/state[4]" color="#ff1700"/>
-        </plot>
-       </DockArea>
-       <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="119.640000" left="0.000000" top="0.068215" bottom="-0.617303"/>
-         <limitY/>
-         <curve name="/mpc/state/state_ref[7]" color="#000000"/>
-         <curve name="/mpc/state/state[7]" color="#ff1d00"/>
-        </plot>
-       </DockArea>
-       <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="119.640000" left="0.000000" top="0.015351" bottom="-0.019992"/>
-         <limitY/>
-         <curve name="/mpc/state/gripper_position[1]" color="#bcbd22"/>
+         <curve color="#17becf" name="/mpc/state/gripper_position[0]"/>
         </plot>
        </DockArea>
       </DockSplitter>
-      <DockSplitter count="4" orientation="-" sizes="0.25;0.25;0.25;0.25">
+      <DockSplitter orientation="-" count="4" sizes="0.249874;0.250379;0.249874;0.249874">
        <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="119.640000" left="0.000000" top="1.529653" bottom="0.287345"/>
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.000260" right="-606.199000" left="-636.198000" top="0.002952"/>
          <limitY/>
-         <curve name="/mpc/state/state_ref[2]" color="#060606"/>
-         <curve name="/mpc/state/state[2]" color="#ff0011"/>
+         <curve color="#000000" name="/mpc/state/state_ref[1]"/>
+         <curve color="#ff0300" name="/mpc/state/state[1]"/>
         </plot>
        </DockArea>
        <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="119.640000" left="0.000000" top="0.017047" bottom="-0.043143"/>
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.024076" right="-606.199000" left="-636.198000" top="0.041019"/>
          <limitY/>
-         <curve name="/mpc/state/state_ref[5]" color="#000000"/>
-         <curve name="/mpc/state/state[5]" color="#ff200e"/>
+         <curve color="#000000" name="/mpc/state/state_ref[4]"/>
+         <curve color="#ff1700" name="/mpc/state/state[4]"/>
         </plot>
        </DockArea>
        <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="119.640000" left="0.000000" top="5651.702331" bottom="-134.903939"/>
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.629213" right="-606.199000" left="-636.198000" top="-0.316138"/>
          <limitY/>
-         <curve name="/mpc/state/mpc_final_cost" color="#1f77b4"/>
-         <curve name="/mpc/state/mpc_start_cost" color="#d62728"/>
+         <curve color="#000000" name="/mpc/state/state_ref[7]"/>
+         <curve color="#ff1d00" name="/mpc/state/state[7]"/>
         </plot>
        </DockArea>
        <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="119.640000" left="0.000000" top="1.597206" bottom="0.233780"/>
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.000231" right="-606.199000" left="-636.198000" top="0.002499"/>
          <limitY/>
-         <curve name="/mpc/state/gripper_position[2]" color="#1f77b4"/>
+         <curve color="#bcbd22" name="/mpc/state/gripper_position[1]"/>
+        </plot>
+       </DockArea>
+      </DockSplitter>
+      <DockSplitter orientation="-" count="4" sizes="0.249874;0.250379;0.249874;0.249874">
+       <DockArea name="...">
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="0.341727" right="-606.199000" left="-636.198000" top="1.528251"/>
+         <limitY/>
+         <curve color="#060606" name="/mpc/state/state_ref[2]"/>
+         <curve color="#ff0011" name="/mpc/state/state[2]"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.002262" right="-606.199000" left="-636.198000" top="0.000954"/>
+         <limitY/>
+         <curve color="#000000" name="/mpc/state/state_ref[5]"/>
+         <curve color="#ff200e" name="/mpc/state/state[5]"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-8.025203" right="-606.199000" left="-636.198000" top="384.128036"/>
+         <limitY/>
+         <curve color="#1f77b4" name="/mpc/state/mpc_final_cost"/>
+         <curve color="#d62728" name="/mpc/state/mpc_start_cost"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="0.255564" right="-606.199000" left="-636.198000" top="1.462409"/>
+         <limitY/>
+         <curve color="#1f77b4" name="/mpc/state/gripper_position[2]"/>
         </plot>
        </DockArea>
       </DockSplitter>
@@ -110,98 +110,184 @@
   </Tab>
   <Tab tab_name="Velocity tracking" containers="1">
    <Container>
-    <DockSplitter count="1" orientation="-" sizes="1">
-     <DockSplitter count="3" orientation="|" sizes="0.333235;0.33353;0.333235">
-      <DockSplitter count="4" orientation="-" sizes="0.25;0.25;0.25;0.25">
+    <DockSplitter orientation="-" count="1" sizes="1">
+     <DockSplitter orientation="|" count="3" sizes="0.332968;0.334064;0.332968">
+      <DockSplitter orientation="-" count="4" sizes="0.249842;0.250473;0.249842;0.249842">
        <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="119.640000" left="0.000000" top="1.785394" bottom="-4.459491"/>
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.040999" right="-606.199000" left="-636.198000" top="0.108020"/>
          <limitY/>
-         <curve name="/mpc/state/state[8]" color="#d62728"/>
-         <curve name="/mpc/state/state_ref[8]" color="#000000"/>
+         <curve color="#d62728" name="/mpc/state/state[8]"/>
+         <curve color="#000000" name="/mpc/state/state_ref[8]"/>
         </plot>
        </DockArea>
        <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="119.640000" left="0.000000" top="0.057701" bottom="-0.100330"/>
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.025095" right="-606.199000" left="-636.198000" top="0.065302"/>
          <limitY/>
-         <curve name="/mpc/state/state[11]" color="#f14cc1"/>
-         <curve name="/mpc/state/state_ref[11]" color="#000000"/>
+         <curve color="#f14cc1" name="/mpc/state/state[11]"/>
+         <curve color="#000000" name="/mpc/state/state_ref[11]"/>
         </plot>
        </DockArea>
        <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="119.640000" left="0.000000" top="8.572862" bottom="-7.756391"/>
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-1.053129" right="-606.199000" left="-636.198000" top="1.441009"/>
          <limitY/>
-         <curve name="/mpc/state/state[14]" color="#bcbd22"/>
-         <curve name="/mpc/state/state_ref[14]" color="#000000"/>
+         <curve color="#bcbd22" name="/mpc/state/state[14]"/>
+         <curve color="#000000" name="/mpc/state/state_ref[14]"/>
         </plot>
        </DockArea>
        <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="1.000000" left="0.000000" top="1.000000" bottom="0.000000"/>
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.468478" right="-606.199000" left="-636.198000" top="0.011426"/>
          <limitY/>
-        </plot>
-       </DockArea>
-      </DockSplitter>
-      <DockSplitter count="4" orientation="-" sizes="0.25;0.25;0.25;0.25">
-       <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="119.640000" left="0.000000" top="0.018193" bottom="-0.019737"/>
-         <limitY/>
-         <curve name="/mpc/state/state[9]" color="#1ac938"/>
-         <curve name="/mpc/state/state_ref[9]" color="#000000"/>
-        </plot>
-       </DockArea>
-       <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="119.640000" left="0.000000" top="2.378770" bottom="-2.619867"/>
-         <limitY/>
-         <curve name="/mpc/state/state[12]" color="#9467bd"/>
-         <curve name="/mpc/state/state_ref[12]" color="#000000"/>
-        </plot>
-       </DockArea>
-       <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="119.640000" left="0.000000" top="17.482220" bottom="-17.686132"/>
-         <limitY/>
-         <curve name="/mpc/state/state[15]" color="#ff0000"/>
-         <curve name="/mpc/state/state_ref[15]" color="#000000"/>
-        </plot>
-       </DockArea>
-       <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="1.000000" left="0.000000" top="1.000000" bottom="0.000000"/>
-         <limitY/>
+         <curve color="#1f77b4" name="/mpc/state/u_ad[6]"/>
+         <curve color="#1ac938" name="/mpc/state/u_mpc[6]"/>
         </plot>
        </DockArea>
       </DockSplitter>
-      <DockSplitter count="4" orientation="-" sizes="0.25;0.25;0.25;0.25">
+      <DockSplitter orientation="-" count="4" sizes="0.249842;0.250473;0.249842;0.249842">
        <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="119.640000" left="0.000000" top="1.449211" bottom="-1.535980"/>
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.003312" right="-606.199000" left="-636.198000" top="0.007691"/>
          <limitY/>
-         <curve name="/mpc/state/state[10]" color="#ff7f0e"/>
-         <curve name="/mpc/state/state_ref[10]" color="#000000"/>
+         <curve color="#1ac938" name="/mpc/state/state[9]"/>
+         <curve color="#000000" name="/mpc/state/state_ref[9]"/>
         </plot>
        </DockArea>
        <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="119.640000" left="0.000000" top="0.049832" bottom="-0.060667"/>
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.385590" right="-606.199000" left="-636.198000" top="0.406942"/>
          <limitY/>
-         <curve name="/mpc/state/state[13]" color="#17becf"/>
-         <curve name="/mpc/state/state_ref[13]" color="#000000"/>
+         <curve color="#9467bd" name="/mpc/state/state[12]"/>
+         <curve color="#000000" name="/mpc/state/state_ref[12]"/>
         </plot>
        </DockArea>
        <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="1.000000" left="0.000000" top="1.000000" bottom="0.000000"/>
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.725882" right="-606.199000" left="-636.198000" top="0.232660"/>
          <limitY/>
+         <curve color="#ff0000" name="/mpc/state/state[15]"/>
+         <curve color="#000000" name="/mpc/state/state_ref[15]"/>
         </plot>
        </DockArea>
        <DockArea name="...">
-        <plot flip_x="false" mode="TimeSeries" flip_y="false" style="Lines">
-         <range right="1.000000" left="0.000000" top="1.000000" bottom="0.000000"/>
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.166509" right="-606.199000" left="-636.198000" top="0.004061"/>
+         <limitY/>
+         <curve color="#d62728" name="/mpc/state/u_ad[7]"/>
+         <curve color="#ff7f0e" name="/mpc/state/u_mpc[7]"/>
+        </plot>
+       </DockArea>
+      </DockSplitter>
+      <DockSplitter orientation="-" count="4" sizes="0.249842;0.250473;0.249842;0.249842">
+       <DockArea name="...">
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.031609" right="-606.199000" left="-636.198000" top="1.275036"/>
+         <limitY/>
+         <curve color="#ff7f0e" name="/mpc/state/state[10]"/>
+         <curve color="#000000" name="/mpc/state/state_ref[10]"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.009302" right="-606.199000" left="-636.198000" top="0.003154"/>
+         <limitY/>
+         <curve color="#17becf" name="/mpc/state/state[13]"/>
+         <curve color="#000000" name="/mpc/state/state_ref[13]"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.100000" right="-606.199000" left="-636.198000" top="0.100000"/>
+         <limitY/>
+         <curve color="#17becf" name="/mpc/state/sig_hat[14]"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.100000" right="-606.199000" left="-636.198000" top="0.100000"/>
+         <limitY/>
+         <curve color="#bcbd22" name="/mpc/state/sig_hat[15]"/>
+        </plot>
+       </DockArea>
+      </DockSplitter>
+     </DockSplitter>
+    </DockSplitter>
+   </Container>
+  </Tab>
+  <Tab tab_name="Control" containers="1">
+   <Container>
+    <DockSplitter orientation="-" count="1" sizes="1">
+     <DockSplitter orientation="|" count="3" sizes="0.333439;0.333121;0.333439">
+      <DockSplitter orientation="-" count="3" sizes="0.333502;0.332997;0.333502">
+       <DockArea name="...">
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.100000" right="-606.199000" left="-636.198000" top="0.100000"/>
+         <limitY/>
+         <curve color="#f14cc1" name="/mpc/state/u_ad[0]"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.100000" right="-606.199000" left="-636.198000" top="0.100000"/>
+         <limitY/>
+         <curve color="#9467bd" name="/mpc/state/u_ad[1]"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.925284" right="-606.199000" left="-636.198000" top="37.936625"/>
+         <limitY/>
+         <curve color="#17becf" name="/mpc/state/u_ad[2]"/>
+         <curve color="#ff7f0e" name="/mpc/state/u_mpc[2]"/>
+        </plot>
+       </DockArea>
+      </DockSplitter>
+      <DockSplitter orientation="-" count="3" sizes="0.333502;0.332997;0.333502">
+       <DockArea name="...">
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.012246" right="-606.199000" left="-636.198000" top="0.019039"/>
+         <limitY/>
+         <curve color="#bcbd22" name="/mpc/state/u_mpc[3]"/>
+         <curve color="#1f77b4" name="/mpc/state/u_ad[3]"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.563094" right="-606.199000" left="-636.198000" top="0.013734"/>
+         <limitY/>
+         <curve color="#d62728" name="/mpc/state/u_ad[4]"/>
+         <curve color="#f14cc1" name="/mpc/state/u_mpc[4]"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.009951" right="-606.199000" left="-636.198000" top="0.005475"/>
+         <limitY/>
+         <curve color="#1ac938" name="/mpc/state/u_mpc[5]"/>
+         <curve color="#9467bd" name="/mpc/state/u_ad[5]"/>
+        </plot>
+       </DockArea>
+      </DockSplitter>
+      <DockSplitter orientation="-" count="3" sizes="0.333502;0.332997;0.333502">
+       <DockArea name="...">
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.463429" right="-606.199000" left="-636.198000" top="-0.195555"/>
+         <limitY/>
+         <curve color="#1ac938" name="/mpc/state/u_mpc[6]"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-0.165164" right="-606.199000" left="-636.198000" top="-0.051089"/>
+         <limitY/>
+         <curve color="#ff7f0e" name="/mpc/state/u_mpc[7]"/>
+        </plot>
+       </DockArea>
+       <DockArea name="...">
+        <plot mode="TimeSeries" style="Lines" flip_y="false" flip_x="false">
+         <range bottom="-1.050000" right="1.000000" left="0.000000" top="1.050000"/>
          <limitY/>
         </plot>
        </DockArea>
@@ -210,7 +296,7 @@
     </DockSplitter>
    </Container>
   </Tab>
-  <currentTabIndex index="1"/>
+  <currentTabIndex index="2"/>
  </tabbed_widget>
  <use_relative_time_offset enabled="1"/>
  <!-- - - - - - - - - - - - - - - -->
@@ -235,7 +321,7 @@
    <max_array_size value="100"/>
    <boolean_strings_to_number value="true"/>
    <remove_suffix_from_strings value="true"/>
-   <selected_topics value="/arm_controller/gazebo_ros_control/pid_gains/joint_1/parameter_descriptions;/arm_controller/gazebo_ros_control/pid_gains/joint_1/parameter_updates;/arm_controller/gazebo_ros_control/pid_gains/joint_2/parameter_descriptions;/arm_controller/gazebo_ros_control/pid_gains/joint_2/parameter_updates;/arm_controller/gazebo_ros_control/pid_gains/joint_3/parameter_descriptions;/arm_controller/gazebo_ros_control/pid_gains/joint_3/parameter_updates;/arm_controller/gazebo_ros_control/pid_gains/joint_4/parameter_descriptions;/arm_controller/gazebo_ros_control/pid_gains/joint_4/parameter_updates;/arm_controller/joint_1_position_controller/command;/arm_controller/joint_2_position_controller/command;/arm_controller/joint_3_position_controller/command;/arm_controller/joint_4_position_controller/command;/arm_controller/joint_states;/clock;/desired_joint_states;/diagnostics;/gazebo/link_states;/gazebo/model_states;/gazebo/parameter_descriptions;/gazebo/parameter_updates;/gazebo/performance_metrics;/mavlink/from;/mavlink/gcs_ip;/mavros/adsb/vehicle;/mavros/altitude;/mavros/battery;/mavros/cam_imu_sync/cam_imu_stamp;/mavros/camera/image_captured;/mavros/debug_value/debug;/mavros/debug_value/debug_float_array;/mavros/debug_value/debug_vector;/mavros/debug_value/named_value_float;/mavros/debug_value/named_value_int;/mavros/esc_info;/mavros/esc_status;/mavros/esc_telemetry;/mavros/estimator_status;/mavros/extended_state;/mavros/geofence/waypoints;/mavros/global_position/compass_hdg;/mavros/global_position/global;/mavros/global_position/gp_lp_offset;/mavros/global_position/gp_origin;/mavros/global_position/local;/mavros/global_position/raw/fix;/mavros/global_position/raw/gps_vel;/mavros/global_position/raw/satellites;/mavros/global_position/rel_alt;/mavros/gps_rtk/rtk_baseline;/mavros/gpsstatus/gps1/raw;/mavros/gpsstatus/gps1/rtk;/mavros/gpsstatus/gps2/raw;/mavros/gpsstatus/gps2/rtk;/mavros/hil/actuator_controls;/mavros/hil/controls;/mavros/home_position/home;/mavros/imu/data;/mavros/imu/data_raw;/mavros/imu/diff_pressure;/mavros/imu/mag;/mavros/imu/static_pressure;/mavros/imu/temperature_baro;/mavros/imu/temperature_imu;/mavros/landing_target/lt_marker;/mavros/landing_target/pose_in;/mavros/local_position/accel;/mavros/local_position/odom;/mavros/local_position/pose;/mavros/local_position/pose_cov;/mavros/local_position/velocity_body;/mavros/local_position/velocity_body_cov;/mavros/local_position/velocity_local;/mavros/log_transfer/raw/log_data;/mavros/log_transfer/raw/log_entry;/mavros/mag_calibration/report;/mavros/mag_calibration/status;/mavros/manual_control/control;/mavros/mission/reached;/mavros/mission/waypoints;/mavros/mount_control/orientation;/mavros/mount_control/status;/mavros/nav_controller_output;/mavros/odometry/in;/mavros/param/param_value;/mavros/px4flow/ground_distance;/mavros/px4flow/raw/optical_flow_rad;/mavros/px4flow/temperature;/mavros/radio_status;/mavros/rallypoint/waypoints;/mavros/rc/in;/mavros/rc/out;/mavros/setpoint_raw/attitude;/mavros/setpoint_raw/local;/mavros/setpoint_raw/target_attitude;/mavros/setpoint_raw/target_global;/mavros/setpoint_raw/target_local;/mavros/setpoint_trajectory/desired;/mavros/state;/mavros/statustext/recv;/mavros/sys_status;/mavros/target_actuator_control;/mavros/terrain/report;/mavros/time_reference;/mavros/timesync_status;/mavros/trajectory/desired;/mavros/tunnel/out;/mavros/vfr_hud;/mavros/vision_pose/pose;/mavros/wind_estimation;/move_base_simple/goal;/mpc/state;/reference/flatsetpoint;/reference/pose;/reference/yaw;/rosout;/rosout_agg;/tf;/tf_static;/uav_path;/whole_body_partial_trajectory_current;/whole_body_state_current;/whole_body_state_target"/>
+   <selected_topics value="/arm_controller/gazebo_ros_control/pid_gains/joint_3/parameter_descriptions;/arm_controller/gazebo_ros_control/pid_gains/joint_3/parameter_updates;/arm_controller/gazebo_ros_control/pid_gains/joint_4/parameter_descriptions;/arm_controller/gazebo_ros_control/pid_gains/joint_4/parameter_updates;/arm_controller/joint_1_controller/command;/arm_controller/joint_2_controller/command;/arm_controller/joint_3_controller/command;/arm_controller/joint_4_controller/command;/arm_controller/joint_states;/clock;/desired_joint_states;/diagnostics;/gazebo/link_states;/gazebo/model_states;/gazebo/parameter_descriptions;/gazebo/parameter_updates;/gazebo/performance_metrics;/mavlink/from;/mavlink/gcs_ip;/mavros/adsb/vehicle;/mavros/altitude;/mavros/battery;/mavros/cam_imu_sync/cam_imu_stamp;/mavros/camera/image_captured;/mavros/debug_value/debug;/mavros/debug_value/debug_float_array;/mavros/debug_value/debug_vector;/mavros/debug_value/named_value_float;/mavros/debug_value/named_value_int;/mavros/esc_info;/mavros/esc_status;/mavros/esc_telemetry;/mavros/estimator_status;/mavros/extended_state;/mavros/geofence/waypoints;/mavros/global_position/compass_hdg;/mavros/global_position/global;/mavros/global_position/gp_lp_offset;/mavros/global_position/gp_origin;/mavros/global_position/local;/mavros/global_position/raw/fix;/mavros/global_position/raw/gps_vel;/mavros/global_position/raw/satellites;/mavros/global_position/rel_alt;/mavros/gps_rtk/rtk_baseline;/mavros/gpsstatus/gps1/raw;/mavros/gpsstatus/gps1/rtk;/mavros/gpsstatus/gps2/raw;/mavros/gpsstatus/gps2/rtk;/mavros/hil/actuator_controls;/mavros/hil/controls;/mavros/home_position/home;/mavros/imu/data;/mavros/imu/data_raw;/mavros/imu/diff_pressure;/mavros/imu/mag;/mavros/imu/static_pressure;/mavros/imu/temperature_baro;/mavros/imu/temperature_imu;/mavros/landing_target/lt_marker;/mavros/landing_target/pose_in;/mavros/local_position/accel;/mavros/local_position/odom;/mavros/local_position/pose;/mavros/local_position/pose_cov;/mavros/local_position/velocity_body;/mavros/local_position/velocity_body_cov;/mavros/local_position/velocity_local;/mavros/log_transfer/raw/log_data;/mavros/log_transfer/raw/log_entry;/mavros/mag_calibration/report;/mavros/mag_calibration/status;/mavros/manual_control/control;/mavros/mission/reached;/mavros/mission/waypoints;/mavros/mount_control/orientation;/mavros/mount_control/status;/mavros/nav_controller_output;/mavros/odometry/in;/mavros/param/param_value;/mavros/px4flow/ground_distance;/mavros/px4flow/raw/optical_flow_rad;/mavros/px4flow/temperature;/mavros/radio_status;/mavros/rallypoint/waypoints;/mavros/rc/in;/mavros/rc/out;/mavros/setpoint_raw/attitude;/mavros/setpoint_raw/local;/mavros/setpoint_raw/target_attitude;/mavros/setpoint_raw/target_global;/mavros/setpoint_raw/target_local;/mavros/setpoint_trajectory/desired;/mavros/state;/mavros/statustext/recv;/mavros/sys_status;/mavros/target_actuator_control;/mavros/terrain/report;/mavros/time_reference;/mavros/timesync_status;/mavros/trajectory/desired;/mavros/tunnel/out;/mavros/vfr_hud;/mavros/vision_pose/pose;/mavros/wind_estimation;/move_base_simple/goal;/mpc/l1_avg_timing;/mpc/l1_timing;/mpc/mpc_avg_timing;/mpc/mpc_timing;/mpc/predicted_controls;/mpc/predicted_states;/mpc/state;/mpc/timing_stats;/reference/pose;/reference/yaw;/rosout;/rosout_agg;/tf;/tf_static;/uav_path;/whole_body_partial_trajectory_current;/whole_body_planned_trajectory;/whole_body_reference_trajectory;/whole_body_state_current;/whole_body_state_target"/>
   </plugin>
   <plugin ID="UDP Server"/>
   <plugin ID="WebSocket Server"/>
@@ -252,6 +338,7 @@
  </Plugins>
  <!-- - - - - - - - - - - - - - - -->
  <previouslyLoaded_Datafiles/>
+ <previouslyLoaded_Streamer name="ROS Topic Subscriber"/>
  <!-- - - - - - - - - - - - - - - -->
  <customMathEquations>
   <snippet name="u_total">

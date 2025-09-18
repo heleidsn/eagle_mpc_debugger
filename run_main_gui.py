@@ -269,6 +269,8 @@ class ROSServiceHandler:
             self.services['start_l1_control'] = rospy.ServiceProxy('/start_l1_control', Trigger)
             self.services['stop_l1_control'] = rospy.ServiceProxy('/stop_l1_control', Trigger)
             self.services['start_arm_test'] = rospy.ServiceProxy('/start_arm_test', Trigger)
+            self.services['save_recorded_data'] = rospy.ServiceProxy('/save_recorded_data', Trigger)
+            self.services['plot_trajectory_data'] = rospy.ServiceProxy('/plot_trajectory_data', Trigger)
         except rospy.ServiceException as e:
             rospy.logerr(f"Failed to initialize services: {str(e)}")
             
@@ -919,6 +921,15 @@ class EagleMPCDebuggerGUI(QMainWindow):
         self.stop_l1_control_btn.clicked.connect(self.stop_l1_control)
         service_layout.addWidget(self.stop_l1_control_btn)
         
+        # Add data recording and plotting buttons
+        self.save_data_btn = QPushButton("Save Recorded Data")
+        self.save_data_btn.clicked.connect(self.save_recorded_data)
+        service_layout.addWidget(self.save_data_btn)
+        
+        self.plot_data_btn = QPushButton("Plot Trajectory Data")
+        self.plot_data_btn.clicked.connect(self.plot_trajectory_data)
+        service_layout.addWidget(self.plot_data_btn)
+        
         service_group.setLayout(service_layout)
         
         layout.addWidget(simulation_group)
@@ -1239,6 +1250,22 @@ class EagleMPCDebuggerGUI(QMainWindow):
             self.log_message("L1 control stopped")
         else:
             self.log_message(f"Failed to stop L1 control: {message}")
+    
+    def save_recorded_data(self):
+        """Save recorded trajectory data"""
+        success, message = self.service_handler.call_service('save_recorded_data')
+        if success:
+            self.log_message(f"Data saved successfully: {message}")
+        else:
+            self.log_message(f"Failed to save data: {message}")
+    
+    def plot_trajectory_data(self):
+        """Plot trajectory data"""
+        success, message = self.service_handler.call_service('plot_trajectory_data')
+        if success:
+            self.log_message(f"Plots generated successfully: {message}")
+        else:
+            self.log_message(f"Failed to generate plots: {message}")
             
     def mpc_state_callback(self, msg):
         """Callback for MPC state messages"""

@@ -1,7 +1,7 @@
 '''
 Author: Lei He
 Date: 2024-09-07 17:26:46
-LastEditTime: 2025-09-09 11:15:23
+LastEditTime: 2025-09-18 10:07:25
 Description: L1 adaptive controller with 9 state variables
 Version 3: Used for full actuation
 0916： fixed the bug in adaptive_law_new, change tau_body=u_b + u_ad_all + self.sig_hat_b
@@ -236,7 +236,7 @@ class L1AdaptiveControllerAll:
         self.u_ad = -sig_hat_filtered
         
         # limitation
-        flag_using_limit = False
+        flag_using_limit = True
         if flag_using_limit:
             if self.use_arm:
                 min_values = np.array([0, 0, -10, -1, -1, -1, -1.0, -1.0])
