@@ -27,7 +27,7 @@ except ImportError as e:
     CROCODDYL_AVAILABLE = False
 
 # Import utility modules
-from utils.create_problem import get_opt_traj, create_mpc_controller, create_state_update_model
+from utils.create_problem import get_opt_traj, create_mpc_controller, create_state_update_model, create_state_update_model_quadrotor
 from utils.u_convert import thrustToForceTorqueAll
 
 # Import L1 controllers
@@ -77,6 +77,12 @@ class NumericSimulator:
         print(f"  Control interval: {self.control_interval} simulation steps")
         print(f"  Robot: {self.robot_name}")
         print(f"  Trajectory: {self.trajectory_name}")
+        print(f"  Simulation actuation mode: {self.simulation_actuation_mode}")
+        print(f"  Control dimension: {self.control_dim}")
+        
+        # Validate actuation mode compatibility
+        if self.control_dim != 2 and self.simulation_actuation_mode not in ['full', 'quad']:
+            print(f"Warning: Unrecognized simulation_actuation_mode '{self.simulation_actuation_mode}' for full system")
         
     def load_config(self, config_file):
         """Load configuration from YAML file"""
@@ -112,6 +118,8 @@ class NumericSimulator:
             'l1_filter_time_constant': [0.3, 0.3, 0.3],
             # Simulation comparison modes
             'simulation_modes': ['mpc_only'],  # options: 'mpc_only', 'l1_only', 'mpc_l1', 'comparison'
+            # Simulation actuation model
+            'simulation_actuation_mode': 'full',  # options: 'full', 'quad'
         }
         
         # Try to load config file if it exists
@@ -257,14 +265,32 @@ class NumericSimulator:
                 self.use_simple_dynamics = True
                 print(f"Simulation model initialized with simple dynamics and {self.simulation_dt*1000:.1f} ms timestep")
             else:
-                # For full system, use the trajectory model
-                self.sim_update_model = create_state_update_model(
-                    self.trajectory_obj.robot_model_path, 
-                    int(self.simulation_dt * 1000)  # Convert to ms
-                )
-                self.sim_update_data = self.sim_update_model.createData()
-                self.use_simple_dynamics = False
-                print(f"Simulation model initialized with crocoddyl dynamics and {self.simulation_dt*1000:.1f} ms timestep")
+                # For full system, choose between full and quad actuation models
+                if self.simulation_actuation_mode == 'full':
+                    # Use full actuation model (original behavior)
+                    self.sim_update_model = create_state_update_model(
+                        self.trajectory_obj.robot_model_path, 
+                        int(self.simulation_dt * 1000)  # Convert to ms
+                    )
+                    self.sim_update_data = self.sim_update_model.createData()
+                    self.use_simple_dynamics = False
+                    print(f"Simulation model initialized with full actuation crocoddyl dynamics and {self.simulation_dt*1000:.1f} ms timestep")
+                    print(f"Control dimension: {self.control_dim} (force/torque format)")
+                    
+                elif self.simulation_actuation_mode == 'quad':
+                    # Use quadrotor-specific actuation model (4 motors direct thrust control)
+                    self.sim_update_model, self.sim_update_data = create_state_update_model_quadrotor(
+                        self.trajectory_obj.robot_model.copy(), 
+                        self.trajectory_obj.platform_params, 
+                        int(self.simulation_dt * 1000)  # Convert to ms
+                    )
+                    self.use_simple_dynamics = False
+                    print(f"Simulation model initialized with quadrotor actuation crocoddyl dynamics and {self.simulation_dt*1000:.1f} ms timestep")
+                    print(f"Using 4-motor direct thrust control")
+                    print(f"Control dimension: {self.control_dim} (direct motor thrust format)")
+                    
+                else:
+                    raise ValueError(f"Unknown simulation_actuation_mode: {self.simulation_actuation_mode}. Expected 'full' or 'quad'")
             
         except Exception as e:
             print(f"Error initializing simulation model: {e}")
@@ -449,18 +475,32 @@ class NumericSimulator:
             control_squash = self.mpc_controller.solver.us_squash[0]
             # print(f"control_squash: {control_squash}")
             
-            # Convert to force/torque
-            control_ft = thrustToForceTorqueAll(
-                control_squash,
-                self.platform_params.tau_f
-            )
+            # Process control based on actuation mode and control dimension
+            if self.control_dim == 2:
+                # Arm-only simulation: directly use last 2 elements as joint torques
+                control_ft = thrustToForceTorqueAll(
+                    control_squash,
+                    self.platform_params.tau_f
+                )
+                # Extract only the arm joint torques for 2DOF arm simulation
+                if len(control_ft) > 2:
+                    control_ft = control_ft[-2:]
+            else:
+                # Full system: process based on simulation actuation mode
+                if self.simulation_actuation_mode == 'full':
+                    # Convert to force/torque (original behavior)
+                    control_ft = thrustToForceTorqueAll(
+                        control_squash,
+                        self.platform_params.tau_f
+                    )
+                elif self.simulation_actuation_mode == 'quad':
+                    # For quad mode, use direct motor thrusts (control_squash directly)
+                    # control_squash contains [motor1, motor2, motor3, motor4, arm_joint1, arm_joint2]
+                    control_ft = control_squash.copy()
+                else:
+                    raise ValueError(f"Unknown simulation_actuation_mode: {self.simulation_actuation_mode}")
             
-            # print(f"control_ft: {control_ft}")
-            
-            # Extract only the arm joint torques for 2DOF arm simulation
-            if self.control_dim == 2 and len(control_ft) > 2:
-                # Assume the last 2 elements are arm joint torques
-                control_ft = control_ft[-2:]
+            # print(f"control_ft ({self.simulation_actuation_mode} mode): {control_ft}")
             
             solve_time = time.time() - start_time
             
@@ -588,6 +628,47 @@ class NumericSimulator:
         
         return next_state
     
+    def convert_control_for_simulation(self, control_input):
+        """
+        Convert control input to appropriate format for simulation model
+        
+        Args:
+            control_input: Control input from MPC
+            
+        Returns:
+            converted_control: Control input in format expected by simulation model
+        """
+        if self.control_dim == 2:
+            # Arm-only simulation: no conversion needed
+            return control_input
+            
+        # For full system, conversion depends on both MPC and simulation actuation modes
+        # Note: MPC always outputs in the format specified by its configuration
+        # We need to ensure compatibility between MPC output and simulation model input
+        
+        if self.simulation_actuation_mode == 'full':
+            # Simulation expects force/torque format
+            # If control_input is already in force/torque format, return as-is
+            return control_input
+            
+        elif self.simulation_actuation_mode == 'quad':
+            # Simulation expects direct motor thrusts
+            # If control_input is in force/torque format, we need to convert back
+            # This is a more complex conversion and may need platform-specific parameters
+            
+            # Check if control_input is already in motor thrust format
+            if len(control_input) >= 4:
+                # Assume it's already in the correct format
+                return control_input
+            else:
+                # If it's in force/torque format, we need to convert
+                # This would require inverse transformation of thrustToForceTorqueAll
+                print(f"Warning: Control conversion from force/torque to motor thrusts not fully implemented")
+                return control_input
+                
+        else:
+            raise ValueError(f"Unknown simulation_actuation_mode: {self.simulation_actuation_mode}")
+    
     def add_noise(self, state):
         """Add noise to state if enabled"""
         if not self.enable_noise:
@@ -671,13 +752,20 @@ class NumericSimulator:
             if self.enable_l1_control and current_time >= self.l1_start_time and self.current_l1_control is not None:
                 control_input = control_input + self.current_l1_control
             
+            # Convert control to appropriate format for simulation model
+            control_input = self.convert_control_for_simulation(control_input)
+            
             # Apply disturbance
             disturbance = self.apply_disturbance(current_time)
             
             # Store disturbance data for plotting
             self.disturbance_data.append(disturbance.copy())
             
-            total_control = control_input + disturbance
+            if self.simulation_actuation_mode == 'quad':
+                # cannot add disturbance to quad mode
+                total_control = control_input.copy()
+            else:
+                total_control = control_input + disturbance
             
             # Store control data
             self.control_data.append(total_control.copy())
@@ -2018,7 +2106,7 @@ def create_default_config(filename='numeric_sim_config.yaml'):
 def main():
     """Main function"""
     parser = argparse.ArgumentParser(description='Numeric simulation for MPC controller')
-    parser.add_argument('--config', type=str, default='numeric_sim_config_catch.yaml',
+    parser.add_argument('--config', type=str, default='numeric_sim_config_catch_high_speed.yaml',
                        help='Configuration file path')
     parser.add_argument('--create-config', action='store_true',
                        help='Create default configuration file and exit')

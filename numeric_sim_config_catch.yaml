@@ -2,14 +2,14 @@
 robot_name: s500_uam
 trajectory_name: catch_vicon
 
-dt_traj_opt: 10
+dt_traj_opt: 5
 simulation_time: 10
-use_squash: true
+use_squash: false
 yaml_path: config/yaml
 
 # Timing parameters
 simulation_dt: 0.001  # seconds - simulation time step (1ms)
-control_dt: 0.01      # seconds - control time step (20ms)
+control_dt: 0.01    # seconds - control time step (20ms)
 
 initial_state: [-1.5, 0, 1.5, 0, 0, 0, 1, -1.2, -0.6, 0, 0, 0, 0, 0, 0, 0, 0]
 
@@ -17,7 +17,7 @@ results_dir: results/numeric_sim
 save_results: false
 plot_results: true
 
-enable_disturbance: true
+enable_disturbance: false
 disturbance_start_time: 3.0
 disturbance_force: [1.0, 0.5, 10.0]
 disturbance_torque: [0.2, 0.0, 0.0]
@@ -31,8 +31,11 @@ joint_sin_frequency: [0.2, 0.2]   # frequency for joint1, joint2 (Hz)
 enable_noise: false
 state_noise_std: 0.0001
 
-enable_l1_control: true
+enable_l1_control: false
 l1_start_time: 0
 l1_as_coef: -0.01
 l1_filter_time_constant: [0.1, 0.1, 0.01]
 l1_version: v2
+
+# Simulation actuation model
+simulation_actuation_mode: full  # options: 'full', 'quad'
