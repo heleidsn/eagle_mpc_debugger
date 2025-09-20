@@ -7,6 +7,30 @@ import rospkg
 import os
 import yaml
 import pinocchio as pin
+from collections import OrderedDict
+
+# Custom YAML representer to keep lists on one line
+def represent_list(dumper, data):
+    # If the list is numeric and reasonably short, use flow style
+    if len(data) <= 20 and all(isinstance(x, (int, float)) for x in data):
+        return dumper.represent_sequence('tag:yaml.org,2002:seq', data, flow_style=True)
+    else:
+        return dumper.represent_sequence('tag:yaml.org,2002:seq', data, flow_style=False)
+
+# Custom representer for OrderedDict to maintain order
+def represent_ordereddict(dumper, data):
+    return dumper.represent_dict(data.items())
+
+# Add the custom representers
+yaml.add_representer(list, represent_list)
+yaml.add_representer(OrderedDict, represent_ordereddict)
+
+# Custom constructor for OrderedDict to preserve order when loading
+def construct_mapping(self, node):
+    self.flatten_mapping(node)
+    return OrderedDict(self.construct_pairs(node))
+
+yaml.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, construct_mapping)
 
 def modify_catch_yaml_config(yaml_data, catch_config):
     """
@@ -103,7 +127,7 @@ def get_opt_traj(robotName, trajectoryName, dt_traj_opt, useSquash, yaml_file_pa
     
     # First read the YAML file to process paths
     with open(trajectory_config_path, 'r') as f:
-        yaml_data = yaml.safe_load(f)
+        yaml_data = yaml.load(f, Loader=yaml.FullLoader)
     
     # Process paths in the YAML data
     if 'trajectory' in yaml_data and 'robot' in yaml_data['trajectory']:
@@ -124,12 +148,12 @@ def get_opt_traj(robotName, trajectoryName, dt_traj_opt, useSquash, yaml_file_pa
         yaml_data = modify_catch_yaml_config(yaml_data, catch_config)
         # save the modified yaml to a file
         with open(os.path.join(package_path, yaml_file_path, 'trajectories', 'temp_trajectory.yaml'), 'w') as f:
-            yaml.dump(yaml_data, f)
+            yaml.dump(yaml_data, f, default_flow_style=False, allow_unicode=True)
     
     # Write the processed YAML to a temporary file
     temp_yaml_path = os.path.join(package_path, yaml_file_path, 'trajectories', 'temp_trajectory.yaml')
     with open(temp_yaml_path, 'w') as f:
-        yaml.dump(yaml_data, f)
+        yaml.dump(yaml_data, f, default_flow_style=False, allow_unicode=True)
     
     try:
         # Load and process the YAML file
@@ -144,7 +168,7 @@ def get_opt_traj(robotName, trajectoryName, dt_traj_opt, useSquash, yaml_file_pa
         else:
             solver = crocoddyl.SolverBoxFDDP(problem)
 
-        solver.convergence_init = 1e-6
+        solver.convergence_init = 1e-12
         trajectory.logger = crocoddyl.CallbackLogger()
         
         solver.setCallbacks([trajectory.logger, crocoddyl.CallbackVerbose()])
@@ -214,7 +238,7 @@ def create_mpc_controller(mpc_name, trajectory, traj_state_ref, dt_traj_opt, mpc
     
     # First read the YAML file to process paths
     with open(mpc_yaml_path, 'r') as f:
-        yaml_data = yaml.safe_load(f)
+        yaml_data = yaml.load(f, Loader=yaml.FullLoader)
     
     # Process paths in the YAML data
     if 'mpc_controller' in yaml_data:
