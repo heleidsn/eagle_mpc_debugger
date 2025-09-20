@@ -819,15 +819,15 @@ class EagleMPCDebuggerGUI(QMainWindow):
         world_selection_layout.addWidget(self.world_combo)
         simulation_layout.addLayout(world_selection_layout)
         
-        # Add camera selection
-        camera_selection_layout = QHBoxLayout()
-        camera_label = QLabel("Camera:")
-        self.camera_combo = QComboBox()
-        self.camera_combo.addItems(["True", "False"])
-        self.camera_combo.setCurrentText("False")
-        camera_selection_layout.addWidget(camera_label)
-        camera_selection_layout.addWidget(self.camera_combo)
-        simulation_layout.addLayout(camera_selection_layout)
+        # Add model type selection
+        model_type_selection_layout = QHBoxLayout()
+        model_type_label = QLabel("Model Type:")
+        self.model_type_combo = QComboBox()
+        self.model_type_combo.addItems(["real", "ideal", "no_friction", "camera"])
+        self.model_type_combo.setCurrentText("real")
+        model_type_selection_layout.addWidget(model_type_label)
+        model_type_selection_layout.addWidget(self.model_type_combo)
+        simulation_layout.addLayout(model_type_selection_layout)
         
         # Add arm control mode selection
         arm_control_mode_selection_layout = QHBoxLayout()
@@ -839,14 +839,6 @@ class EagleMPCDebuggerGUI(QMainWindow):
         arm_control_mode_selection_layout.addWidget(self.arm_control_mode_combo)
         simulation_layout.addLayout(arm_control_mode_selection_layout)
         
-        # Add joint friction checkbox
-        joint_friction_layout = QHBoxLayout()
-        joint_friction_label = QLabel("Joint Friction:")
-        self.joint_friction_checkbox = QCheckBox()
-        self.joint_friction_checkbox.setChecked(True)  # Default to no friction
-        joint_friction_layout.addWidget(joint_friction_label)
-        joint_friction_layout.addWidget(self.joint_friction_checkbox)
-        simulation_layout.addLayout(joint_friction_layout)
         
         # # ROSCore Control
         # self.start_roscore_btn = QPushButton("Start ROSCore")
@@ -1340,9 +1332,8 @@ class EagleMPCDebuggerGUI(QMainWindow):
             # Get selected robot name and world
             robot_name = self.robot_combo.currentText()
             world_name = self.world_combo.currentText()
-            use_camera = self.camera_combo.currentText()
+            model_type = self.model_type_combo.currentText()
             arm_control_mode = self.arm_control_mode_combo.currentText()
-            joint_friction = "true" if self.joint_friction_checkbox.isChecked() else "false"
             
             # Select appropriate launch file based on robot name
             if robot_name == "s500_uam":
@@ -1355,10 +1346,9 @@ class EagleMPCDebuggerGUI(QMainWindow):
                 raise ValueError(f"No simulation launch file available for robot: {robot_name}")
             
             # Launch the simulation script with world parameter
-            cmd = f"roslaunch eagle_mpc_debugger {launch_file} world_name:={world_name} use_camera:={use_camera} arm_control_mode:={arm_control_mode} joint_friction:={joint_friction}"
+            cmd = f"roslaunch eagle_mpc_debugger {launch_file} world_name:={world_name} model_type:={model_type} arm_control_mode:={arm_control_mode}"
             self.simulation_process = subprocess.Popen(cmd, shell=True, env=env)
-            friction_status = "with friction" if joint_friction == "true" else "without friction"
-            self.log_message(f"Simulation environment launched successfully for {robot_name} with world: {world_name} ({friction_status})")
+            self.log_message(f"Simulation environment launched successfully for {robot_name} with world: {world_name}, model type: {model_type}")
             self.simulation_status.setText("Running")
         except Exception as e:
             error_msg = f"Failed to launch simulation: {str(e)}"
