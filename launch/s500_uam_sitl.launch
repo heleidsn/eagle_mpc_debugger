@@ -12,6 +12,7 @@
     <arg name="sdf_file" value="$(find eagle_mpc_debugger)/models/sdf/s500_uam/s500_uam_real.sdf" if="$(eval arg('model_type') == 'real')"/>
     <arg name="sdf_file" value="$(find eagle_mpc_debugger)/models/sdf/s500_uam/s500_uam_ideal.sdf" if="$(eval arg('model_type') == 'ideal')"/>
     <arg name="sdf_file" value="$(find eagle_mpc_debugger)/models/sdf/s500_uam/s500_uam_no_friction.sdf" if="$(eval arg('model_type') == 'no_friction')"/>
+    <arg name="sdf_file" value="$(find eagle_mpc_debugger)/models/sdf/s500_uam/s500_uam_no_motor_constant.sdf" if="$(eval arg('model_type') == 'no_motor_constant')"/>
     <arg name="sdf_file" value="$(find eagle_mpc_debugger)/models/sdf/s500_uam/s500_uam_camera.sdf" if="$(eval arg('model_type') == 'camera')"/>
 
     <!-- gazebo configs -->

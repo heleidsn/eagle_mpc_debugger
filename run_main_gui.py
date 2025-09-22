@@ -24,6 +24,8 @@ from sensor_msgs.msg import JointState
 from eagle_mpc_msgs.msg import MpcState
 from std_srvs.srv import Trigger, TriggerResponse
 from geometry_msgs.msg import Point
+from mavros_msgs.msg import State
+from mavros_msgs.srv import SetMode, SetModeRequest, CommandBool, CommandBoolRequest
 
 # Add necessary directories to the Python path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -271,6 +273,9 @@ class ROSServiceHandler:
             self.services['start_arm_test'] = rospy.ServiceProxy('/start_arm_test', Trigger)
             self.services['save_recorded_data'] = rospy.ServiceProxy('/save_recorded_data', Trigger)
             self.services['plot_trajectory_data'] = rospy.ServiceProxy('/plot_trajectory_data', Trigger)
+            # MAVROS services for drone control
+            self.services['set_mode'] = rospy.ServiceProxy('/mavros/set_mode', SetMode)
+            self.services['arm_disarm'] = rospy.ServiceProxy('/mavros/cmd/arming', CommandBool)
         except rospy.ServiceException as e:
             rospy.logerr(f"Failed to initialize services: {str(e)}")
             
@@ -415,6 +420,7 @@ class EagleMPCDebuggerGUI(QMainWindow):
         # Initialize state variables
         self.current_state = None
         self.arm_state = None
+        self.px4_state = State()  # Store PX4/MAVROS state
         
         # Initialize ROS node only if roscore is running
         if self.roscore_controller.is_roscore_running():
@@ -446,6 +452,7 @@ class EagleMPCDebuggerGUI(QMainWindow):
                 rospy.init_node('eagle_mpc_gui', anonymous=False)
             self.mpc_state_sub = rospy.Subscriber("/mpc/state", MpcState, self.mpc_state_callback)
             self.arm_state_sub = rospy.Subscriber("/arm_controller/joint_states", JointState, self.arm_state_callback)
+            self.px4_state_sub = rospy.Subscriber("/mavros/state", State, self.px4_state_callback)
             return True
         except Exception as e:
             self.log_message(f"Failed to initialize ROS node: {str(e)}")
@@ -823,7 +830,7 @@ class EagleMPCDebuggerGUI(QMainWindow):
         model_type_selection_layout = QHBoxLayout()
         model_type_label = QLabel("Model Type:")
         self.model_type_combo = QComboBox()
-        self.model_type_combo.addItems(["real", "ideal", "no_friction", "camera"])
+        self.model_type_combo.addItems(["real", "ideal", "no_friction", "no_motor_constant", "camera"])
         self.model_type_combo.setCurrentText("real")
         model_type_selection_layout.addWidget(model_type_label)
         model_type_selection_layout.addWidget(self.model_type_combo)
@@ -957,8 +964,41 @@ class EagleMPCDebuggerGUI(QMainWindow):
         self.gripper_status = QLabel("Open")
         status_layout.addRow("Gripper Status:", self.gripper_status)
         
+        # Add drone status displays
+        self.drone_armed_status = QLabel("Unknown")
+        status_layout.addRow("Drone Armed:", self.drone_armed_status)
+        
+        self.drone_mode_status = QLabel("Unknown")
+        status_layout.addRow("Flight Mode:", self.drone_mode_status)
+        
+        self.mavros_connected_status = QLabel("Unknown")
+        status_layout.addRow("MAVROS Connected:", self.mavros_connected_status)
+        
         status_group.setLayout(status_layout)
         layout.addWidget(status_group)
+        
+        # Drone Control Group
+        drone_control_group = QGroupBox("Drone Control")
+        drone_control_layout = QVBoxLayout()
+        
+        self.arm_drone_btn = QPushButton("Arm Drone")
+        self.arm_drone_btn.clicked.connect(self.arm_drone)
+        drone_control_layout.addWidget(self.arm_drone_btn)
+        
+        self.disarm_drone_btn = QPushButton("Disarm Drone")
+        self.disarm_drone_btn.clicked.connect(self.disarm_drone)
+        drone_control_layout.addWidget(self.disarm_drone_btn)
+        
+        self.set_offboard_btn = QPushButton("Set OFFBOARD Mode")
+        self.set_offboard_btn.clicked.connect(self.set_offboard_mode)
+        drone_control_layout.addWidget(self.set_offboard_btn)
+        
+        self.set_position_btn = QPushButton("Set POSITION Mode")
+        self.set_position_btn.clicked.connect(self.set_position_mode)
+        drone_control_layout.addWidget(self.set_position_btn)
+        
+        drone_control_group.setLayout(drone_control_layout)
+        layout.addWidget(drone_control_group)
         
         # MPC Status Group
         mpc_group = QGroupBox("MPC Status")
@@ -1002,6 +1042,27 @@ class EagleMPCDebuggerGUI(QMainWindow):
             
         if self.arm_state:
             self.arm_status.setText("Enabled" if self.use_squash_check.isChecked() else "Disabled")
+            
+        # Update drone status
+        if hasattr(self, 'px4_state'):
+            # Armed status
+            armed_text = "Armed" if self.px4_state.armed else "Disarmed"
+            self.drone_armed_status.setText(armed_text)
+            
+            # Flight mode
+            mode_text = self.px4_state.mode if self.px4_state.mode else "Unknown"
+            self.drone_mode_status.setText(mode_text)
+            
+            # MAVROS connection status
+            connected_text = "Connected" if self.px4_state.connected else "Disconnected"
+            self.mavros_connected_status.setText(connected_text)
+            
+            # Update button states based on current status
+            if hasattr(self, 'arm_drone_btn'):
+                self.arm_drone_btn.setEnabled(not self.px4_state.armed and self.px4_state.connected)
+                self.disarm_drone_btn.setEnabled(self.px4_state.armed and self.px4_state.connected)
+                self.set_offboard_btn.setEnabled(self.px4_state.connected)
+                self.set_position_btn.setEnabled(self.px4_state.connected)
             
     def log_message(self, message):
         """Add a message to the log display"""
@@ -1266,6 +1327,10 @@ class EagleMPCDebuggerGUI(QMainWindow):
     def arm_state_callback(self, msg):
         """Callback for arm state messages"""
         self.arm_state = msg
+        
+    def px4_state_callback(self, msg):
+        """Callback for PX4/MAVROS state messages"""
+        self.px4_state = msg
 
     def start_roscore(self):
         """Start roscore"""
@@ -1595,6 +1660,110 @@ class EagleMPCDebuggerGUI(QMainWindow):
                 self.log_message("MPC Plotter stopped successfully")
         except Exception as e:
             error_msg = f"Failed to stop MPC Plotter: {str(e)}"
+            self.log_message(error_msg)
+            QMessageBox.critical(self, "Error", error_msg)
+            
+    def arm_drone(self):
+        """Arm the drone"""
+        try:
+            # Check if MAVROS is connected
+            if not self.px4_state.connected:
+                self.log_message("Error: MAVROS not connected to PX4")
+                QMessageBox.warning(self, "Warning", "MAVROS not connected to PX4")
+                return
+                
+            # Call arming service
+            arm_request = CommandBoolRequest()
+            arm_request.value = True
+            
+            response = self.service_handler.services['arm_disarm'](arm_request)
+            
+            if response.success:
+                self.log_message("Drone armed successfully")
+            else:
+                self.log_message(f"Failed to arm drone: {response.message}")
+                QMessageBox.warning(self, "Warning", f"Failed to arm drone: {response.message}")
+                
+        except Exception as e:
+            error_msg = f"Failed to arm drone: {str(e)}"
+            self.log_message(error_msg)
+            QMessageBox.critical(self, "Error", error_msg)
+            
+    def disarm_drone(self):
+        """Disarm the drone"""
+        try:
+            # Check if MAVROS is connected
+            if not self.px4_state.connected:
+                self.log_message("Error: MAVROS not connected to PX4")
+                QMessageBox.warning(self, "Warning", "MAVROS not connected to PX4")
+                return
+                
+            # Call disarming service
+            disarm_request = CommandBoolRequest()
+            disarm_request.value = False
+            
+            response = self.service_handler.services['arm_disarm'](disarm_request)
+            
+            if response.success:
+                self.log_message("Drone disarmed successfully")
+            else:
+                self.log_message(f"Failed to disarm drone: {response.message}")
+                QMessageBox.warning(self, "Warning", f"Failed to disarm drone: {response.message}")
+                
+        except Exception as e:
+            error_msg = f"Failed to disarm drone: {str(e)}"
+            self.log_message(error_msg)
+            QMessageBox.critical(self, "Error", error_msg)
+            
+    def set_offboard_mode(self):
+        """Set drone to OFFBOARD mode"""
+        try:
+            # Check if MAVROS is connected
+            if not self.px4_state.connected:
+                self.log_message("Error: MAVROS not connected to PX4")
+                QMessageBox.warning(self, "Warning", "MAVROS not connected to PX4")
+                return
+                
+            # Set mode to OFFBOARD
+            mode_request = SetModeRequest()
+            mode_request.custom_mode = "OFFBOARD"
+            
+            response = self.service_handler.services['set_mode'](mode_request)
+            
+            if response.mode_sent:
+                self.log_message("Switched to OFFBOARD mode successfully")
+            else:
+                self.log_message("Failed to switch to OFFBOARD mode")
+                QMessageBox.warning(self, "Warning", "Failed to switch to OFFBOARD mode")
+                
+        except Exception as e:
+            error_msg = f"Failed to set OFFBOARD mode: {str(e)}"
+            self.log_message(error_msg)
+            QMessageBox.critical(self, "Error", error_msg)
+            
+    def set_position_mode(self):
+        """Set drone to POSITION mode"""
+        try:
+            # Check if MAVROS is connected
+            if not self.px4_state.connected:
+                self.log_message("Error: MAVROS not connected to PX4")
+                QMessageBox.warning(self, "Warning", "MAVROS not connected to PX4")
+                return
+                
+            # Set mode to POSITION (POSCTL in PX4)
+            mode_request = SetModeRequest()
+            mode_request.custom_mode = "POSCTL"
+            
+            response = self.service_handler.services['set_mode'](mode_request)
+            
+            if response.mode_sent:
+                self.log_message("Switched to POSITION mode successfully")
+            else:
+                self.log_message("Failed to switch to POSITION mode")
+                QMessageBox.warning(self, "Warning", "Failed to switch to POSITION mode")
+                
+        except Exception as e:
+            error_msg = f"Failed to set POSITION mode: {str(e)}"
             self.log_message(error_msg)
             QMessageBox.critical(self, "Error", error_msg)
 
