@@ -116,6 +116,9 @@ class NumericSimulator:
             'l1_start_time': 2.0,  # seconds - when to start L1 control
             'l1_as_coef': -0.01,
             'l1_filter_time_constant': [0.3, 0.3, 0.3],
+            # Control delay configuration
+            'control_delay': 0.0,  # seconds - delay in control application
+            'delay_use_hover_control': True,  # Use hover control during delay instead of zero
             # Simulation comparison modes
             'simulation_modes': ['mpc_only'],  # options: 'mpc_only', 'l1_only', 'mpc_l1', 'comparison'
             # Simulation actuation model
@@ -134,6 +137,70 @@ class NumericSimulator:
         # Set configuration as attributes
         for key, value in default_config.items():
             setattr(self, key, value)
+        
+        # Initialize control delay buffer
+        self.init_control_delay_buffer()
+        
+        # Calculate tracking error recording interval based on trajectory optimization dt
+        self.tracking_error_interval = max(1, int(self.dt_traj_opt / self.simulation_dt / 1000))
+        print(f"Tracking error recording interval: every {self.tracking_error_interval} simulation steps ({self.dt_traj_opt}ms)")
+    
+    def init_control_delay_buffer(self):
+        """Initialize control delay buffer to store past control commands"""
+        # Calculate delay steps based on control delay and simulation timestep
+        self.delay_steps = int(self.control_delay / self.simulation_dt)
+        print(f"Control delay: {self.control_delay}s ({self.delay_steps} simulation steps)")
+        
+        # Initialize control command buffer (FIFO queue)
+        self.control_buffer = []
+        
+        # Store metadata for debugging
+        self.delayed_control_data = []  # For plotting/analysis
+    
+    def get_delayed_control(self, new_control, current_time):
+        """
+        Get control command with specified delay
+        
+        Args:
+            new_control: Newly computed control command
+            current_time: Current simulation time
+            
+        Returns:
+            delayed_control: Control command to apply (delayed)
+        """
+        # Add new control to buffer with timestamp
+        control_entry = {
+            'control': new_control.copy() if new_control is not None else None,
+            'time': current_time,
+            'delayed_control': None  # Will be filled when applied
+        }
+        self.control_buffer.append(control_entry)
+        
+        # If no delay, return the new control immediately
+        if self.delay_steps <= 0:
+            control_entry['delayed_control'] = new_control
+            return new_control.copy() if new_control is not None else None
+        
+        # If we have enough buffered controls, get the delayed one
+        if len(self.control_buffer) > self.delay_steps:
+            delayed_entry = self.control_buffer[-(self.delay_steps + 1)]
+            delayed_control = delayed_entry['control']
+            delayed_entry['delayed_control'] = delayed_control
+            
+            # Store for analysis
+            self.delayed_control_data.append({
+                'time': current_time,
+                'original_control': new_control.copy() if new_control is not None else None,
+                'delayed_control': delayed_control.copy() if delayed_control is not None else None,
+                'delay_steps': self.delay_steps
+            })
+            
+            return delayed_control.copy() if delayed_control is not None else None
+        else:
+            # Not enough data in buffer yet - during the delay period
+            # We should use zero control (or hover control) instead of repeating previous
+            control_entry['delayed_control'] = None
+            return None
     
     def init_robot_model(self):
         """Initialize robot model from URDF"""
@@ -187,6 +254,13 @@ class NumericSimulator:
                 self.use_squash,
                 self.yaml_path
             )
+            
+            # Store reference control inputs from trajectory optimization
+            self.traj_u_ref = self.trajectory.us if hasattr(self.trajectory, 'us') else []
+            print(f"Reference control trajectory loaded: {len(self.traj_u_ref)} steps")
+            if len(self.traj_u_ref) > 0:
+                print(f"  Control dimension: {self.traj_u_ref[0].shape}")
+                print(f"  First control sample: {self.traj_u_ref[0][:3]}")  # Show first 3 elements
             
             # Create MPC controller
             mpc_name = "rail"
@@ -334,6 +408,17 @@ class NumericSimulator:
         traj_index = min(traj_index, len(self.traj_state_ref) - 1)
         
         return self.traj_state_ref[traj_index], traj_index
+    
+    def get_reference_control(self, current_time):
+        """Get reference control input based on current time"""
+        if not self.traj_u_ref:
+            return np.zeros(self.control_dim)
+        
+        # Calculate trajectory index based on time
+        traj_index = int(current_time * 1000 / self.dt_traj_opt)
+        traj_index = min(traj_index, len(self.traj_u_ref) - 1)
+        
+        return self.traj_u_ref[traj_index]
     
     def calculate_tracking_errors(self, current_state, current_time):
         """Calculate tracking errors for current state"""
@@ -752,6 +837,24 @@ class NumericSimulator:
             if self.enable_l1_control and current_time >= self.l1_start_time and self.current_l1_control is not None:
                 control_input = control_input + self.current_l1_control
             
+            # Apply control delay
+            if self.control_delay > 0:
+                original_control_input = control_input.copy()
+                control_input = self.get_delayed_control(control_input, current_time)
+                # Handle case where delayed control is None (initial steps)
+                if control_input is None:
+                    if getattr(self, 'delay_use_hover_control', True) and self.simulation_actuation_mode == 'quad':
+                        # Use hover control (approximately mg/4 for each motor) during delay period
+                        hover_thrust = 5  # Approximate hover thrust per motor (N)
+                        if len(original_control_input) >= 4:
+                            control_input = np.zeros_like(original_control_input)
+                            control_input[:4] = hover_thrust  # Set motor thrusts to hover value
+                        else:
+                            control_input = np.zeros_like(original_control_input)
+                    else:
+                        # Use zeros with the same shape as the original control
+                        control_input = np.zeros_like(original_control_input)
+            
             # Convert control to appropriate format for simulation model
             control_input = self.convert_control_for_simulation(control_input)
             
@@ -784,8 +887,8 @@ class NumericSimulator:
             next_state = self.add_noise(next_state)
             
             # Calculate and store tracking errors after next state is computed
-            # Only record when control was updated (every control_interval steps)
-            if sim_step % self.control_interval == 0:
+            # Record at trajectory optimization frequency (every tracking_error_interval steps)
+            if sim_step % self.tracking_error_interval == 0:
                 tracking_error = self.calculate_tracking_errors(next_state, current_time + self.simulation_dt)
                 self.tracking_error_data.append(tracking_error)
             
@@ -1135,10 +1238,32 @@ class NumericSimulator:
         
         # Create reference trajectory for comparison
         ref_states = []
+        ref_controls = []
         for t in time_array:
             ref_state, _ = self.get_reference_state(t)
+            ref_control = self.get_reference_control(t)
             ref_states.append(ref_state)
+            
+            # Convert reference control to the same format as actual control
+            if len(ref_control) > 0 and getattr(self, 'simulation_actuation_mode', None) == 'quad':
+                # ref_control is in [motor1, motor2, motor3, motor4, joint1, joint2] format
+                # actual control_array is in the same format after conversion
+                ref_controls.append(ref_control)
+            elif len(ref_control) > 0:
+                # If not in quad mode, we might need force/torque conversion
+                # For now, keep as is - this handles the FT mode
+                ref_controls.append(ref_control)
+            else:
+                # No reference control available
+                ref_controls.append(np.zeros(self.control_dim))
+                
         ref_state_array = np.array(ref_states)
+        ref_control_array = np.array(ref_controls)
+        
+        # Check if reference control array has valid data
+        has_ref_controls = ref_control_array.size > 0 and not np.all(ref_control_array == 0)
+        if not has_ref_controls:
+            print("Warning: No reference control data available for plotting comparison")
         
         # Convert quaternions to Euler angles
         from scipy.spatial.transform import Rotation as R
@@ -1310,39 +1435,85 @@ class NumericSimulator:
             ax.set_title('Arm Joint Velocities (N/A)', fontsize=9)
         
         # === Third Row: Control Inputs ===
-        # Combined Force controls (FX, FY, FZ)
+        # Combined Force controls - adapt to control mode
         ax = axes[2, 0]
-        force_colors = ['b', 'r', 'g']
-        force_labels = ['FX', 'FY', 'FZ']
-        for i in range(3):
-            if i < control_array.shape[1]:
-                ax.plot(time_array, control_array[:, i], color=force_colors[i], linewidth=2, label=f'{force_labels[i]}')
-        ax.set_xlabel('Time (s)', fontsize=9)
-        ax.set_ylabel('Force (N)', fontsize=9)
-        ax.legend(fontsize=7)
-        ax.grid(True)
-        ax.set_title('Forces (FX, FY, FZ)', fontsize=9)
+        force_colors = ['b', 'r', 'g', 'orange']
         
-        # Combined Torque controls (TX, TY, TZ)
+        if getattr(self, 'simulation_actuation_mode', None) == 'quad':
+            # In quad mode, show motor thrusts instead of forces
+            motor_labels = ['Motor 1', 'Motor 2', 'Motor 3', 'Motor 4']
+            for i in range(min(4, control_array.shape[1])):
+                ax.plot(time_array, control_array[:, i], color=force_colors[i], linestyle='-', linewidth=2, label=f'{motor_labels[i]} Actual')
+                if has_ref_controls and i < ref_control_array.shape[1]:
+                    ax.plot(time_array, ref_control_array[:, i], color=force_colors[i], linestyle='--', linewidth=2, label=f'{motor_labels[i]} Ref')
+            ax.set_xlabel('Time (s)', fontsize=9)
+            ax.set_ylabel('Motor Thrust (N)', fontsize=9)
+            ax.legend(fontsize=7)
+            ax.grid(True)
+            ax.set_title('Motor Thrusts', fontsize=9)
+        else:
+            # In FT mode, show forces
+            force_labels = ['FX', 'FY', 'FZ']
+            for i in range(3):
+                if i < control_array.shape[1]:
+                    ax.plot(time_array, control_array[:, i], color=force_colors[i], linestyle='-', linewidth=2, label=f'{force_labels[i]} Actual')
+                if has_ref_controls and i < ref_control_array.shape[1]:
+                    ax.plot(time_array, ref_control_array[:, i], color=force_colors[i], linestyle='--', linewidth=2, label=f'{force_labels[i]} Ref')
+            ax.set_xlabel('Time (s)', fontsize=9)
+            ax.set_ylabel('Force (N)', fontsize=9)
+            ax.legend(fontsize=7)
+            ax.grid(True)
+            ax.set_title('Forces (FX, FY, FZ)', fontsize=9)
+        
+        # Combined Torque controls - adapt to control mode
         ax = axes[2, 1]
-        torque_labels = ['TX', 'TY', 'TZ']
-        for i in range(3):
-            control_idx = i + 3
-            if control_idx < control_array.shape[1]:
-                ax.plot(time_array, control_array[:, control_idx], color=force_colors[i], linewidth=2, label=f'{torque_labels[i]}')
-        ax.set_xlabel('Time (s)', fontsize=9)
-        ax.set_ylabel('Torque (Nm)', fontsize=9)
-        ax.legend(fontsize=7)
-        ax.grid(True)
-        ax.set_title('Torques (TX, TY, TZ)', fontsize=9)
         
-        # Arm joint control inputs (if available)
-        if self.robot.nq > 7 and control_array.shape[1] > 6:
+        if getattr(self, 'simulation_actuation_mode', None) == 'quad':
+            # In quad mode, we could show derived forces/torques or hide this plot
+            ax.text(0.5, 0.5, 'Quad Mode:\nForces/Torques derived\nfrom motor thrusts', ha='center', va='center', transform=ax.transAxes)
+            ax.set_title('Body Forces/Torques (Derived)', fontsize=9)
+        else:
+            # In FT mode, show torques
+            torque_labels = ['TX', 'TY', 'TZ']
+            for i in range(3):
+                control_idx = i + 3
+                if control_idx < control_array.shape[1]:
+                    ax.plot(time_array, control_array[:, control_idx], color=force_colors[i], linestyle='-', linewidth=2, label=f'{torque_labels[i]} Actual')
+                if has_ref_controls and control_idx < ref_control_array.shape[1]:
+                    ax.plot(time_array, ref_control_array[:, control_idx], color=force_colors[i], linestyle='--', linewidth=2, label=f'{torque_labels[i]} Ref')
+            ax.set_xlabel('Time (s)', fontsize=9)
+            ax.set_ylabel('Torque (Nm)', fontsize=9)
+            ax.legend(fontsize=7)
+            ax.grid(True)
+            ax.set_title('Torques (TX, TY, TZ)', fontsize=9)
+        
+        # Arm joint control inputs (if available) - handle different control formats
+        if self.robot.nq > 7:  # Has arm joints
             ax = axes[2, 2]
-            if control_array.shape[1] > 6:
-                ax.plot(time_array, control_array[:, 6], 'b-', linewidth=2, label='Joint 1 Torque')
-            if control_array.shape[1] > 7:
-                ax.plot(time_array, control_array[:, 7], 'r-', linewidth=2, label='Joint 2 Torque')
+            
+            if getattr(self, 'simulation_actuation_mode', None) == 'quad':
+                # In quad mode: [motor1, motor2, motor3, motor4, joint1, joint2]
+                joint1_idx, joint2_idx = 4, 5
+                if control_array.shape[1] > joint1_idx:
+                    ax.plot(time_array, control_array[:, joint1_idx], 'b-', linewidth=2, label='Joint 1 Actual')
+                    if has_ref_controls and ref_control_array.shape[1] > joint1_idx:
+                        ax.plot(time_array, ref_control_array[:, joint1_idx], 'b--', linewidth=2, label='Joint 1 Ref')
+                if control_array.shape[1] > joint2_idx:
+                    ax.plot(time_array, control_array[:, joint2_idx], 'r-', linewidth=2, label='Joint 2 Actual')
+                    if has_ref_controls and ref_control_array.shape[1] > joint2_idx:
+                        ax.plot(time_array, ref_control_array[:, joint2_idx], 'r--', linewidth=2, label='Joint 2 Ref')
+            else:
+                # In FT mode: [FX, FY, FZ, TX, TY, TZ, joint1, joint2]
+                joint1_idx, joint2_idx = 6, 7
+                if control_array.shape[1] > joint1_idx:
+                    ax.plot(time_array, control_array[:, joint1_idx], 'b-', linewidth=2, label='Joint 1 Actual')
+                    if has_ref_controls and ref_control_array.shape[1] > joint1_idx:
+                        ax.plot(time_array, ref_control_array[:, joint1_idx], 'b--', linewidth=2, label='Joint 1 Ref')
+                if control_array.shape[1] > joint2_idx:
+                    ax.plot(time_array, control_array[:, joint2_idx], 'r-', linewidth=2, label='Joint 2 Actual')
+                    if has_ref_controls and ref_control_array.shape[1] > joint2_idx:
+                        ax.plot(time_array, ref_control_array[:, joint2_idx], 'r--', linewidth=2, label='Joint 2 Ref')
+            
             ax.set_xlabel('Time (s)', fontsize=9)
             ax.set_ylabel('Joint Torque (Nm)', fontsize=9)
             ax.legend(fontsize=7)
@@ -1350,7 +1521,7 @@ class NumericSimulator:
             ax.set_title('Arm Joint Torques', fontsize=9)
         else:
             ax = axes[2, 2]
-            ax.text(0.5, 0.5, 'No arm controls', ha='center', va='center', transform=ax.transAxes)
+            ax.text(0.5, 0.5, f'No arm joints\n(nq={self.robot.nq})', ha='center', va='center', transform=ax.transAxes)
             ax.set_title('Arm Joint Torques (N/A)', fontsize=9)
             
         plt.tight_layout()
@@ -1375,7 +1546,7 @@ class NumericSimulator:
             gripper_pitch_errors = np.array([te['gripper_pitch_error'] for te in self.tracking_error_data])
             gripper_pos_error_norm = np.array([te['gripper_pos_error_norm'] for te in self.tracking_error_data])
             
-            print(f"Using recorded tracking error data: {len(self.tracking_error_data)} control steps")
+            print(f"Using recorded tracking error data: {len(self.tracking_error_data)} data points (every {self.dt_traj_opt}ms)")
         else:
             # This should not happen in normal operation
             print("Warning: No tracking error data available, skipping tracking error plots")
@@ -1471,33 +1642,61 @@ class NumericSimulator:
         axes2[2, 0].grid(True)
         axes2[2, 0].set_title('Attitude Error Magnitudes')
         
-        # Combined velocity tracking errors (if available)
-        if state_array.shape[1] > 11:  # Has velocity states
-            velocity_errors = state_array[:, 9:12] - ref_state_array[:, 9:12]  # Linear velocity errors
-            axes2[2, 1].plot(time_array, velocity_errors[:, 0], 'b-', linewidth=2, label='VX Error')
-            axes2[2, 1].plot(time_array, velocity_errors[:, 1], 'r-', linewidth=2, label='VY Error')
-            axes2[2, 1].plot(time_array, velocity_errors[:, 2], 'g-', linewidth=2, label='VZ Error')
-            axes2[2, 1].set_xlabel('Time (s)')
-            axes2[2, 1].set_ylabel('Velocity Error (m/s)')
-            axes2[2, 1].legend(fontsize=8)
-            axes2[2, 1].grid(True)
-            axes2[2, 1].set_title('Linear Velocity Errors (VX, VY, VZ)')
+        # Combined velocity tracking errors - use same frequency as other tracking errors
+        if len(self.tracking_error_data) > 0:
+            # Extract velocity data at MPC update frequency (same as other tracking errors)
+            velocity_errors_x = []
+            velocity_errors_y = []
+            velocity_errors_z = []
+            
+            for te in self.tracking_error_data:
+                # Get current time and states
+                t = te['time']
+                # Find closest state from simulation data
+                closest_idx = np.argmin(np.abs(time_array - t))
+                if closest_idx < len(state_array) and state_array.shape[1] > 11:
+                    vel_actual = state_array[closest_idx, 9:12]
+                    vel_ref = ref_state_array[closest_idx, 9:12]
+                    vel_error = vel_actual - vel_ref
+                    velocity_errors_x.append(vel_error[0])
+                    velocity_errors_y.append(vel_error[1])
+                    velocity_errors_z.append(vel_error[2])
+                else:
+                    velocity_errors_x.append(0.0)
+                    velocity_errors_y.append(0.0)
+                    velocity_errors_z.append(0.0)
+            
+            if len(velocity_errors_x) > 0 and state_array.shape[1] > 11:
+                axes2[2, 1].plot(tracking_error_time, velocity_errors_x, 'b-', linewidth=2, label='VX Error')
+                axes2[2, 1].plot(tracking_error_time, velocity_errors_y, 'r-', linewidth=2, label='VY Error')
+                axes2[2, 1].plot(tracking_error_time, velocity_errors_z, 'g-', linewidth=2, label='VZ Error')
+                axes2[2, 1].set_xlabel('Time (s)')
+                axes2[2, 1].set_ylabel('Velocity Error (m/s)')
+                axes2[2, 1].legend(fontsize=8)
+                axes2[2, 1].grid(True)
+                axes2[2, 1].set_title('Linear Velocity Errors (VX, VY, VZ)')
+            else:
+                axes2[2, 1].text(0.5, 0.5, 'No velocity data', ha='center', va='center', transform=axes2[2, 1].transAxes)
+                axes2[2, 1].set_title('Velocity Errors (N/A)')
         else:
             axes2[2, 1].text(0.5, 0.5, 'No velocity data', ha='center', va='center', transform=axes2[2, 1].transAxes)
             axes2[2, 1].set_title('Velocity Errors (N/A)')
         
-        # Combined tracking error summary (RMS values over time windows)
+        # Combined tracking error summary (RMS values over time windows) - more dense sampling
         if gripper_pos_error_norm is not None and len(gripper_pos_error_norm) > 0:
-            # Calculate RMS errors over sliding windows using MPC horizon length as window size
+            # Calculate RMS errors over sliding windows with smaller window size for denser sampling
+            # Use 1/4 of MPC horizon or minimum 2 steps for more dense RMS calculation
             mpc_horizon_length = len(self.mpc_controller.solver.xs)
-            window_size = max(1, mpc_horizon_length)  # Use MPC horizon as window size
+            window_size = max(2, mpc_horizon_length // 4)  # Smaller window for denser sampling
+            step_size = max(1, window_size // 2)  # Overlapping windows for smoother curves
+            
             rms_pos_base = []
             rms_pos_ee = []
             rms_att_base = []
             rms_att_ee = []
             time_windows = []
             
-            for i in range(0, len(tracking_error_time), window_size):
+            for i in range(0, len(tracking_error_time) - window_size + 1, step_size):
                 end_idx = min(i + window_size, len(tracking_error_time))
                 time_windows.append(tracking_error_time[i:end_idx].mean())
                 
@@ -1507,25 +1706,27 @@ class NumericSimulator:
                 
                 # End-effector position and pitch RMS
                 rms_pos_ee.append(np.sqrt(np.mean(gripper_pos_error_norm[i:end_idx]**2)))
-                rms_att_ee.append(np.sqrt(np.mean(gripper_pitch_errors[i:end_idx]**2)))
+                rms_att_ee.append(np.sqrt(np.mean(np.abs(gripper_pitch_errors[i:end_idx])**2)))
             
-            axes2[2, 2].plot(time_windows, rms_pos_base, 'b-', linewidth=2, marker='o', label='Base Position RMS')
-            axes2[2, 2].plot(time_windows, rms_pos_ee, 'r-', linewidth=2, marker='s', label='EE Position RMS')
+            axes2[2, 2].plot(time_windows, rms_pos_base, 'b-', linewidth=2, marker='o', markersize=3, label='Base Position RMS')
+            axes2[2, 2].plot(time_windows, rms_pos_ee, 'r-', linewidth=2, marker='s', markersize=3, label='EE Position RMS')
             axes2[2, 2].set_xlabel('Time (s)')
             axes2[2, 2].set_ylabel('RMS Error (m)')
             axes2[2, 2].legend(fontsize=8)
             axes2[2, 2].grid(True)
             axes2[2, 2].set_title('RMS Tracking Error Evolution')
         else:
-            # Fallback: Calculate base RMS only when no gripper data
+            # Fallback: Calculate base RMS only when no gripper data - also use denser sampling
             if len(tracking_error_time) > 0:
                 mpc_horizon_length = len(self.mpc_controller.solver.xs)
-                window_size = max(1, mpc_horizon_length)  # Use MPC horizon as window size
+                window_size = max(2, mpc_horizon_length // 4)  # Smaller window for denser sampling
+                step_size = max(1, window_size // 2)  # Overlapping windows for smoother curves
+                
                 rms_pos_base = []
                 rms_att_base = []
                 time_windows = []
                 
-                for i in range(0, len(tracking_error_time), window_size):
+                for i in range(0, len(tracking_error_time) - window_size + 1, step_size):
                     end_idx = min(i + window_size, len(tracking_error_time))
                     time_windows.append(tracking_error_time[i:end_idx].mean())
                     
@@ -1533,8 +1734,8 @@ class NumericSimulator:
                     rms_pos_base.append(np.sqrt(np.mean(position_error_norm[i:end_idx]**2)))
                     rms_att_base.append(np.sqrt(np.mean(attitude_error_norm[i:end_idx]**2)))
                 
-                axes2[2, 2].plot(time_windows, rms_pos_base, 'b-', linewidth=2, marker='o', label='Base Position RMS')
-                axes2[2, 2].plot(time_windows, rms_att_base, 'c-', linewidth=2, marker='^', label='Base Attitude RMS')
+                axes2[2, 2].plot(time_windows, rms_pos_base, 'b-', linewidth=2, marker='o', markersize=3, label='Base Position RMS')
+                axes2[2, 2].plot(time_windows, rms_att_base, 'c-', linewidth=2, marker='^', markersize=3, label='Base Attitude RMS')
                 axes2[2, 2].set_xlabel('Time (s)')
                 axes2[2, 2].set_ylabel('RMS Error')
                 axes2[2, 2].legend(fontsize=8)
@@ -2024,7 +2225,8 @@ class NumericSimulator:
             'initial_state': self.initial_state,
             'enable_disturbance': self.enable_disturbance,
             'enable_noise': self.enable_noise,
-            'enable_l1_control': self.enable_l1_control
+            'enable_l1_control': self.enable_l1_control,
+            'control_delay': self.control_delay
         }
         
         # Add L1 configuration if enabled
@@ -2059,6 +2261,14 @@ class NumericSimulator:
                 'max_l1_compute_time_ms': float(np.max(self.l1_compute_times) * 1000),
                 'l1_start_time': self.l1_start_time,
                 'avg_l1_adaptive_magnitude': float(np.mean(np.linalg.norm(self.l1_u_ad_data, axis=1))) if len(self.l1_u_ad_data) > 0 else 0.0
+            })
+        
+        # Add control delay statistics
+        if self.control_delay > 0:
+            stats.update({
+                'control_delay_seconds': self.control_delay,
+                'control_delay_steps': self.delay_steps,
+                'delayed_control_entries': len(self.delayed_control_data)
             })
         
         with open(save_dir / 'statistics.yaml', 'w') as f:
@@ -2106,7 +2316,7 @@ def create_default_config(filename='numeric_sim_config.yaml'):
 def main():
     """Main function"""
     parser = argparse.ArgumentParser(description='Numeric simulation for MPC controller')
-    parser.add_argument('--config', type=str, default='numeric_sim_config_catch_high_speed.yaml',
+    parser.add_argument('--config', type=str, default='numeric_sim_config_catch.yaml',
                        help='Configuration file path')
     parser.add_argument('--create-config', action='store_true',
                        help='Create default configuration file and exit')
