@@ -21,7 +21,7 @@ from utils.create_problem import get_opt_traj, create_mpc_controller, create_sta
 from utils.u_convert import thrustToForceTorqueAll
 
 # from controller_msgs.msg import FlatTarget
-from mavros_msgs.msg import State, PositionTarget, AttitudeTarget
+from mavros_msgs.msg import State, PositionTarget, AttitudeTarget, ActuatorControl
 from mavros_msgs.srv import SetMode, SetModeRequest
 from tf.transformations import quaternion_matrix
 from geometry_msgs.msg import Point, Vector3, Pose, Quaternion, Twist
@@ -62,9 +62,9 @@ class TrajectoryPublisher:
         self.env_info = self.detect_environment()
         
         # main parameters
-        self.robot_name = rospy.get_param('~robot_name', 's500_uam')     # s500, s500_uam, hexacopter370_flying_arm_3
-        self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon')   # displacement, catch_vicon
-        self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 50)  # ms
+        self.robot_name = rospy.get_param('~robot_name', 's500')     # s500, s500_uam, hexacopter370_flying_arm_3
+        self.trajectory_name = rospy.get_param('~trajectory_name', 'displacement_fast')   # displacement, catch_vicon
+        self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 10)  # ms
         
         self.simulation_actuation_method = 'full' # full, quadrotor
         self.l1_control_method = 'simulation' # mpc_next, simulation, planned
@@ -88,7 +88,7 @@ class TrajectoryPublisher:
             rospy.logwarn("Jetson detected - forcing use_simulation to False")
         else:
             # running on PC
-            self.control_rate = rospy.get_param('~control_rate', 50.0)
+            self.control_rate = rospy.get_param('~control_rate', 100.0)
             self.odom_source = rospy.get_param('~odom_source', 'gazebo')
             self.use_simulation = rospy.get_param('~use_simulation', True)
             self.platform_name = 'pc'
@@ -106,7 +106,7 @@ class TrajectoryPublisher:
         self.publish_reference_trajectory_enabled = rospy.get_param('~publish_reference_trajectory', False)
         
         # Control limits for controller
-        self.max_thrust = rospy.get_param('~max_thrust', 7.43 * 4)
+        self.max_thrust = rospy.get_param('~max_thrust', 10.5 * 4)  # 7.43 for s500_uam, 7.1 for s500
         self.max_angular_velocity = rospy.get_param('~max_angular_velocity', math.radians(120))  # rad/s
         self.min_thrust_cmd = rospy.get_param('~min_thrust_cmd', 0.0)  # Minimum thrust command pass to px4
         self.max_thrust_cmd = rospy.get_param('~max_thrust_cmd', 0.9)  # Maximum thrust command pass to px4
@@ -189,6 +189,7 @@ class TrajectoryPublisher:
         self.mavros_setpoint_raw_pub = rospy.Publisher('/mavros/setpoint_raw/local', PositionTarget, queue_size=10)
         self.yaw_pub = rospy.Publisher('/reference/yaw', Float32, queue_size=10)
         self.body_rate_thrust_pub = rospy.Publisher('/mavros/setpoint_raw/attitude', AttitudeTarget, queue_size=10)
+        self.mavros_setpoint_thrust_torque_pub = rospy.Publisher('/mavros/actuator_control', ActuatorControl, queue_size=10)
         self.mpc_state_pub = rospy.Publisher("/mpc/state", MpcState, queue_size=10)
         
         # arm control publisher (real)
@@ -756,7 +757,11 @@ class TrajectoryPublisher:
             # print(f"state_next: {self.state_next}")
             
             # 3. Publish control command
-            self.publish_mpc_control_command(self.l1_controller.u_mpc, self.l1_controller.u_ad, self.l1_controller.u_tracking)
+            # self.publish_drone_command_thrust_angular_rate(self.l1_controller.u_mpc, self.l1_controller.u_ad, self.l1_controller.u_tracking)
+            
+            self.publish_drone_command_thrust_torque()
+            
+            # self.publish_drone_command_thrust_orientation()  # hard to use, large tracking error and delay
             
             if self.arm_enabled:
                 self.publish_arm_control_command()
@@ -909,11 +914,20 @@ class TrajectoryPublisher:
         
         # get mpc control command
         self.control_command_mpc = self.mpc_controller.solver.us_squash[0]
+        
+        # get control reference
+        self.control_ref_mpc = self.traj_solver.us[min(self.traj_ref_index, len(self.traj_solver.us)-1)]
+        
         # print(f"control_command_mpc: {self.control_command_mpc}")
         
         # Convert to force/torque
         self.mpc_control_command_ft = thrustToForceTorqueAll(
             self.control_command_mpc,
+            self.mpc_controller.platform_params.tau_f
+        )
+        
+        self.control_ref_mpc_ft = thrustToForceTorqueAll(
+            self.control_ref_mpc,
             self.mpc_controller.platform_params.tau_f
         )
         
@@ -1328,7 +1342,7 @@ class TrajectoryPublisher:
                     self.joint2_pub.publish(Float64(effort[1]))
             # print('publish arm control command: ', joint_msg.position)  
               
-    def publish_mpc_control_command(self, u_mpc, u_ad, u_tracking):
+    def publish_drone_command_thrust_angular_rate(self, u_mpc, u_ad, u_tracking):
         '''
         发布L1的控制指令
             u_ad: L1控制器得到的控制指令，包括推力、力矩和机械臂控制力矩， 如何转换成 PX4 控制指令 推力+角速度？
@@ -1345,10 +1359,11 @@ class TrajectoryPublisher:
     
         
         self.state_mpc_next_time_step = self.mpc_controller.solver.xs[1]
+        tracking_error = self.traj_state_ref[self.traj_ref_index][:3] - self.state[:3]
         
         if self.l1_control_method == 'simulation':
             self.roll_rate_ref = self.state_next[self.mpc_controller.robot_model.nq + 3]
-            self.pitch_rate_ref = self.state_next[self.mpc_controller.robot_model.nq + 4]
+            self.pitch_rate_ref = self.state_next[self.mpc_controller.robot_model.nq + 4] + tracking_error[0] * 0
             self.yaw_rate_ref = self.state_next[self.mpc_controller.robot_model.nq + 5]
         elif self.l1_control_method == 'planned':
             self.roll_rate_ref = self.traj_state_ref[self.traj_ref_index][self.mpc_controller.robot_model.nq + 3]
@@ -1375,7 +1390,7 @@ class TrajectoryPublisher:
             assert False, f"Invalid method: {self.l1_control_method}"
         
         # Limit total thrust
-        self.total_thrust = self.mpc_control_command_ft[2] + u_ad[2] + u_tracking[2]
+        self.total_thrust = self.mpc_control_command_ft[2] + u_ad[2]
         
         att_msg = AttitudeTarget()
         att_msg.header.stamp = rospy.Time.now()
@@ -1392,7 +1407,7 @@ class TrajectoryPublisher:
         att_msg.body_rate = Vector3(self.roll_rate_ref, self.pitch_rate_ref, self.yaw_rate_ref)
         
         # 推力值 (范围 0 ~ 1)
-        att_msg.thrust = self.total_thrust / self.max_thrust
+        att_msg.thrust = self.total_thrust / self.max_thrust + tracking_error[2] * 0
         
         # 对推力进行限幅
         att_msg.thrust = np.clip(att_msg.thrust, self.min_thrust_cmd, self.max_thrust_cmd)
@@ -1403,6 +1418,60 @@ class TrajectoryPublisher:
             self.recorded_data['thrust_command'].append(att_msg.thrust)
 
         self.body_rate_thrust_pub.publish(att_msg)
+        
+
+    def publish_drone_command_thrust_torque(self):
+        '''
+        description: publish drone command thrust torque
+        return {*}
+        '''
+        
+        control_mpc = self.mpc_control_command_ft
+        # print(f"control_mpc: {control_mpc}")
+        
+        att_msg = ActuatorControl()
+        att_msg.header.stamp = rospy.Time.now()
+        att_msg.group_mix = 0
+        att_msg.controls = [0.0]*8
+        
+        torque_scale = 1
+        
+        att_msg.controls[0] = control_mpc[3] * torque_scale   # roll
+        att_msg.controls[1] = -control_mpc[4] * torque_scale   # pitch
+        att_msg.controls[2] = -control_mpc[5] * torque_scale   # yaw
+        
+        att_msg.controls[3] = control_mpc[2] / self.max_thrust
+        print(f"att_msg.controls: [{', '.join(f'{x:.2f}' for x in att_msg.controls)}]")
+        
+        self.mavros_setpoint_thrust_torque_pub.publish(att_msg)
+    
+    def publish_drone_command_thrust_orientation(self):
+        '''
+        description: publish drone command thrust rate
+        return {*}
+        '''
+        self.state_mpc_next_time_step = self.mpc_controller.solver.xs[1]
+        self.state_planned = self.traj_state_ref[self.traj_ref_index]
+        self.state_simulated = self.state_next
+        
+        att_msg = AttitudeTarget()
+        att_msg.header.stamp = rospy.Time.now()
+        
+        # 设置 type_mask，忽略姿态，仅使用角速度 + 推力
+        # att_msg.type_mask = AttitudeTarget.I
+        
+        self.total_thrust = self.mpc_control_command_ft[2]
+        att_msg.thrust = self.total_thrust / self.max_thrust
+        
+        state_pub = self.state_simulated
+        
+        att_msg.orientation.x = state_pub[3]
+        att_msg.orientation.y = state_pub[4]
+        att_msg.orientation.z = state_pub[5]
+        att_msg.orientation.w = state_pub[6]
+        
+        self.body_rate_thrust_pub.publish(att_msg)
+        
             
     def mpc_status_time_callback(self, event):
         # check if the controller is started
@@ -1441,6 +1510,7 @@ class TrajectoryPublisher:
         # L1控制器调试信息
         # L1 debug information
         float64[] u_ad           # L1控制指令
+        float64[] u_ref
 
         float64[] z_ref          # 参考状态
         float64[] z_hat          # 估计状态
@@ -1493,6 +1563,7 @@ class TrajectoryPublisher:
         
         # u_mpc
         debug_msg.u_mpc = self.mpc_control_command_ft.tolist()
+        debug_msg.u_ref = self.control_ref_mpc_ft.tolist()
         
         # if self.enable_l1_control:
         debug_msg.u_ad = self.l1_controller.u_ad.tolist()
@@ -1522,7 +1593,7 @@ class TrajectoryPublisher:
         
         # Get gripper frame ID
         
-        if self.arm_enabled:
+        if self.arm_enabled and self.robot_name == 's500_uam':
             gripper_frame_id = model.getFrameId("gripper_link")
             if gripper_frame_id < model.nframes:
                 # Get gripper position and orientation
@@ -1533,16 +1604,55 @@ class TrajectoryPublisher:
                 # Convert quaternion to Euler angles (roll, pitch, yaw)
                 gripper_euler = pin.rpy.matrixToRpy(gripper_pose.rotation)
                 
-                # Add gripper pose to debug message
+                # Calculate gripper tracking error
+                gripper_tracking_error = 0.0
+                gripper_tracking_error_xyz = [0.0, 0.0, 0.0]
+                ref_gripper_position = [0.0, 0.0, 0.0]
+                ref_gripper_euler = [0.0, 0.0, 0.0]
+                
+                try:
+                    if self.traj_ref_index < len(self.traj_state_ref):
+                        # Get reference gripper position and orientation from reference trajectory
+                        ref_data = model.createData()
+                        pin.forwardKinematics(model, ref_data, self.traj_state_ref[self.traj_ref_index][:model.nq])
+                        pin.updateFramePlacements(model, ref_data)
+                        ref_gripper_pose = ref_data.oMf[gripper_frame_id]
+                        ref_gripper_position = ref_gripper_pose.translation.tolist()
+                        
+                        # Extract reference orientation
+                        ref_gripper_euler = pin.rpy.matrixToRpy(ref_gripper_pose.rotation).tolist()
+                        
+                        # Calculate position tracking error (both per-axis and total)
+                        position_error_vector = np.array(gripper_position) - np.array(ref_gripper_position)
+                        gripper_tracking_error_xyz = position_error_vector.tolist()  # [error_x, error_y, error_z]
+                        gripper_tracking_error = np.linalg.norm(position_error_vector)  # total error magnitude
+                except Exception as e:
+                    rospy.logwarn(f"Failed to calculate gripper tracking error: {e}")
+                
+                # Add gripper pose and tracking error to debug message
                 debug_msg.gripper_position = gripper_position.tolist()
                 debug_msg.gripper_orientation = [gripper_orientation.x, gripper_orientation.y, 
                                             gripper_orientation.z, gripper_orientation.w]
                 debug_msg.gripper_euler = gripper_euler.tolist()  # [roll, pitch, yaw] in radians
+                debug_msg.gripper_tracking_error = gripper_tracking_error  # total error magnitude
+                debug_msg.gripper_tracking_error_xyz = gripper_tracking_error_xyz  # [error_x, error_y, error_z]
+                debug_msg.gripper_position_ref = ref_gripper_position
+                debug_msg.gripper_euler_ref = ref_gripper_euler
             else:
                 rospy.logwarn("Gripper frame not found in robot model")
                 debug_msg.gripper_position = [0.0, 0.0, 0.0]
                 debug_msg.gripper_orientation = [0.0, 0.0, 0.0, 1.0]
                 debug_msg.gripper_euler = [0.0, 0.0, 0.0]
+                debug_msg.gripper_tracking_error = 0.0
+                debug_msg.gripper_tracking_error_xyz = [0.0, 0.0, 0.0]
+                debug_msg.gripper_position_ref = [0.0, 0.0, 0.0]
+                debug_msg.gripper_euler_ref = [0.0, 0.0, 0.0]
+        else:
+            # If arm is not enabled, set default values for gripper tracking error
+            debug_msg.gripper_tracking_error = 0.0
+            debug_msg.gripper_tracking_error_xyz = [0.0, 0.0, 0.0]
+            debug_msg.gripper_position_ref = [0.0, 0.0, 0.0]
+            debug_msg.gripper_euler_ref = [0.0, 0.0, 0.0]
         
         # 发布消息
         self.mpc_state_pub.publish(debug_msg)
