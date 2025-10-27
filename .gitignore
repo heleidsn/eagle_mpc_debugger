@@ -8,5 +8,4 @@ config/yaml/trajectories/temp_trajectory.yaml
 temp_trajectory.yaml
 .gitignore
 temp_processed_trajectory.yaml
-results/numeric_sim/
-results/catch_test/
+results/
