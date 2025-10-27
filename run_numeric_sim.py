@@ -15,6 +15,53 @@ import yaml
 from datetime import datetime
 from pathlib import Path
 
+class PIDController:
+    """Simple PID controller for angular velocity to torque conversion"""
+    def __init__(self, kp, ki, kd, dt=0.001):
+        self.kp = kp
+        self.ki = ki  
+        self.kd = kd
+        self.dt = dt
+        
+        self.error_sum = 0.0
+        self.last_error = 0.0
+        self.initialized = False
+        
+    def reset(self):
+        """Reset PID controller state"""
+        self.error_sum = 0.0
+        self.last_error = 0.0
+        self.initialized = False
+        
+    def update(self, setpoint, current_value):
+        """Update PID controller and return control output"""
+        error = setpoint - current_value
+        
+        # Clamp error to prevent overflow
+        error = np.clip(error, -100.0, 100.0)
+        
+        # Integral term with windup protection
+        self.error_sum += error * self.dt
+        self.error_sum = np.clip(self.error_sum, -10.0, 10.0)  # Anti-windup
+        
+        # Derivative term
+        if self.initialized:
+            error_rate = (error - self.last_error) / self.dt
+            # Clamp derivative to prevent overflow
+            error_rate = np.clip(error_rate, -1000.0, 1000.0)
+        else:
+            error_rate = 0.0
+            self.initialized = True
+            
+        # PID output
+        output = self.kp * error + self.ki * self.error_sum + self.kd * error_rate
+        
+        # Clamp output to prevent overflow
+        output = np.clip(output, -1000.0, 1000.0)
+        
+        self.last_error = error
+        return output
+
 # Try to import crocoddyl and related packages (only needed for MPC mode)
 try:
     import crocoddyl
@@ -81,7 +128,7 @@ class NumericSimulator:
         print(f"  Control dimension: {self.control_dim}")
         
         # Validate actuation mode compatibility
-        if self.control_dim != 2 and self.simulation_actuation_mode not in ['full', 'quad']:
+        if self.control_dim != 2 and self.simulation_actuation_mode not in ['full', 'quad', 'thrust_angular_velocity']:
             print(f"Warning: Unrecognized simulation_actuation_mode '{self.simulation_actuation_mode}' for full system")
         
     def load_config(self, config_file):
@@ -122,7 +169,11 @@ class NumericSimulator:
             # Simulation comparison modes
             'simulation_modes': ['mpc_only'],  # options: 'mpc_only', 'l1_only', 'mpc_l1', 'comparison'
             # Simulation actuation model
-            'simulation_actuation_mode': 'full',  # options: 'full', 'quad'
+            'simulation_actuation_mode': 'thrust_angular_velocity',  # options: 'full', 'quad', 'thrust_angular_velocity'
+            # PID controller parameters for thrust + angular velocity mode
+            'pid_pitch_kp': 0.5,
+            'pid_pitch_ki': 0.0,
+            'pid_pitch_kd': 0.0,
         }
         
         # Try to load config file if it exists
@@ -140,6 +191,16 @@ class NumericSimulator:
         
         # Initialize control delay buffer
         self.init_control_delay_buffer()
+        
+        # Initialize PID controller for thrust + angular velocity mode
+        if self.simulation_actuation_mode == 'thrust_angular_velocity':
+            self.pitch_pid = PIDController(
+                kp=self.pid_pitch_kp,
+                ki=self.pid_pitch_ki, 
+                kd=self.pid_pitch_kd,
+                dt=self.simulation_dt
+            )
+            print(f"PID controller initialized with Kp={self.pid_pitch_kp}, Ki={self.pid_pitch_ki}, Kd={self.pid_pitch_kd}")
         
         # Calculate tracking error recording interval based on trajectory optimization dt
         self.tracking_error_interval = max(1, int(self.dt_traj_opt / self.simulation_dt / 1000))
@@ -256,20 +317,22 @@ class NumericSimulator:
             )
             
             # Store reference control inputs from trajectory optimization
-            self.traj_u_ref = self.trajectory.us if hasattr(self.trajectory, 'us') else []
+            self.traj_u_ref = self.trajectory.us_squash if hasattr(self.trajectory, 'us_squash') else []
             print(f"Reference control trajectory loaded: {len(self.traj_u_ref)} steps")
             if len(self.traj_u_ref) > 0:
                 print(f"  Control dimension: {self.traj_u_ref[0].shape}")
                 print(f"  First control sample: {self.traj_u_ref[0][:3]}")  # Show first 3 elements
             
             # Create MPC controller
-            mpc_name = "rail"
+            # mpc_name = "rail"
+            mpc_name = "rail_with_ref_control"
             mpc_yaml = f'{self.yaml_path}/mpc/{self.robot_name}_mpc.yaml'
             
             self.mpc_controller = create_mpc_controller(
                 mpc_name,
                 self.trajectory_obj,
                 self.traj_state_ref,
+                self.traj_u_ref,
                 self.dt_traj_opt,
                 mpc_yaml
             )
@@ -363,8 +426,18 @@ class NumericSimulator:
                     print(f"Using 4-motor direct thrust control")
                     print(f"Control dimension: {self.control_dim} (direct motor thrust format)")
                     
+                elif self.simulation_actuation_mode == 'thrust_angular_velocity':
+                    # Use exactly the same model as 'full' mode since we're using force/torque interface
+                    self.sim_update_model = create_state_update_model(
+                        self.trajectory_obj.robot_model_path, 
+                        int(self.simulation_dt * 1000)  # Convert to ms
+                    )
+                    self.sim_update_data = self.sim_update_model.createData()
+                    self.use_simple_dynamics = False
+                    print(f"Simulation model initialized with thrust+angular_velocity mode using force/torque interface")
+                    print(f"Control dimension: {self.control_dim} (force/torque format)")
                 else:
-                    raise ValueError(f"Unknown simulation_actuation_mode: {self.simulation_actuation_mode}. Expected 'full' or 'quad'")
+                    raise ValueError(f"Unknown simulation_actuation_mode: {self.simulation_actuation_mode}. Expected 'full', 'quad', or 'thrust_angular_velocity'")
             
         except Exception as e:
             print(f"Error initializing simulation model: {e}")
@@ -393,6 +466,9 @@ class NumericSimulator:
         
         # Disturbance data storage
         self.disturbance_data = []
+        
+        # Pitch control data storage (for thrust_angular_velocity mode)
+        self.pitch_control_data = []
         
         # Track MPC updates
         self.last_mpc_update_step = -1
@@ -582,6 +658,15 @@ class NumericSimulator:
                     # For quad mode, use direct motor thrusts (control_squash directly)
                     # control_squash contains [motor1, motor2, motor3, motor4, arm_joint1, arm_joint2]
                     control_ft = control_squash.copy()
+                elif self.simulation_actuation_mode == 'thrust_angular_velocity':
+                    # For thrust + angular velocity mode, use total thrust + angular velocity control
+                    control_ft_original = thrustToForceTorqueAll(
+                        control_squash,
+                        self.platform_params.tau_f
+                    )
+                    # Set current time for data recording
+                    self.current_time = current_time
+                    control_ft = self.process_thrust_angular_velocity_control(control_ft_original, current_state)
                 else:
                     raise ValueError(f"Unknown simulation_actuation_mode: {self.simulation_actuation_mode}")
             
@@ -597,6 +682,68 @@ class NumericSimulator:
                 return self.current_control, time.time() - start_time, traj_index
             else:
                 return np.zeros(self.control_dim), time.time() - start_time, traj_index
+    
+    def process_thrust_angular_velocity_control(self, control_squash, current_state):
+        """
+        Process control for thrust + angular velocity mode
+        
+        Args:
+            control_squash: MPC control output (motor thrusts + arm joints)
+            current_state: Current system state
+            
+        Returns:
+            control_ft: Control in force/torque format for simulation
+        """
+        # Get next step angular velocity from MPC planning
+        next_state = self.mpc_controller.solver.xs[1]  # Next step planned state
+        nq = self.mpc_controller.robot_model.nq
+        
+        # Extract planned angular velocity (pitch component, index 1)
+        planned_angular_velocity = next_state[nq+3:nq+6]  # [wx, wy, wz]
+        planned_pitch_rate = planned_angular_velocity[1]  # pitch rate (wy)
+        
+        # Get planned pitch rate for next step (if available)
+        planned_pitch_rate_next = 0.0
+        if len(self.mpc_controller.solver.xs) > 2:
+            next_next_state = self.mpc_controller.solver.xs[2]
+            planned_angular_velocity_next = next_next_state[nq+3:nq+6]
+            planned_pitch_rate_next = planned_angular_velocity_next[1]
+        
+        # Get current angular velocity
+        current_angular_velocity = current_state[nq+3:nq+6]
+        current_pitch_rate = current_angular_velocity[1]
+        
+        # Use PID to convert pitch angular velocity command to torque
+        pitch_torque = self.pitch_pid.update(planned_pitch_rate, current_pitch_rate)
+        print(f"planned_pitch_rate: {planned_pitch_rate}, current_pitch_rate: {current_pitch_rate}, pitch_torque: {pitch_torque}")
+        
+        # Convert to force/torque format
+        # [Fx, Fy, Fz, Mx, My, Mz, arm_joint1, arm_joint2]
+        control_ft = control_squash.copy()
+        
+        # Store original planned pitch torque
+        planned_pitch_torque = control_ft[4] if len(control_ft) > 4 else 0.0
+        
+        # Set pitch torque (My)
+        print(f"planned pitch torque: {planned_pitch_torque} -> {pitch_torque}")
+        control_ft[4] = pitch_torque
+        
+        # Record pitch control data
+        pitch_data = {
+            'time': getattr(self, 'current_time', 0.0),
+            'planned_pitch_torque': planned_pitch_torque,
+            'pid_pitch_torque': pitch_torque,
+            'planned_pitch_rate': planned_pitch_rate,
+            'planned_pitch_rate_next': planned_pitch_rate_next,
+            'actual_pitch_rate': current_pitch_rate
+        }
+        self.pitch_control_data.append(pitch_data)
+        
+        # Keep arm joint commands unchanged
+        if len(control_squash) > 4:
+            control_ft[-2:] = control_squash[-2:]  # arm joint torques
+            
+        return control_ft
     
     def solve_l1_control(self, current_state, u_baseline, current_time):
         """
@@ -750,6 +897,11 @@ class NumericSimulator:
                 # This would require inverse transformation of thrustToForceTorqueAll
                 print(f"Warning: Control conversion from force/torque to motor thrusts not fully implemented")
                 return control_input
+        
+        elif self.simulation_actuation_mode == 'thrust_angular_velocity':
+            # Simulation expects force/torque format (same as 'full' mode)
+            # control_input should already be in force/torque format from process_thrust_angular_velocity_control
+            return control_input
                 
         else:
             raise ValueError(f"Unknown simulation_actuation_mode: {self.simulation_actuation_mode}")
@@ -827,7 +979,7 @@ class NumericSimulator:
                         self.l1_sig_hat_data.append(np.zeros(self.l1_controller.state_dim_euler))
                         self.l1_z_hat_data.append(np.zeros(self.l1_controller.state_dim_euler))
                     
-                    print(f"Step {sim_step:6d}, Time {current_time:6.3f}s, MPC solved in {solve_time*1000:6.2f}ms, "
+                    print(f"Step {sim_step:6d}, Time {current_time:6.3f}s, MPC solved in {solve_time*1000:6.2f}ms, Iters: {self.mpc_controller.solver.iter}, "
                           f"Cost: {self.mpc_controller.solver.cost:8.3f}, Traj index: {traj_index}")
             
             # Determine final control command based on simulation mode
@@ -868,6 +1020,7 @@ class NumericSimulator:
                 # cannot add disturbance to quad mode
                 total_control = control_input.copy()
             else:
+                # For 'full' and 'thrust_angular_velocity' modes, disturbance can be added
                 total_control = control_input + disturbance
             
             # Store control data
@@ -2024,11 +2177,94 @@ class NumericSimulator:
                 fig4.savefig(fig4_path, dpi=300, bbox_inches='tight')
                 print(f"  - L1 disturbance estimation plot saved: {fig4_path}")
             
+            # Save pitch control analysis plot if it exists
+            if self.simulation_actuation_mode == 'thrust_angular_velocity' and len(self.pitch_control_data) > 0:
+                fig5 = self.plot_pitch_control_analysis()
+                if fig5 is not None:
+                    fig5_path = save_dir / '5_pitch_control_analysis.png'
+                    fig5.savefig(fig5_path, dpi=300, bbox_inches='tight')
+                    print(f"  - Pitch control analysis plot saved: {fig5_path}")
+            
             # Close all figures to free memory
             plt.close('all')
         else:
-            # Show plots interactively
+            # Create pitch control analysis plot first (before showing other plots)
+            fig5 = None
+            if self.simulation_actuation_mode == 'thrust_angular_velocity' and len(self.pitch_control_data) > 0:
+                fig5 = self.plot_pitch_control_analysis()
+            
+            # Show all plots interactively (including pitch control analysis)
             plt.show()
+    
+    def plot_pitch_control_analysis(self):
+        """Plot pitch control analysis for thrust_angular_velocity mode"""
+        if not self.pitch_control_data:
+            print("No pitch control data available for plotting")
+            return None
+            
+        print(f"Plotting pitch control analysis... (Data points: {len(self.pitch_control_data)})")
+        
+        # Extract data
+        times = np.array([pd['time'] for pd in self.pitch_control_data])
+        planned_pitch_torques = np.array([pd['planned_pitch_torque'] for pd in self.pitch_control_data])
+        pid_pitch_torques = np.array([pd['pid_pitch_torque'] for pd in self.pitch_control_data])
+        planned_pitch_rates = np.array([pd['planned_pitch_rate'] for pd in self.pitch_control_data])
+        planned_pitch_rates_next = np.array([pd['planned_pitch_rate_next'] for pd in self.pitch_control_data])
+        actual_pitch_rates = np.array([pd['actual_pitch_rate'] for pd in self.pitch_control_data])
+        
+        print(f"Time range: {times[0]:.3f} - {times[-1]:.3f} seconds")
+        print(f"Pitch torque range: {np.min(planned_pitch_torques):.3f} - {np.max(planned_pitch_torques):.3f} N⋅m")
+        print(f"Pitch rate range: {np.min(planned_pitch_rates):.3f} - {np.max(planned_pitch_rates):.3f} rad/s")
+        
+        # Convert angular rates from rad/s to deg/s for better readability
+        planned_pitch_rates_deg = np.degrees(planned_pitch_rates)
+        planned_pitch_rates_next_deg = np.degrees(planned_pitch_rates_next)
+        actual_pitch_rates_deg = np.degrees(actual_pitch_rates)
+        
+        # Create figure with subplots
+        fig, axes = plt.subplots(2, 1, figsize=(12, 10))
+        fig.suptitle('Pitch Control Analysis (Thrust + Angular Velocity Mode)', fontsize=16)
+        
+        # Plot 1: Pitch Torques
+        ax1 = axes[0]
+        ax1.plot(times, planned_pitch_torques, 'b-', linewidth=2, label='Planned Pitch Torque (MPC)', alpha=0.8)
+        ax1.plot(times, pid_pitch_torques, 'r-', linewidth=2, label='PID Pitch Torque (Applied)', alpha=0.8)
+        ax1.set_xlabel('Time (s)')
+        ax1.set_ylabel('Pitch Torque (N⋅m)')
+        ax1.set_title('Pitch Torque Comparison')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # Add statistics
+        planned_mean = np.mean(np.abs(planned_pitch_torques))
+        pid_mean = np.mean(np.abs(pid_pitch_torques))
+        ax1.text(0.02, 0.98, f'Planned Mean: {planned_mean:.3f} N⋅m\nPID Mean: {pid_mean:.3f} N⋅m', 
+                transform=ax1.transAxes, verticalalignment='top', 
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+        
+        # Plot 2: Pitch Rates
+        ax2 = axes[1]
+        ax2.plot(times, planned_pitch_rates_deg, 'g-', linewidth=2, label='Planned Pitch Rate', alpha=0.8)
+        ax2.plot(times, planned_pitch_rates_next_deg, 'c--', linewidth=1.5, label='Planned Pitch Rate (Next)', alpha=0.7)
+        ax2.plot(times, actual_pitch_rates_deg, 'k-', linewidth=2, label='Actual Pitch Rate', alpha=0.8)
+        ax2.set_xlabel('Time (s)')
+        ax2.set_ylabel('Pitch Rate (deg/s)')
+        ax2.set_title('Pitch Rate Tracking')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+        
+        # Calculate tracking error
+        pitch_rate_error = planned_pitch_rates_deg - actual_pitch_rates_deg
+        rmse = np.sqrt(np.mean(pitch_rate_error**2))
+        max_error = np.max(np.abs(pitch_rate_error))
+        
+        ax2.text(0.02, 0.98, f'RMSE: {rmse:.2f} deg/s\nMax Error: {max_error:.2f} deg/s', 
+                transform=ax2.transAxes, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.8))
+        
+        plt.tight_layout()
+        
+        return fig
     
     def plot_planned_trajectory(self, save_dir=None):
         """Plot only the planned trajectory without simulation results"""
@@ -2176,6 +2412,22 @@ class NumericSimulator:
             # Save disturbance data
             np.save(save_dir / 'disturbance_data.npy', self.disturbance_data)
             
+            # Save pitch control data if available (for thrust_angular_velocity mode)
+            if len(self.pitch_control_data) > 0:
+                pitch_times = np.array([pd['time'] for pd in self.pitch_control_data])
+                planned_pitch_torques = np.array([pd['planned_pitch_torque'] for pd in self.pitch_control_data])
+                pid_pitch_torques = np.array([pd['pid_pitch_torque'] for pd in self.pitch_control_data])
+                planned_pitch_rates = np.array([pd['planned_pitch_rate'] for pd in self.pitch_control_data])
+                planned_pitch_rates_next = np.array([pd['planned_pitch_rate_next'] for pd in self.pitch_control_data])
+                actual_pitch_rates = np.array([pd['actual_pitch_rate'] for pd in self.pitch_control_data])
+                
+                np.save(save_dir / 'pitch_control_times.npy', pitch_times)
+                np.save(save_dir / 'planned_pitch_torques.npy', planned_pitch_torques)
+                np.save(save_dir / 'pid_pitch_torques.npy', pid_pitch_torques)
+                np.save(save_dir / 'planned_pitch_rates.npy', planned_pitch_rates)
+                np.save(save_dir / 'planned_pitch_rates_next.npy', planned_pitch_rates_next)
+                np.save(save_dir / 'actual_pitch_rates.npy', actual_pitch_rates)
+            
             # Save L1 controller data if available
             if self.enable_l1_control and len(self.l1_u_ad_data) > 0:
                 np.save(save_dir / 'l1_u_baseline_data.npy', self.l1_u_baseline_data)
@@ -2316,7 +2568,7 @@ def create_default_config(filename='numeric_sim_config.yaml'):
 def main():
     """Main function"""
     parser = argparse.ArgumentParser(description='Numeric simulation for MPC controller')
-    parser.add_argument('--config', type=str, default='numeric_sim_config_catch.yaml',
+    parser.add_argument('--config', type=str, default='numeric_sim_config_catch_fast.yaml',
                        help='Configuration file path')
     parser.add_argument('--create-config', action='store_true',
                        help='Create default configuration file and exit')
@@ -2395,5 +2647,264 @@ def main():
         raise
 
 
+def test_pid_step_response():
+    """
+    Test PID controller step response for parameter tuning
+    """
+    import matplotlib.pyplot as plt
+    
+    # PID parameters to test (adjusted for better numerical stability)
+    test_cases = [
+        {'kp': 5.0, 'ki': 0.0, 'kd': 0.0, 'name': 'Default'},
+        # {'kp': 2.0, 'ki': 0.05, 'kd': 0.05, 'name': 'Conservative'},
+        # {'kp': 8.0, 'ki': 0.2, 'kd': 0.2, 'name': 'Aggressive'},
+        {'kp': 0.25, 'ki': 0.2, 'kd': 0.003, 'name': 'PX4 default'},
+    ]
+    
+    dt = 0.001   # 10ms simulation step (reduced for stability)
+    duration = 2.0  # 2 seconds test
+    time_steps = int(duration / dt)
+    
+    setpoint = 0.5  # rad/s step input
+    step_time = 0.2  # Step occurs at 0.2s
+    
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    fig.suptitle('PID Controller Step Response Test', fontsize=14)
+    
+    # Real quadrotor pitch dynamics: I * dω/dt = M_pitch + damping
+    # For a typical small quadrotor like S500
+    I_yy = 0.015  # kg⋅m² (moment of inertia around pitch axis)
+    damping_coeff = 0.005  # Nm⋅s/rad (aerodynamic damping)
+    
+    for i, params in enumerate(test_cases):
+        # Initialize PID controller
+        pid = PIDController(params['kp'], params['ki'], params['kd'], dt)
+        
+        # Simulate step response
+        time_array = []
+        setpoint_array = []
+        output_array = []
+        response_array = []
+        current_value = 0.0  # Start at zero angular velocity
+        
+        for step in range(time_steps):
+            current_time = step * dt
+            time_array.append(current_time)
+            
+            # Apply step input at step_time
+            if current_time >= step_time:
+                current_setpoint = setpoint
+            else:
+                current_setpoint = 0.0
+            setpoint_array.append(current_setpoint)
+            
+            # PID output (torque)
+            torque_output = pid.update(current_setpoint, current_value)
+            
+            # Real quadrotor dynamics: I * dω/dt = M_pid - damping * ω
+            # Clamp torque_output to prevent numerical issues
+            torque_output = np.clip(torque_output, -1.0, 1.0)  # Realistic torque limits
+            
+            output_array.append(torque_output)
+            
+            # Check for valid values before integration
+            if np.isfinite(torque_output) and np.isfinite(current_value):
+                # Angular acceleration: α = (M_pid - damping * ω) / I
+                angular_accel = (torque_output - damping_coeff * current_value) / I_yy
+                # Euler integration: ω(k+1) = ω(k) + α * dt
+                current_value = current_value + angular_accel * dt
+                # Clamp current_value to reasonable range
+                current_value = np.clip(current_value, -20.0, 20.0)  # rad/s
+            else:
+                # Reset to zero if numerical issues occur
+                current_value = 0.0
+                
+            response_array.append(current_value)
+        
+        # Convert to numpy arrays and clean data
+        time_array = np.array(time_array)
+        setpoint_array = np.array(setpoint_array) 
+        output_array = np.array(output_array)
+        response_array = np.array(response_array)
+        
+        # Remove any NaN or inf values
+        valid_mask = np.isfinite(time_array) & np.isfinite(setpoint_array) & np.isfinite(output_array) & np.isfinite(response_array)
+        time_array = time_array[valid_mask]
+        setpoint_array = setpoint_array[valid_mask]
+        output_array = output_array[valid_mask]
+        response_array = response_array[valid_mask]
+        
+        if len(time_array) > 0:  # Only plot if we have valid data
+            # Plot angular velocity response
+            axes[0, 0].plot(time_array, setpoint_array, 'k--', linewidth=2, label='Setpoint' if i == 0 else '')
+            axes[0, 0].plot(time_array, response_array, linewidth=2, label=f'{params["name"]} (Kp={params["kp"]}, Ki={params["ki"]}, Kd={params["kd"]})')
+            
+            # Plot control output (torque)
+            axes[0, 1].plot(time_array, output_array, linewidth=2, label=f'{params["name"]}')
+        
+        # Calculate performance metrics
+        step_idx = int(step_time / dt)
+        if step_idx < len(response_array):
+            # Settling time (within 2% of final value)
+            final_value = setpoint
+            settling_tolerance = 0.02 * abs(final_value)
+            settling_idx = None
+            for j in range(step_idx, len(response_array)):
+                if abs(response_array[j] - final_value) <= settling_tolerance:
+                    # Check if it stays within tolerance for at least 50ms
+                    check_duration = int(0.05 / dt)
+                    if j + check_duration < len(response_array):
+                        within_tolerance = True
+                        for k in range(j, min(j + check_duration, len(response_array))):
+                            if abs(response_array[k] - final_value) > settling_tolerance:
+                                within_tolerance = False
+                                break
+                        if within_tolerance:
+                            settling_idx = j
+                            break
+            
+            settling_time = time_array[settling_idx] - step_time if settling_idx else duration - step_time
+            
+            # Overshoot
+            max_value = np.max(response_array[step_idx:])
+            overshoot = max(0, (max_value - final_value) / final_value * 100) if final_value != 0 else 0
+            
+            # Rise time (10% to 90% of final value)
+            val_10 = 0.1 * final_value
+            val_90 = 0.9 * final_value
+            rise_start_idx = np.where(response_array[step_idx:] >= val_10)[0]
+            rise_end_idx = np.where(response_array[step_idx:] >= val_90)[0]
+            
+            rise_time = 0
+            if len(rise_start_idx) > 0 and len(rise_end_idx) > 0:
+                rise_time = time_array[step_idx + rise_end_idx[0]] - time_array[step_idx + rise_start_idx[0]]
+            
+            print(f"{params['name']} PID (Kp={params['kp']}, Ki={params['ki']}, Kd={params['kd']}):")
+            print(f"  Settling time: {settling_time:.3f}s")
+            print(f"  Overshoot: {overshoot:.1f}%")
+            print(f"  Rise time: {rise_time:.3f}s")
+            print()
+    
+    # Format plots
+    axes[0, 0].set_xlabel('Time (s)')
+    axes[0, 0].set_ylabel('Angular Velocity (rad/s)')
+    axes[0, 0].set_title('Step Response')
+    axes[0, 0].legend()
+    axes[0, 0].grid(True)
+    
+    axes[0, 1].set_xlabel('Time (s)')
+    axes[0, 1].set_ylabel('Torque Output (Nm)')
+    axes[0, 1].set_title('Control Signal')
+    axes[0, 1].legend()
+    axes[0, 1].grid(True)
+    
+    # Add error plot
+    for i, params in enumerate(test_cases):
+        pid = PIDController(params['kp'], params['ki'], params['kd'], dt)
+        error_array = []
+        current_value = 0.0
+        
+        for step in range(time_steps):
+            current_time = step * dt
+            
+            if current_time >= step_time:
+                current_setpoint = setpoint
+            else:
+                current_setpoint = 0.0
+                
+            error = current_setpoint - current_value
+            error_array.append(error)
+            
+            torque_output = pid.update(current_setpoint, current_value)
+            # Clamp and check for numerical stability  
+            torque_output = np.clip(torque_output, -5.0, 5.0)
+            if np.isfinite(torque_output) and np.isfinite(current_value):
+                angular_accel = (torque_output - damping_coeff * current_value) / I_yy
+                current_value = current_value + angular_accel * dt
+                current_value = np.clip(current_value, -20.0, 20.0)
+            else:
+                current_value = 0.0
+        
+        axes[1, 0].plot(time_array, error_array, linewidth=2, label=f'{params["name"]}')
+    
+    axes[1, 0].set_xlabel('Time (s)')
+    axes[1, 0].set_ylabel('Error (rad/s)')
+    axes[1, 0].set_title('Tracking Error')
+    axes[1, 0].legend()
+    axes[1, 0].grid(True)
+    
+    # Add phase plot (error vs error rate)
+    for i, params in enumerate(test_cases):
+        pid = PIDController(params['kp'], params['ki'], params['kd'], dt)
+        error_array = []
+        error_rate_array = []
+        current_value = 0.0
+        last_error = 0.0
+        
+        for step in range(time_steps):
+            current_time = step * dt
+            
+            if current_time >= step_time:
+                current_setpoint = setpoint
+            else:
+                current_setpoint = 0.0
+                
+            error = current_setpoint - current_value
+            if step > 0 and dt > 0:
+                error_rate = (error - last_error) / dt
+                # Clamp error rate to prevent overflow
+                error_rate = np.clip(error_rate, -1000.0, 1000.0)
+            else:
+                error_rate = 0.0
+            
+            error_array.append(error)
+            error_rate_array.append(error_rate)
+            
+            torque_output = pid.update(current_setpoint, current_value)
+            # Clamp and check for numerical stability
+            torque_output = np.clip(torque_output, -5.0, 5.0)
+            if np.isfinite(torque_output) and np.isfinite(current_value):
+                angular_accel = (torque_output - damping_coeff * current_value) / I_yy
+                current_value = current_value + angular_accel * dt
+                current_value = np.clip(current_value, -20.0, 20.0)
+            else:
+                current_value = 0.0
+            last_error = error
+        
+        axes[1, 1].plot(error_array, error_rate_array, linewidth=2, label=f'{params["name"]}')
+    
+    axes[1, 1].set_xlabel('Error (rad/s)')
+    axes[1, 1].set_ylabel('Error Rate (rad/s²)')
+    axes[1, 1].set_title('Phase Plot')
+    axes[1, 1].legend()
+    axes[1, 1].grid(True)
+    
+    # Check for valid data before plotting
+    try:
+        plt.tight_layout()
+        
+        # Save the plot
+        save_path = "pid_step_response_test.png"
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"PID step response test plot saved to: {save_path}")
+        plt.show()
+    except Exception as e:
+        print(f"Error in plotting: {e}")
+        # Try saving without tight_layout
+        try:
+            save_path = "pid_step_response_test.png"
+            plt.savefig(save_path, dpi=300)
+            print(f"PID step response test plot saved to: {save_path} (without tight layout)")
+            plt.show()
+        except Exception as e2:
+            print(f"Failed to save plot: {e2}")
+            plt.close('all')
+
+
 if __name__ == "__main__":
-    main()
+    # Check if we're running PID test
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--test-pid":
+        test_pid_step_response()
+    else:
+        main()
