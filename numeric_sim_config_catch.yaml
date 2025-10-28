@@ -11,7 +11,7 @@ yaml_path: config/yaml
 simulation_dt: 0.001  # seconds - simulation time step (1ms)
 control_dt: 0.01    # seconds - control time step (20ms)
 
-initial_state: [-1.5, 0, 1.4, 0, 0, 0, 1, -1.2, -0.6, 0, 0, 0, 0, 0, 0, 0, 0]
+initial_state: [-1.5, 0, 1.5, 0, 0, 0, 1, -1.2, -0.6, 0, 0, 0, 0, 0, 0, 0, 0]
 
 results_dir: results/numeric_sim
 save_results: false

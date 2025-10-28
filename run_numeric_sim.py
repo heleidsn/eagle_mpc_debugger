@@ -14,6 +14,7 @@ import argparse
 import yaml
 from datetime import datetime
 from pathlib import Path
+from scipy.spatial.transform import Rotation as R
 
 class PIDController:
     """Simple PID controller for angular velocity to torque conversion"""
@@ -81,6 +82,7 @@ from utils.u_convert import thrustToForceTorqueAll
 from l1_control.L1AdaptiveController_v1 import L1AdaptiveController_V1
 from l1_control.L1AdaptiveController_v2 import L1AdaptiveControllerAll
 from l1_control.L1AdaptiveController_v3 import L1AdaptiveControllerRefactored
+from crocoddyl_mpc_controller import CrocoddylMPCController, PlatformParams, load_mpc_config, load_platform_config
 
 class NumericSimulator:
     def __init__(self, config_file='config.yaml'):
@@ -174,6 +176,10 @@ class NumericSimulator:
             'pid_pitch_kp': 0.5,
             'pid_pitch_ki': 0.0,
             'pid_pitch_kd': 0.0,
+            # Thrust filter parameters for thrust + angular velocity mode
+            'thrust_filter_time_constant': 0.0,  # seconds - time constant for first-order thrust filter
+            # MPC controller type
+            'mpc_controller_type': 'crocoddyl',  # options: 'eagle_mpc', 'crocoddyl'
         }
         
         # Try to load config file if it exists
@@ -307,46 +313,110 @@ class NumericSimulator:
     def init_mpc_controller(self):
         """Initialize MPC controller"""
         try:
-            # Load trajectory and create MPC controller
-            self.trajectory, self.traj_state_ref, _, self.trajectory_obj = get_opt_traj(
-                self.robot_name,
-                self.trajectory_name,
-                self.dt_traj_opt,
-                self.use_squash,
-                self.yaml_path
-            )
-            
-            # Store reference control inputs from trajectory optimization
-            self.traj_u_ref = self.trajectory.us_squash if hasattr(self.trajectory, 'us_squash') else []
-            print(f"Reference control trajectory loaded: {len(self.traj_u_ref)} steps")
-            if len(self.traj_u_ref) > 0:
-                print(f"  Control dimension: {self.traj_u_ref[0].shape}")
-                print(f"  First control sample: {self.traj_u_ref[0][:3]}")  # Show first 3 elements
-            
-            # Create MPC controller
-            # mpc_name = "rail"
-            mpc_name = "rail_with_ref_control"
-            mpc_yaml = f'{self.yaml_path}/mpc/{self.robot_name}_mpc.yaml'
-            
-            self.mpc_controller = create_mpc_controller(
-                mpc_name,
-                self.trajectory_obj,
-                self.traj_state_ref,
-                self.traj_u_ref,
-                self.dt_traj_opt,
-                mpc_yaml
-            )
-            
-            # Get platform parameters for force/torque conversion
-            self.platform_params = self.trajectory_obj.platform_params
-            
-            print(f"MPC controller initialized")
-            print(f"  Trajectory duration: {len(self.traj_state_ref)} steps")
-            print(f"  MPC horizon: {len(self.mpc_controller.solver.xs)}")
-            
+            if self.mpc_controller_type == 'eagle_mpc':
+                self._init_eagle_mpc_controller()
+            elif self.mpc_controller_type == 'crocoddyl':
+                self._init_crocoddyl_mpc_controller()
+            else:
+                raise ValueError(f"Unknown MPC controller type: {self.mpc_controller_type}")
+                
         except Exception as e:
             print(f"Error initializing MPC controller: {e}")
             raise
+    
+    def _init_eagle_mpc_controller(self):
+        """Initialize eagle_mpc based controller (original implementation)"""
+        # Load trajectory and create MPC controller
+        self.trajectory, self.traj_state_ref, _, self.trajectory_obj = get_opt_traj(
+            self.robot_name,
+            self.trajectory_name,
+            self.dt_traj_opt,
+            self.use_squash,
+            self.yaml_path
+        )
+        
+        # Store reference control inputs from trajectory optimization
+        self.traj_u_ref = self.trajectory.us_squash if hasattr(self.trajectory, 'us_squash') else []
+        print(f"Reference control trajectory loaded: {len(self.traj_u_ref)} steps")
+        if len(self.traj_u_ref) > 0:
+            print(f"  Control dimension: {self.traj_u_ref[0].shape}")
+            print(f"  First control sample: {self.traj_u_ref[0][:3]}")  # Show first 3 elements
+        
+        # Create MPC controller
+        mpc_name = "rail"
+        mpc_yaml = f'{self.yaml_path}/mpc/{self.robot_name}_mpc.yaml'
+        
+        self.mpc_controller = create_mpc_controller(
+            mpc_name,
+            self.trajectory_obj,
+            self.traj_state_ref,
+            self.dt_traj_opt,
+            mpc_yaml
+        )
+        
+        # Get platform parameters for force/torque conversion
+        self.platform_params = self.trajectory_obj.platform_params
+        
+        print(f"Eagle MPC controller initialized")
+        print(f"  Trajectory duration: {len(self.traj_state_ref)} steps")
+        print(f"  MPC horizon: {len(self.mpc_controller.solver.xs)}")
+    
+    def _init_crocoddyl_mpc_controller(self):
+        """Initialize pure Crocoddyl MPC controller"""
+        # Load trajectory for reference
+        self.trajectory, self.traj_state_ref, _, self.trajectory_obj = get_opt_traj(
+            self.robot_name,
+            self.trajectory_name,
+            self.dt_traj_opt,
+            self.use_squash,
+            self.yaml_path
+        )
+        
+        # Store reference control inputs from trajectory optimization
+        self.traj_u_ref = self.trajectory.us_squash if hasattr(self.trajectory, 'us_squash') else []
+        
+        # Load MPC configuration
+        mpc_yaml = f'{self.yaml_path}/mpc/{self.robot_name}_mpc_crocoddyl.yaml'
+        if not os.path.exists(mpc_yaml):
+            # Fallback to default MPC config
+            mpc_yaml = f'{self.yaml_path}/mpc/{self.robot_name}_mpc.yaml'
+        mpc_config = load_mpc_config(mpc_yaml)
+        
+        # Load platform configuration
+        platform_yaml = self.trajectory_obj.robot_model_path.replace('.urdf', '_platform.yaml')
+        if not os.path.exists(platform_yaml):
+            # Fallback to default platform config
+            platform_config = {
+                'n_rotors': 4,
+                'cf': 1.0,
+                'cm': 0.1,
+                'max_thrust': 10.0,
+                'min_thrust': 0.0,
+                'arm_length': 0.25
+            }
+        else:
+            platform_config = load_platform_config(platform_yaml)
+        
+        # Create platform parameters
+        self.platform_params = PlatformParams(platform_config)
+        
+        # Create Crocoddyl MPC controller
+        self.mpc_controller = CrocoddylMPCController(
+            robot_model=self.robot,
+            platform_params=self.platform_params,
+            mpc_config=mpc_config,
+            dt_mpc=self.control_dt
+        )
+        
+        # Set reference trajectory
+        self.mpc_controller.set_reference_trajectory(
+            self.traj_state_ref,
+            self.traj_u_ref if len(self.traj_u_ref) > 0 else None
+        )
+        
+        print(f"Crocoddyl MPC controller initialized")
+        print(f"  Trajectory duration: {len(self.traj_state_ref)} steps")
+        print(f"  MPC horizon: {self.mpc_controller.horizon}")
     
     def init_l1_controller(self):
         """Initialize L1 adaptive controller"""
@@ -470,20 +540,49 @@ class NumericSimulator:
         # Pitch control data storage (for thrust_angular_velocity mode)
         self.pitch_control_data = []
         
+        # Thrust filter data storage (for thrust_angular_velocity mode)
+        self.thrust_filter_data = []
+        
         # Track MPC updates
         self.last_mpc_update_step = -1
         self.current_control = None
         self.current_mpc_index = 0
         self.current_l1_control = None
         self.l1_start_step = int(self.l1_start_time / self.simulation_dt) if hasattr(self, 'l1_start_time') else 0
+        
+        # Initialize thrust filter state for thrust_angular_velocity mode
+        self.thrust_filter_state = 0.0  # Current filtered thrust
     
     def get_reference_state(self, current_time):
         """Get reference state based on current time"""
         # Calculate trajectory index based on time
         traj_index = int(current_time * 1000 / self.dt_traj_opt)
-        traj_index = min(traj_index, len(self.traj_state_ref) - 1)
         
-        return self.traj_state_ref[traj_index], traj_index
+        if traj_index >= len(self.traj_state_ref):
+            # When trajectory is finished, create hover state
+            last_state = self.traj_state_ref[-1]
+            hover_state = last_state.copy()
+            
+            # Keep position unchanged (indices 0:3)
+            # Position remains: hover_state[0:3] = last_state[0:3]
+            
+            # Convert quaternion to euler, set pitch and roll to 0, keep yaw
+            quat = last_state[3:7]  # [qx, qy, qz, qw]
+            euler = R.from_quat(quat).as_euler('xyz', degrees=False)  # [roll, pitch, yaw]
+            
+            # Set pitch and roll to 0, keep yaw
+            euler_hover = np.array([0.0, 0.0, euler[2]])  # [roll=0, pitch=0, yaw=original]
+            quat_hover = R.from_euler('xyz', euler_hover, degrees=False).as_quat()
+            hover_state[3:7] = quat_hover  # Update quaternion
+            
+            # Set all velocities to zero
+            nq = self.mpc_controller.robot_model.nq if hasattr(self, 'mpc_controller') else 7
+            hover_state[nq:] = 0.0  # All velocities (linear, angular, joint) = 0
+            
+            return hover_state, len(self.traj_state_ref) - 1
+        else:
+            traj_index = min(traj_index, len(self.traj_state_ref) - 1)
+            return self.traj_state_ref[traj_index], traj_index
     
     def get_reference_control(self, current_time):
         """Get reference control input based on current time"""
@@ -506,8 +605,6 @@ class NumericSimulator:
         position_error_norm = np.linalg.norm(position_error)
         
         # Convert quaternions to Euler angles for attitude error calculation
-        from scipy.spatial.transform import Rotation as R
-        
         try:
             # Current state quaternion
             current_quat = current_state[3:7]
@@ -602,15 +699,42 @@ class NumericSimulator:
         
         return tracking_error
     
+    
+    def get_limit_state_input(self, current_state):
+        """Limit the current state"""
+        current_state_limited = current_state.copy()
+        
+        # position limits
+        current_state_limited[0:3] = np.clip(current_state[0:3], -0.3, 0.3)
+        # current_state_limited[3:7] = np.clip(current_state[3:7], -self.orientation_limits, self.orientation_limits)
+        current_state_limited[7:9] = np.clip(current_state[7:9], -1.0, 1.0)
+        current_state_limited[9:12] = np.clip(current_state[9:12], -3.0, 3.0)
+        current_state_limited[12:15] = np.clip(current_state[12:15], -3.0, 3.0)
+        current_state_limited[15:17] = np.clip(current_state[15:18], -3.0, 3.0)
+        
+        return current_state_limited
+    
     def solve_mpc(self, current_state, current_time):
         """Solve MPC optimization problem"""
+        if self.mpc_controller_type == 'eagle_mpc':
+            return self._solve_eagle_mpc(current_state, current_time)
+        elif self.mpc_controller_type == 'crocoddyl':
+            return self._solve_crocoddyl_mpc(current_state, current_time)
+        else:
+            raise ValueError(f"Unknown MPC controller type: {self.mpc_controller_type}")
+    
+    def _solve_eagle_mpc(self, current_state, current_time):
+        """Solve MPC using eagle_mpc controller"""
         start_time = time.time()
         
         # Get reference state and index
         ref_state, traj_index = self.get_reference_state(current_time)
         
         # Update MPC problem
-        self.mpc_controller.problem.x0 = current_state.copy()
+        current_state_limited = current_state.copy()
+        print(f"current_state: {current_state}")
+        print(f"current_state_limited: {current_state_limited}")
+        self.mpc_controller.problem.x0 = current_state_limited.copy()
         
         # Calculate MPC reference index (in ms)
         mpc_ref_index = int(current_time * 1000)
@@ -624,7 +748,7 @@ class NumericSimulator:
                 self.mpc_controller.iters
             )
             
-            if not success or self.mpc_controller.safe_cb.cost > 20000:
+            if not success:
                 print(f"Warning: MPC solver failed at time {current_time:.3f}s, cost: {self.mpc_controller.safe_cb.cost}")
                 # Use previous control if available
                 if self.current_control is not None:
@@ -634,46 +758,11 @@ class NumericSimulator:
             
             # Get control command
             control_squash = self.mpc_controller.solver.us_squash[0]
-            # print(f"control_squash: {control_squash}")
             
             # Process control based on actuation mode and control dimension
-            if self.control_dim == 2:
-                # Arm-only simulation: directly use last 2 elements as joint torques
-                control_ft = thrustToForceTorqueAll(
-                    control_squash,
-                    self.platform_params.tau_f
-                )
-                # Extract only the arm joint torques for 2DOF arm simulation
-                if len(control_ft) > 2:
-                    control_ft = control_ft[-2:]
-            else:
-                # Full system: process based on simulation actuation mode
-                if self.simulation_actuation_mode == 'full':
-                    # Convert to force/torque (original behavior)
-                    control_ft = thrustToForceTorqueAll(
-                        control_squash,
-                        self.platform_params.tau_f
-                    )
-                elif self.simulation_actuation_mode == 'quad':
-                    # For quad mode, use direct motor thrusts (control_squash directly)
-                    # control_squash contains [motor1, motor2, motor3, motor4, arm_joint1, arm_joint2]
-                    control_ft = control_squash.copy()
-                elif self.simulation_actuation_mode == 'thrust_angular_velocity':
-                    # For thrust + angular velocity mode, use total thrust + angular velocity control
-                    control_ft_original = thrustToForceTorqueAll(
-                        control_squash,
-                        self.platform_params.tau_f
-                    )
-                    # Set current time for data recording
-                    self.current_time = current_time
-                    control_ft = self.process_thrust_angular_velocity_control(control_ft_original, current_state)
-                else:
-                    raise ValueError(f"Unknown simulation_actuation_mode: {self.simulation_actuation_mode}")
-            
-            # print(f"control_ft ({self.simulation_actuation_mode} mode): {control_ft}")
+            control_ft = self._process_control_output(control_squash, current_state_limited, current_time)
             
             solve_time = time.time() - start_time
-            
             return control_ft, solve_time, traj_index
             
         except Exception as e:
@@ -682,6 +771,89 @@ class NumericSimulator:
                 return self.current_control, time.time() - start_time, traj_index
             else:
                 return np.zeros(self.control_dim), time.time() - start_time, traj_index
+    
+    def _solve_crocoddyl_mpc(self, current_state, current_time):
+        """Solve MPC using pure Crocoddyl controller"""
+        start_time = time.time()
+        
+        # Get reference state and index
+        ref_state, traj_index = self.get_reference_state(current_time)
+        
+        # Calculate reference index for MPC
+        reference_index = int(current_time * 1000 / self.dt_traj_opt)
+        reference_index = min(reference_index, len(self.traj_state_ref) - 1)
+        
+        try:
+            # Solve MPC problem
+            control_input, solve_info = self.mpc_controller.solve(
+                current_state, 
+                reference_index,
+                warm_start=True
+            )
+            
+            if not solve_info['solved'] and solve_info['iterations'] == 0:
+                print(f"Warning: Crocoddyl MPC solver failed at time {current_time:.3f}s")
+                # Use previous control if available
+                if self.current_control is not None:
+                    return self.current_control, time.time() - start_time, traj_index
+                else:
+                    return np.zeros(self.control_dim), time.time() - start_time, traj_index
+            
+            # Store MPC performance data
+            self.mpc_final_cost = solve_info['cost']
+            self.mpc_iterations_count = solve_info['iterations']
+            self.solving_time = solve_info['solve_time']
+            
+            # Process control output
+            control_ft = self._process_control_output(control_input, current_state, current_time)
+            
+            solve_time = time.time() - start_time
+            return control_ft, solve_time, traj_index
+            
+        except Exception as e:
+            print(f"Error in Crocoddyl MPC solver at time {current_time:.3f}s: {e}")
+            if self.current_control is not None:
+                return self.current_control, time.time() - start_time, traj_index
+            else:
+                return np.zeros(self.control_dim), time.time() - start_time, traj_index
+    
+    def _process_control_output(self, control_input, current_state, current_time):
+        """Process control output based on actuation mode"""
+        # Process control based on actuation mode and control dimension
+        if self.control_dim == 2:
+            # Arm-only simulation: directly use last 2 elements as joint torques
+            control_ft = thrustToForceTorqueAll(
+                control_input,
+                self.platform_params.tau_f
+            )
+            # Extract only the arm joint torques for 2DOF arm simulation
+            if len(control_ft) > 2:
+                control_ft = control_ft[-2:]
+        else:
+            # Full system: process based on simulation actuation mode
+            if self.simulation_actuation_mode == 'full':
+                # Convert to force/torque (original behavior)
+                control_ft = thrustToForceTorqueAll(
+                    control_input,
+                    self.platform_params.tau_f
+                )
+            elif self.simulation_actuation_mode == 'quad':
+                # For quad mode, use direct motor thrusts (control_input directly)
+                control_ft = control_input.copy()
+            elif self.simulation_actuation_mode == 'thrust_angular_velocity':
+                # For thrust + angular velocity mode, use total thrust + angular velocity control
+                control_ft_original = thrustToForceTorqueAll(
+                    control_input,
+                    self.platform_params.tau_f
+                )
+                # Set current time for data recording
+                self.current_time = current_time
+                control_ft = self.process_thrust_angular_velocity_control(control_ft_original, current_state)
+                print(f"control_ft: {control_ft}")
+            else:
+                raise ValueError(f"Unknown simulation_actuation_mode: {self.simulation_actuation_mode}")
+        
+        return control_ft
     
     def process_thrust_angular_velocity_control(self, control_squash, current_state):
         """
@@ -715,17 +887,31 @@ class NumericSimulator:
         
         # Use PID to convert pitch angular velocity command to torque
         pitch_torque = self.pitch_pid.update(planned_pitch_rate, current_pitch_rate)
+        # limit the pitch torque
+        # pitch_torque = np.clip(pitch_torque, -5.0, 5.0)
         print(f"planned_pitch_rate: {planned_pitch_rate}, current_pitch_rate: {current_pitch_rate}, pitch_torque: {pitch_torque}")
         
         # Convert to force/torque format
         # [Fx, Fy, Fz, Mx, My, Mz, arm_joint1, arm_joint2]
         control_ft = control_squash.copy()
         
-        # Store original planned pitch torque
+        # Store original planned pitch torque and thrust
         planned_pitch_torque = control_ft[4] if len(control_ft) > 4 else 0.0
+        planned_thrust = control_ft[2] if len(control_ft) > 2 else 0.0
+        
+        # Apply first-order response to thrust (Fz)
+        # First-order filter: y_dot = (u - y) / tau
+        # Discrete implementation: y[k+1] = y[k] + dt * (u - y[k]) / tau
+        alpha = self.simulation_dt / (self.thrust_filter_time_constant + self.simulation_dt)
+        self.thrust_filter_state = (1 - alpha) * self.thrust_filter_state + alpha * planned_thrust
+        filtered_thrust = self.thrust_filter_state
+        
+        # Set filtered thrust (Fz)
+        control_ft[2] = filtered_thrust
         
         # Set pitch torque (My)
         print(f"planned pitch torque: {planned_pitch_torque} -> {pitch_torque}")
+        print(f"planned thrust: {planned_thrust:.3f} -> filtered thrust: {filtered_thrust:.3f}")
         control_ft[4] = pitch_torque
         
         # Record pitch control data
@@ -738,6 +924,17 @@ class NumericSimulator:
             'actual_pitch_rate': current_pitch_rate
         }
         self.pitch_control_data.append(pitch_data)
+        
+        # Record thrust filter data
+        thrust_data = {
+            'time': getattr(self, 'current_time', 0.0),
+            'planned_thrust': planned_thrust,
+            'filtered_thrust': filtered_thrust,
+            'filter_state': self.thrust_filter_state,
+            'time_constant': self.thrust_filter_time_constant,
+            'alpha': alpha
+        }
+        self.thrust_filter_data.append(thrust_data)
         
         # Keep arm joint commands unchanged
         if len(control_squash) > 4:
@@ -944,8 +1141,20 @@ class NumericSimulator:
                 self.current_control = control_ft.copy()
                 self.current_mpc_index = traj_index
                 self.mpc_solve_times.append(solve_time)
-                self.mpc_costs.append(self.mpc_controller.solver.cost)
-                self.mpc_iterations.append(self.mpc_controller.solver.iter)
+                
+                # Store MPC performance data based on controller type
+                if self.mpc_controller_type == 'eagle_mpc':
+                    if hasattr(self.mpc_controller, 'solver') and self.mpc_controller.solver is not None:
+                        self.mpc_costs.append(self.mpc_controller.solver.cost)
+                        self.mpc_iterations.append(self.mpc_controller.solver.iter)
+                    else:
+                        self.mpc_costs.append(0.0)
+                        self.mpc_iterations.append(0)
+                elif self.mpc_controller_type == 'crocoddyl':
+                    # For Crocoddyl, we store the cost from solve_info
+                    self.mpc_costs.append(getattr(self, 'mpc_final_cost', 0.0))
+                    self.mpc_iterations.append(getattr(self, 'mpc_iterations_count', 0))
+                
                 self.last_mpc_update_step = sim_step
                 
                 # Solve L1 adaptive control if enabled and time has passed start time
@@ -979,8 +1188,23 @@ class NumericSimulator:
                         self.l1_sig_hat_data.append(np.zeros(self.l1_controller.state_dim_euler))
                         self.l1_z_hat_data.append(np.zeros(self.l1_controller.state_dim_euler))
                     
-                    print(f"Step {sim_step:6d}, Time {current_time:6.3f}s, MPC solved in {solve_time*1000:6.2f}ms, Iters: {self.mpc_controller.solver.iter}, "
-                          f"Cost: {self.mpc_controller.solver.cost:8.3f}, Traj index: {traj_index}")
+                    # Get MPC performance info based on controller type
+                    if self.mpc_controller_type == 'eagle_mpc':
+                        if hasattr(self.mpc_controller, 'solver') and self.mpc_controller.solver is not None:
+                            iterations = self.mpc_controller.solver.iter
+                            cost = self.mpc_controller.solver.cost
+                        else:
+                            iterations = 0
+                            cost = 0.0
+                    elif self.mpc_controller_type == 'crocoddyl':
+                        iterations = getattr(self, 'mpc_iterations_count', 0)
+                        cost = getattr(self, 'mpc_final_cost', 0.0)
+                    else:
+                        iterations = 0
+                        cost = 0.0
+                    
+                    print(f"Step {sim_step:6d}, Time {current_time:6.3f}s, MPC solved in {solve_time*1000:6.2f}ms, Iters: {iterations}, "
+                          f"Cost: {cost:8.3f}, Traj index: {traj_index}")
             
             # Determine final control command based on simulation mode
             control_input = self.current_control if self.current_control is not None else np.zeros(self.control_dim)
@@ -1033,8 +1257,9 @@ class NumericSimulator:
                 next_state = self.integrate_arm_dynamics(current_state, total_control)
             else:
                 # Use crocoddyl dynamics
-                self.sim_update_model.calc(self.sim_update_data, current_state, total_control)
-                next_state = self.sim_update_data.xnext.copy()
+                # self.sim_update_model.calc(self.sim_update_data, current_state, total_control)
+                # next_state = self.sim_update_data.xnext.copy()
+                next_state = self.integrate_arm_dynamics(current_state, total_control)
             
             # Add noise if enabled
             next_state = self.add_noise(next_state)
@@ -1110,7 +1335,6 @@ class NumericSimulator:
             ax.set_title(position_labels[i])
         
         # Plot orientation states (quaternion to Euler)
-        from scipy.spatial.transform import Rotation as R
         orientation_labels = ['Roll (deg)', 'Pitch (deg)', 'Yaw (deg)']
         
         # Convert quaternions to Euler angles
@@ -1419,7 +1643,6 @@ class NumericSimulator:
             print("Warning: No reference control data available for plotting comparison")
         
         # Convert quaternions to Euler angles
-        from scipy.spatial.transform import Rotation as R
         actual_quats = state_array[:, 3:7]
         ref_quats = ref_state_array[:, 3:7]
         actual_euler = R.from_quat(actual_quats).as_euler('xyz', degrees=True)
@@ -1839,7 +2062,17 @@ class NumericSimulator:
         if gripper_pos_error_norm is not None and len(gripper_pos_error_norm) > 0:
             # Calculate RMS errors over sliding windows with smaller window size for denser sampling
             # Use 1/4 of MPC horizon or minimum 2 steps for more dense RMS calculation
-            mpc_horizon_length = len(self.mpc_controller.solver.xs)
+            # Get MPC horizon length based on controller type
+            if self.mpc_controller_type == 'eagle_mpc':
+                if hasattr(self.mpc_controller, 'solver') and self.mpc_controller.solver is not None:
+                    mpc_horizon_length = len(self.mpc_controller.solver.xs)
+                else:
+                    mpc_horizon_length = 20  # Default horizon
+            elif self.mpc_controller_type == 'crocoddyl':
+                mpc_horizon_length = getattr(self.mpc_controller, 'horizon', 20)
+            else:
+                mpc_horizon_length = 20  # Default horizon
+            
             window_size = max(2, mpc_horizon_length // 4)  # Smaller window for denser sampling
             step_size = max(1, window_size // 2)  # Overlapping windows for smoother curves
             
@@ -2282,7 +2515,6 @@ class NumericSimulator:
         ref_state_array = np.array(ref_states)
         
         # Convert quaternions to Euler angles
-        from scipy.spatial.transform import Rotation as R
         ref_quats = ref_state_array[:, 3:7]
         ref_euler = R.from_quat(ref_quats).as_euler('xyz', degrees=True)
         
@@ -2568,7 +2800,7 @@ def create_default_config(filename='numeric_sim_config.yaml'):
 def main():
     """Main function"""
     parser = argparse.ArgumentParser(description='Numeric simulation for MPC controller')
-    parser.add_argument('--config', type=str, default='numeric_sim_config_catch_fast.yaml',
+    parser.add_argument('--config', type=str, default='numeric_sim_config_regulation.yaml',
                        help='Configuration file path')
     parser.add_argument('--create-config', action='store_true',
                        help='Create default configuration file and exit')

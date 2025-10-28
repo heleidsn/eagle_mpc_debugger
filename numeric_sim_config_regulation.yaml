@@ -1,9 +1,9 @@
 # task settings
 robot_name: s500_uam
-trajectory_name: catch_vicon
+trajectory_name: hover
 
-dt_traj_opt: 10
-simulation_time: 10
+dt_traj_opt: 5
+simulation_time: 5
 use_squash: true
 yaml_path: config/yaml
 
@@ -11,7 +11,7 @@ yaml_path: config/yaml
 simulation_dt: 0.001  # seconds - simulation time step (1ms)
 control_dt: 0.01    # seconds - control time step (20ms)
 
-initial_state: [-1.5, 0, 1.5, 0, 0, 0, 1, -1.2, -0.6, 0, 0, 0, 0, 0, 0, 0, 0]
+initial_state: [1.0, 0.4, -0.5, 0, 0, 0, 1, 1, 0.5, 0, 0, 0, 0, 0, 0, 0, 0]
 
 results_dir: results/numeric_sim
 save_results: false
@@ -38,11 +38,11 @@ l1_filter_time_constant: [0.01, 0.01, 0.01]
 l1_version: v2
 
 # Simulation actuation model
-simulation_actuation_mode: thrust_angular_velocity  # options: 'full', 'quad', 'thrust_angular_velocity'
+simulation_actuation_mode: full  # options: 'full', 'quad', 'thrust_angular_velocity'
 
 thrust_filter_time_constant: 0.005  # seconds - time constant for first-order thrust filter same as gazebo plugin
 
-pid_pitch_kp: 3
+pid_pitch_kp: 2
 pid_pitch_ki: 0.0
 pid_pitch_kd: 0.0
 
