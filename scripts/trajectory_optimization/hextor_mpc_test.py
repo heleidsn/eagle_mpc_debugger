@@ -228,9 +228,10 @@ def generate_figure8_trajectory(center_pos, radius, height, duration, dt=0.01):
 
 def create_cost_models(target_pos, target_quat, u_hover, state, nu, robot_model,
                        state_tangent_lb, state_tangent_ub, state_barrier_weights,
-                       pos_weight=10.0, vel_weight=1.0):
+                       pos_weights=None, ori_weights=None, vel_weights=None):
     """
     Create cost models for trajectory optimization or MPC tracking
+    Mimics Eagle MPC weight structure with separate weights for each dimension
     
     Args:
         target_pos: Target position [x, y, z]
@@ -242,11 +243,21 @@ def create_cost_models(target_pos, target_quat, u_hover, state, nu, robot_model,
         state_tangent_lb: Lower state bounds (tangent space)
         state_tangent_ub: Upper state bounds (tangent space)
         state_barrier_weights: Weights for state barrier activation
-        pos_weight: Weight for position tracking error (default: 1000.0)
-        vel_weight: Weight for velocity tracking error (default: 100.0)
+        pos_weights: Position weights [wx, wy, wz] (default: [100, 100, 100] like Eagle MPC)
+        ori_weights: Orientation weights [wrx, wry, wrz] in SO(3) tangent space (default: [1, 1, 1] like Eagle MPC)
+        vel_weights: Velocity weights [wvx, wvy, wvz, wwx, wwy, wwz] (default: [1, 1, 1, 1, 1, 1] like Eagle MPC)
     """
     runningCostModel = crocoddyl.CostModelSum(state, nu)
     terminalCostModel = crocoddyl.CostModelSum(state, nu)
+    
+    # Default weights matching Eagle MPC structure
+    # Tangent space: [px, py, pz, rx, ry, rz, vx, vy, vz, wx, wy, wz, ...]
+    if pos_weights is None:
+        pos_weights = [50.0, 50.0, 500.0]  # [wx, wy, wz] - Eagle MPC default
+    if ori_weights is None:
+        ori_weights = [1.0, 1.0, 1.0]  # [wrx, wry, wrz] - Eagle MPC default
+    if vel_weights is None:
+        vel_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]  # [wvx, wvy, wvz, wwx, wwy, wwz] - Eagle MPC default
     
     # State regularization
     xResidual = crocoddyl.ResidualModelState(state, state.zero(), nu)
@@ -267,16 +278,7 @@ def create_cost_models(target_pos, target_quat, u_hover, state, nu, robot_model,
     )
     xBoundsCost = crocoddyl.CostModelResidual(state, xBoundsActivation, xBoundsResidual)
     
-    # Goal tracking: Position and orientation (using FramePlacement)
-    goalTrackingResidual = crocoddyl.ResidualModelFramePlacement(
-        state,
-        robot_model.getFrameId("base_link"),
-        pinocchio.SE3(target_quat.matrix(), target_pos),
-        nu,
-    )
-    goalTrackingCost = crocoddyl.CostModelResidual(state, goalTrackingResidual)
-    
-    # Velocity tracking: Create reference state with target pose and zero velocity
+    # Goal tracking: Create reference state with target pose and zero velocity
     # For StateMultibody, state is [q, v] where q=[x,y,z,qx,qy,qz,qw,...] and v=[vx,vy,vz,wx,wy,wz,...]
     # Create reference configuration q_ref
     ref_q = np.concatenate([target_pos, target_quat.coeffs()])  # [x, y, z, qx, qy, qz, qw]
@@ -290,34 +292,44 @@ def create_cost_models(target_pos, target_quat, u_hover, state, nu, robot_model,
     # Combine into full reference state [q, v]
     ref_state_full = np.concatenate([ref_q, ref_v])
     
-    # Create weighted activation for velocity tracking
+    # Create weighted activation for pose and velocity tracking
     # ResidualModelState works in tangent space (ndx dimensions)
     # Tangent space structure for floating base: [pos(3), quat_tangent(3), lin_vel(3), ang_vel(3), ...]
     ndx = state.ndx
-    vel_tracking_weights = np.zeros(ndx)
-    # Position weights: 0 (handled by FramePlacement)
-    # Quaternion tangent space weights: 0 (handled by FramePlacement)
+    pose_vel_tracking_weights = np.zeros(ndx)
+    
+    # Position weights (indices 0-2 in tangent space)
+    if ndx >= 3:
+        pose_vel_tracking_weights[0:3] = pos_weights[:3]  # [wx, wy, wz]
+    
+    # Orientation weights in SO(3) tangent space (indices 3-5)
+    if ndx >= 6:
+        pose_vel_tracking_weights[3:6] = ori_weights[:3]  # [wrx, wry, wrz]
+    
     # Linear velocity weights (indices 6-8 in tangent space for floating base)
     if ndx >= 9:
-        vel_tracking_weights[6:9] = 1.0  # Linear velocity
+        pose_vel_tracking_weights[6:9] = vel_weights[:3]  # [wvx, wvy, wvz]
+    
     # Angular velocity weights (indices 9-11 in tangent space for floating base)
     if ndx >= 12:
-        vel_tracking_weights[9:12] = 1.0  # Angular velocity
-    # Other velocities (if any) set to 0
+        pose_vel_tracking_weights[9:12] = vel_weights[3:6]  # [wwx, wwy, wwz]
     
-    velTrackingResidual = crocoddyl.ResidualModelState(state, ref_state_full, nu)
-    velTrackingActivation = crocoddyl.ActivationModelWeightedQuad(vel_tracking_weights)
-    velTrackingCost = crocoddyl.CostModelResidual(state, velTrackingActivation, velTrackingResidual)
+    # Other dimensions (if any, e.g., joints) set to 0
+    # They are not tracked in this cost
+    
+    # Create pose and velocity tracking cost
+    poseVelTrackingResidual = crocoddyl.ResidualModelState(state, ref_state_full, nu)
+    poseVelTrackingActivation = crocoddyl.ActivationModelWeightedQuad(pose_vel_tracking_weights)
+    poseVelTrackingCost = crocoddyl.CostModelResidual(state, poseVelTrackingActivation, poseVelTrackingResidual)
     
     # Add costs to running model
     runningCostModel.addCost("xReg", xRegCost, 0)
     runningCostModel.addCost("uReg", uRegCost, 2)  # Control regularization weight
-    runningCostModel.addCost("trackPose", goalTrackingCost, pos_weight)  # Position and orientation tracking
-    runningCostModel.addCost("trackVel", velTrackingCost, vel_weight)  # Velocity tracking
+    runningCostModel.addCost("trackPoseVel", poseVelTrackingCost, 1.0)  # Position, orientation, and velocity tracking
     runningCostModel.addCost("stateBounds", xBoundsCost, 1.0)
     
     # Add costs to terminal model
-    terminalCostModel.addCost("goalPose", goalTrackingCost, pos_weight)  # Terminal position and orientation
+    terminalCostModel.addCost("goalPoseVel", poseVelTrackingCost, 1.0)  # Terminal position, orientation, and velocity
     terminalCostModel.addCost("stateBounds", xBoundsCost, 10.0)
     
     return runningCostModel, terminalCostModel
@@ -743,7 +755,7 @@ def mpc_tracking(target_pos, target_quat, dt_mpc=0.5, N=20,
     axes = None
     if debug_level > 0:
         plt.ion()  # Turn on interactive mode
-        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+        fig, axes = plt.subplots(3, 3, figsize=(20, 12))
         axes = axes.flatten()
         fig.suptitle('MPC Tracking - Debug Mode', fontsize=16)
     
@@ -940,8 +952,9 @@ def mpc_tracking(target_pos, target_quat, dt_mpc=0.5, N=20,
                 sim_controls_array = np.array([np.array(u) for u in sim_controls])
                 
                 # Clear all axes
-                for ax in axes:
-                    ax.clear()
+                for i in range(9):  # Clear all 9 axes
+                    if i < len(axes):
+                        axes[i].clear()
                 
                 # Plot 1: Position trajectory
                 axes[0].plot(sim_times, sim_states_array[:, 0], 'r-', label='x', linewidth=2)
@@ -1000,30 +1013,68 @@ def mpc_tracking(target_pos, target_quat, dt_mpc=0.5, N=20,
                 axes[4].set_title('Position Error to Target')
                 axes[4].grid(True)
                 
-                # Plot 6: MPC predicted trajectory (if available)
+                # Plot 6: Velocity error (target velocity is zero for fixed point)
+                if sim_states_array.shape[1] > 9:
+                    target_vel = np.zeros(3)  # Target velocity is zero for fixed point tracking
+                    vel_errors = sim_states_array[:, 7:10] - target_vel
+                    vel_error_norm = np.linalg.norm(vel_errors, axis=1)
+                    axes[5].plot(sim_times, vel_error_norm, 'r-', linewidth=2, label='||vel error||')
+                    axes[5].plot(sim_times, vel_errors[:, 0], 'r--', linewidth=1.5, alpha=0.7, label='vx error')
+                    axes[5].plot(sim_times, vel_errors[:, 1], 'g--', linewidth=1.5, alpha=0.7, label='vy error')
+                    axes[5].plot(sim_times, vel_errors[:, 2], 'b--', linewidth=1.5, alpha=0.7, label='vz error')
+                    axes[5].axhline(y=0, color='k', linestyle=':', alpha=0.5)
+                    axes[5].set_xlabel('Time (s)')
+                    axes[5].set_ylabel('Velocity Error (m/s)')
+                    axes[5].set_title('Velocity Error to Target (target=0)')
+                    axes[5].legend()
+                    axes[5].grid(True)
+                
+                # Plot 7: MPC predicted trajectory (if available)
                 if len(solver.xs) > 0 and sim_step % mpc_steps_per_solve == 0:
                     # Show MPC predicted trajectory
                     mpc_pred_times = np.array([i * dt_mpc for i in range(len(solver.xs))])
                     mpc_pred_states = np.array([np.array(x) for x in solver.xs])
-                    axes[5].plot(mpc_pred_times, mpc_pred_states[:, 0], 'r--', label='pred x', linewidth=1.5, alpha=0.7)
-                    axes[5].plot(mpc_pred_times, mpc_pred_states[:, 1], 'g--', label='pred y', linewidth=1.5, alpha=0.7)
-                    axes[5].plot(mpc_pred_times, mpc_pred_states[:, 2], 'b--', label='pred z', linewidth=1.5, alpha=0.7)
+                    axes[6].plot(mpc_pred_times, mpc_pred_states[:, 0], 'r--', label='pred x', linewidth=1.5, alpha=0.7)
+                    axes[6].plot(mpc_pred_times, mpc_pred_states[:, 1], 'g--', label='pred y', linewidth=1.5, alpha=0.7)
+                    axes[6].plot(mpc_pred_times, mpc_pred_states[:, 2], 'b--', label='pred z', linewidth=1.5, alpha=0.7)
                     # Current position as starting point
-                    axes[5].plot(0, pos[0], 'ro', markersize=8, label='current x')
-                    axes[5].plot(0, pos[1], 'go', markersize=8, label='current y')
-                    axes[5].plot(0, pos[2], 'bo', markersize=8, label='current z')
-                    axes[5].axhline(y=target_pos[0], color='r', linestyle=':', alpha=0.5)
-                    axes[5].axhline(y=target_pos[1], color='g', linestyle=':', alpha=0.5)
-                    axes[5].axhline(y=target_pos[2], color='b', linestyle=':', alpha=0.5)
-                    axes[5].set_xlabel('Time (s)')
-                    axes[5].set_ylabel('Position (m)')
-                    axes[5].set_title(f'MPC Predicted Trajectory (horizon={N*dt_mpc:.1f}s)')
-                    axes[5].legend()
-                    axes[5].grid(True)
+                    axes[6].plot(0, pos[0], 'ro', markersize=8, label='current x')
+                    axes[6].plot(0, pos[1], 'go', markersize=8, label='current y')
+                    axes[6].plot(0, pos[2], 'bo', markersize=8, label='current z')
+                    axes[6].axhline(y=target_pos[0], color='r', linestyle=':', alpha=0.5)
+                    axes[6].axhline(y=target_pos[1], color='g', linestyle=':', alpha=0.5)
+                    axes[6].axhline(y=target_pos[2], color='b', linestyle=':', alpha=0.5)
+                    axes[6].set_xlabel('Time (s)')
+                    axes[6].set_ylabel('Position (m)')
+                    axes[6].set_title(f'MPC Predicted Trajectory (horizon={N*dt_mpc:.1f}s)')
+                    axes[6].legend()
+                    axes[6].grid(True)
                 else:
-                    axes[5].text(0.5, 0.5, 'MPC prediction\n(updated at MPC solve)', 
-                               ha='center', va='center', transform=axes[5].transAxes)
-                    axes[5].set_title('MPC Predicted Trajectory')
+                    axes[6].text(0.5, 0.5, 'MPC prediction\n(updated at MPC solve)', 
+                               ha='center', va='center', transform=axes[6].transAxes)
+                    axes[6].set_title('MPC Predicted Trajectory')
+                
+                # Plot 8: Angular velocity error (target angular velocity is zero)
+                if sim_states_array.shape[1] > 12:
+                    target_angvel = np.zeros(3)  # Target angular velocity is zero
+                    angvel_errors = sim_states_array[:, 10:13] - target_angvel
+                    angvel_error_norm = np.linalg.norm(angvel_errors, axis=1)
+                    axes[7].plot(sim_times, angvel_error_norm, 'm-', linewidth=2, label='||angvel error||')
+                    axes[7].plot(sim_times, angvel_errors[:, 0], 'r--', linewidth=1.5, alpha=0.7, label='wx error')
+                    axes[7].plot(sim_times, angvel_errors[:, 1], 'g--', linewidth=1.5, alpha=0.7, label='wy error')
+                    axes[7].plot(sim_times, angvel_errors[:, 2], 'b--', linewidth=1.5, alpha=0.7, label='wz error')
+                    axes[7].axhline(y=0, color='k', linestyle=':', alpha=0.5)
+                    axes[7].set_xlabel('Time (s)')
+                    axes[7].set_ylabel('Angular Velocity Error (rad/s)')
+                    axes[7].set_title('Angular Velocity Error to Target (target=0)')
+                    axes[7].legend()
+                    axes[7].grid(True)
+                
+                # Plot 9: Cost convergence (if available)
+                axes[8].text(0.5, 0.5, 'Cost convergence\nplot available\nin final results', 
+                           ha='center', va='center', transform=axes[8].transAxes)
+                axes[8].set_title('Cost Convergence')
+                axes[8].grid(True)
                 
                 fig.tight_layout()
                 plt.pause(0.01)  # Update plot
@@ -1281,8 +1332,9 @@ def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20,
                 sim_controls_array = np.array([np.array(u) for u in sim_controls])
                 
                 # Clear all axes
-                for ax in axes:
-                    ax.clear()
+                for i in range(9):  # Clear all 9 axes
+                    if i < len(axes):
+                        axes[i].clear()
                 
                 # Plot 1: Position trajectory vs reference
                 axes[0].plot(sim_times, sim_states_array[:, 0], 'r-', label='x', linewidth=2)
@@ -1345,18 +1397,56 @@ def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20,
                 axes[4].set_title('Position Error to Reference')
                 axes[4].grid(True)
                 
-                # Plot 6: 3D trajectory visualization
-                axes[5].plot(sim_states_array[:, 0], sim_states_array[:, 1], 'b-', label='actual', linewidth=2)
+                # Plot 6: Velocity error (compared to reference velocity)
+                if sim_states_array.shape[1] > 9 and len(trajectory['velocities']) > 0:
+                    ref_velocities_aligned = trajectory['velocities'][:len(sim_times)]
+                    vel_errors = sim_states_array[:, 7:10] - ref_velocities_aligned
+                    vel_error_norm = np.linalg.norm(vel_errors, axis=1)
+                    axes[5].plot(sim_times, vel_error_norm, 'r-', linewidth=2, label='||vel error||')
+                    axes[5].plot(sim_times, vel_errors[:, 0], 'r--', linewidth=1.5, alpha=0.7, label='vx error')
+                    axes[5].plot(sim_times, vel_errors[:, 1], 'g--', linewidth=1.5, alpha=0.7, label='vy error')
+                    axes[5].plot(sim_times, vel_errors[:, 2], 'b--', linewidth=1.5, alpha=0.7, label='vz error')
+                    axes[5].axhline(y=0, color='k', linestyle=':', alpha=0.5)
+                    axes[5].set_xlabel('Time (s)')
+                    axes[5].set_ylabel('Velocity Error (m/s)')
+                    axes[5].set_title('Velocity Error to Reference')
+                    axes[5].legend()
+                    axes[5].grid(True)
+                
+                # Plot 7: 3D trajectory visualization
+                axes[6].plot(sim_states_array[:, 0], sim_states_array[:, 1], 'b-', label='actual', linewidth=2)
                 ref_positions_aligned = trajectory['positions'][:len(sim_times)]
-                axes[5].plot(ref_positions_aligned[:, 0], ref_positions_aligned[:, 1], 'r--', label='reference', linewidth=2, alpha=0.7)
-                axes[5].plot(sim_states_array[0, 0], sim_states_array[0, 1], 'go', markersize=10, label='start')
-                axes[5].plot(sim_states_array[-1, 0], sim_states_array[-1, 1], 'ro', markersize=10, label='current')
-                axes[5].set_xlabel('X (m)')
-                axes[5].set_ylabel('Y (m)')
-                axes[5].set_title('2D Trajectory (X-Y plane)')
-                axes[5].legend()
-                axes[5].grid(True)
-                axes[5].axis('equal')
+                axes[6].plot(ref_positions_aligned[:, 0], ref_positions_aligned[:, 1], 'r--', label='reference', linewidth=2, alpha=0.7)
+                axes[6].plot(sim_states_array[0, 0], sim_states_array[0, 1], 'go', markersize=10, label='start')
+                axes[6].plot(sim_states_array[-1, 0], sim_states_array[-1, 1], 'ro', markersize=10, label='current')
+                axes[6].set_xlabel('X (m)')
+                axes[6].set_ylabel('Y (m)')
+                axes[6].set_title('2D Trajectory (X-Y plane)')
+                axes[6].legend()
+                axes[6].grid(True)
+                axes[6].axis('equal')
+                
+                # Plot 8: Angular velocity error (target angular velocity is zero for trajectory tracking)
+                if sim_states_array.shape[1] > 12:
+                    target_angvel = np.zeros(3)  # Target angular velocity is zero
+                    angvel_errors = sim_states_array[:, 10:13] - target_angvel
+                    angvel_error_norm = np.linalg.norm(angvel_errors, axis=1)
+                    axes[7].plot(sim_times, angvel_error_norm, 'm-', linewidth=2, label='||angvel error||')
+                    axes[7].plot(sim_times, angvel_errors[:, 0], 'r--', linewidth=1.5, alpha=0.7, label='wx error')
+                    axes[7].plot(sim_times, angvel_errors[:, 1], 'g--', linewidth=1.5, alpha=0.7, label='wy error')
+                    axes[7].plot(sim_times, angvel_errors[:, 2], 'b--', linewidth=1.5, alpha=0.7, label='wz error')
+                    axes[7].axhline(y=0, color='k', linestyle=':', alpha=0.5)
+                    axes[7].set_xlabel('Time (s)')
+                    axes[7].set_ylabel('Angular Velocity Error (rad/s)')
+                    axes[7].set_title('Angular Velocity Error to Target (target=0)')
+                    axes[7].legend()
+                    axes[7].grid(True)
+                
+                # Plot 9: Cost convergence (if available)
+                axes[8].text(0.5, 0.5, 'Cost convergence\nplot available\nin final results', 
+                           ha='center', va='center', transform=axes[8].transAxes)
+                axes[8].set_title('Cost Convergence')
+                axes[8].grid(True)
                 
                 fig.tight_layout()
                 plt.pause(0.01)  # Update plot
@@ -1377,7 +1467,7 @@ def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20,
 
 def plot_mpc_results(sim_states, sim_controls, sim_times, target_pos):
     """Plot MPC tracking results"""
-    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
     axes = axes.flatten()
     
     # Plot positions
@@ -1425,6 +1515,38 @@ def plot_mpc_results(sim_states, sim_controls, sim_times, target_pos):
     axes[3].set_title('MPC Tracking: Position Error')
     axes[3].grid(True)
     
+    # Plot velocity error (target velocity is zero for fixed point)
+    if sim_states.shape[1] > 9:
+        target_vel = np.zeros(3)  # Target velocity is zero for fixed point tracking
+        vel_errors = sim_states[:-1, 7:10] - target_vel
+        vel_error_norm = np.linalg.norm(vel_errors, axis=1)
+        axes[4].plot(sim_times[:-1], vel_error_norm, 'r-', linewidth=2, label='||vel error||')
+        axes[4].plot(sim_times[:-1], vel_errors[:, 0], 'r--', linewidth=1.5, alpha=0.7, label='vx error')
+        axes[4].plot(sim_times[:-1], vel_errors[:, 1], 'g--', linewidth=1.5, alpha=0.7, label='vy error')
+        axes[4].plot(sim_times[:-1], vel_errors[:, 2], 'b--', linewidth=1.5, alpha=0.7, label='vz error')
+        axes[4].axhline(y=0, color='k', linestyle=':', alpha=0.5)
+        axes[4].set_xlabel('Time (s)')
+        axes[4].set_ylabel('Velocity Error (m/s)')
+        axes[4].set_title('MPC Tracking: Velocity Error (target=0)')
+        axes[4].legend()
+        axes[4].grid(True)
+    
+    # Plot angular velocity error (target angular velocity is zero)
+    if sim_states.shape[1] > 12:
+        target_angvel = np.zeros(3)  # Target angular velocity is zero
+        angvel_errors = sim_states[:-1, 10:13] - target_angvel
+        angvel_error_norm = np.linalg.norm(angvel_errors, axis=1)
+        axes[5].plot(sim_times[:-1], angvel_error_norm, 'm-', linewidth=2, label='||angvel error||')
+        axes[5].plot(sim_times[:-1], angvel_errors[:, 0], 'r--', linewidth=1.5, alpha=0.7, label='wx error')
+        axes[5].plot(sim_times[:-1], angvel_errors[:, 1], 'g--', linewidth=1.5, alpha=0.7, label='wy error')
+        axes[5].plot(sim_times[:-1], angvel_errors[:, 2], 'b--', linewidth=1.5, alpha=0.7, label='wz error')
+        axes[5].axhline(y=0, color='k', linestyle=':', alpha=0.5)
+        axes[5].set_xlabel('Time (s)')
+        axes[5].set_ylabel('Angular Velocity Error (rad/s)')
+        axes[5].set_title('MPC Tracking: Angular Velocity Error (target=0)')
+        axes[5].legend()
+        axes[5].grid(True)
+    
     fig.tight_layout()
     plt.show()
 
@@ -1444,7 +1566,7 @@ if __name__ == "__main__":
     figure8_center = np.array([0.0, 0.0, 0.0])  # Center position
     figure8_radius = 2.0  # Radius of the figure-8
     figure8_height = 0.0  # Constant height
-    figure8_duration = 20.0  # Duration for one complete figure-8 loop
+    figure8_duration = 10.0  # Duration for one complete figure-8 loop
 
     # Run trajectory optimization
     if traj_opt:
@@ -1519,23 +1641,22 @@ if __name__ == "__main__":
             
             if WITHPLOT:
                 # Plot trajectory tracking results
-                fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-                axes = axes.flatten()
+                fig = plt.figure(figsize=(20, 12))
                 
                 # Plot 1: 3D trajectory
-                axes[0] = fig.add_subplot(2, 2, 1, projection='3d')
+                axes_3d = fig.add_subplot(3, 3, 1, projection='3d')
                 # Align arrays for 3D plot
                 min_len = min(len(sim_states), len(trajectory['positions']))
-                axes[0].plot(sim_states[:min_len, 0], sim_states[:min_len, 1], sim_states[:min_len, 2], 
+                axes_3d.plot(sim_states[:min_len, 0], sim_states[:min_len, 1], sim_states[:min_len, 2], 
                            'b-', label='actual', linewidth=2)
-                axes[0].plot(trajectory['positions'][:min_len, 0], trajectory['positions'][:min_len, 1], 
+                axes_3d.plot(trajectory['positions'][:min_len, 0], trajectory['positions'][:min_len, 1], 
                            trajectory['positions'][:min_len, 2], 'r--', label='reference', linewidth=2, alpha=0.7)
-                axes[0].set_xlabel('X (m)')
-                axes[0].set_ylabel('Y (m)')
-                axes[0].set_zlabel('Z (m)')
-                axes[0].set_title('3D Trajectory')
-                axes[0].legend()
-                axes[0].grid(True)
+                axes_3d.set_xlabel('X (m)')
+                axes_3d.set_ylabel('Y (m)')
+                axes_3d.set_zlabel('Z (m)')
+                axes_3d.set_title('3D Trajectory')
+                axes_3d.legend()
+                axes_3d.grid(True)
                 
                 # Set z-axis range to at least 0.5m
                 z_min = min(np.min(sim_states[:min_len, 2]), np.min(trajectory['positions'][:min_len, 2]))
@@ -1545,51 +1666,131 @@ if __name__ == "__main__":
                     z_center = (z_min + z_max) / 2.0
                     z_min = z_center - 0.25
                     z_max = z_center + 0.25
-                axes[0].set_zlim(z_min, z_max)
+                axes_3d.set_zlim(z_min, z_max)
+                
+                # Create remaining axes
+                axes = [fig.add_subplot(3, 3, i+2) for i in range(8)]
                 
                 # Plot 2: Position tracking
-                axes[1].plot(sim_times, sim_states[:, 0], 'r-', label='x', linewidth=2)
-                axes[1].plot(sim_times, sim_states[:, 1], 'g-', label='y', linewidth=2)
-                axes[1].plot(sim_times, sim_states[:, 2], 'b-', label='z', linewidth=2)
+                axes[0].plot(sim_times, sim_states[:, 0], 'r-', label='x', linewidth=2)
+                axes[0].plot(sim_times, sim_states[:, 1], 'g-', label='y', linewidth=2)
+                axes[0].plot(sim_times, sim_states[:, 2], 'b-', label='z', linewidth=2)
                 # Align reference trajectory with simulation states
                 min_len = min(len(sim_times), len(trajectory['times']))
                 ref_times = trajectory['times'][:min_len]
                 ref_positions = trajectory['positions'][:min_len]
-                axes[1].plot(ref_times, ref_positions[:, 0], 'r--', alpha=0.5, label='ref x')
-                axes[1].plot(ref_times, ref_positions[:, 1], 'g--', alpha=0.5, label='ref y')
-                axes[1].plot(ref_times, ref_positions[:, 2], 'b--', alpha=0.5, label='ref z')
-                axes[1].set_xlabel('Time (s)')
-                axes[1].set_ylabel('Position (m)')
-                axes[1].set_title('Position Tracking')
-                axes[1].legend()
-                axes[1].grid(True)
+                axes[0].plot(ref_times, ref_positions[:, 0], 'r--', alpha=0.5, label='ref x')
+                axes[0].plot(ref_times, ref_positions[:, 1], 'g--', alpha=0.5, label='ref y')
+                axes[0].plot(ref_times, ref_positions[:, 2], 'b--', alpha=0.5, label='ref z')
+                axes[0].set_xlabel('Time (s)')
+                axes[0].set_ylabel('Position (m)')
+                axes[0].set_title('Position Tracking')
+                axes[0].legend()
+                axes[0].grid(True)
                 
                 # Plot 3: Position error
-                # Align arrays: take minimum length and pad reference if needed
                 min_len = min(len(sim_states), len(trajectory['positions']))
                 ref_positions_aligned = trajectory['positions'][:min_len]
                 sim_states_aligned = sim_states[:min_len, :3]
                 pos_errors = sim_states_aligned - ref_positions_aligned
                 pos_error_norm = np.linalg.norm(pos_errors, axis=1) * 100  # Convert to cm
                 sim_times_aligned = sim_times[:min_len]
-                axes[2].plot(sim_times_aligned, pos_error_norm, 'b-', linewidth=2)
-                axes[2].set_xlabel('Time (s)')
-                axes[2].set_ylabel('Position Error (cm)')
-                axes[2].set_title('Position Error to Reference')
-                axes[2].grid(True)
+                axes[1].plot(sim_times_aligned, pos_error_norm, 'b-', linewidth=2)
+                axes[1].set_xlabel('Time (s)')
+                axes[1].set_ylabel('Position Error (cm)')
+                axes[1].set_title('Position Error to Reference')
+                axes[1].grid(True)
                 
-                # Plot 4: Control inputs
+                # Plot 4: Velocity tracking
+                if sim_states.shape[1] > 9 and len(trajectory['velocities']) > 0:
+                    min_len = min(len(sim_times), len(trajectory['times']))
+                    ref_times = trajectory['times'][:min_len]
+                    ref_velocities = trajectory['velocities'][:min_len]
+                    axes[2].plot(sim_times[:min_len], sim_states[:min_len, 7], 'r-', label='vx', linewidth=2)
+                    axes[2].plot(sim_times[:min_len], sim_states[:min_len, 8], 'g-', label='vy', linewidth=2)
+                    axes[2].plot(sim_times[:min_len], sim_states[:min_len, 9], 'b-', label='vz', linewidth=2)
+                    axes[2].plot(ref_times, ref_velocities[:, 0], 'r--', alpha=0.5, label='ref vx')
+                    axes[2].plot(ref_times, ref_velocities[:, 1], 'g--', alpha=0.5, label='ref vy')
+                    axes[2].plot(ref_times, ref_velocities[:, 2], 'b--', alpha=0.5, label='ref vz')
+                    axes[2].set_xlabel('Time (s)')
+                    axes[2].set_ylabel('Linear Velocity (m/s)')
+                    axes[2].set_title('Velocity Tracking')
+                    axes[2].legend()
+                    axes[2].grid(True)
+                
+                # Plot 5: Velocity error
+                if sim_states.shape[1] > 9 and len(trajectory['velocities']) > 0:
+                    min_len = min(len(sim_states), len(trajectory['velocities']))
+                    ref_velocities_aligned = trajectory['velocities'][:min_len]
+                    sim_velocities_aligned = sim_states[:min_len, 7:10]
+                    vel_errors = sim_velocities_aligned - ref_velocities_aligned
+                    vel_error_norm = np.linalg.norm(vel_errors, axis=1)
+                    sim_times_aligned = sim_times[:min_len]
+                    axes[3].plot(sim_times_aligned, vel_error_norm, 'r-', linewidth=2, label='||vel error||')
+                    axes[3].plot(sim_times_aligned, vel_errors[:, 0], 'r--', linewidth=1.5, alpha=0.7, label='vx error')
+                    axes[3].plot(sim_times_aligned, vel_errors[:, 1], 'g--', linewidth=1.5, alpha=0.7, label='vy error')
+                    axes[3].plot(sim_times_aligned, vel_errors[:, 2], 'b--', linewidth=1.5, alpha=0.7, label='vz error')
+                    axes[3].axhline(y=0, color='k', linestyle=':', alpha=0.5)
+                    axes[3].set_xlabel('Time (s)')
+                    axes[3].set_ylabel('Velocity Error (m/s)')
+                    axes[3].set_title('Velocity Error to Reference')
+                    axes[3].legend()
+                    axes[3].grid(True)
+                
+                # Plot 6: Angular velocity tracking
+                if sim_states.shape[1] > 12:
+                    axes[4].plot(sim_times, sim_states[:, 10], 'r-', label='wx', linewidth=2)
+                    axes[4].plot(sim_times, sim_states[:, 11], 'g-', label='wy', linewidth=2)
+                    axes[4].plot(sim_times, sim_states[:, 12], 'b-', label='wz', linewidth=2)
+                    axes[4].axhline(y=0, color='k', linestyle='--', alpha=0.5, label='target (0)')
+                    axes[4].set_xlabel('Time (s)')
+                    axes[4].set_ylabel('Angular Velocity (rad/s)')
+                    axes[4].set_title('Angular Velocity Tracking')
+                    axes[4].legend()
+                    axes[4].grid(True)
+                
+                # Plot 7: Angular velocity error
+                if sim_states.shape[1] > 12:
+                    target_angvel = np.zeros(3)  # Target angular velocity is zero
+                    angvel_errors = sim_states[:, 10:13] - target_angvel
+                    angvel_error_norm = np.linalg.norm(angvel_errors, axis=1)
+                    axes[5].plot(sim_times, angvel_error_norm, 'm-', linewidth=2, label='||angvel error||')
+                    axes[5].plot(sim_times, angvel_errors[:, 0], 'r--', linewidth=1.5, alpha=0.7, label='wx error')
+                    axes[5].plot(sim_times, angvel_errors[:, 1], 'g--', linewidth=1.5, alpha=0.7, label='wy error')
+                    axes[5].plot(sim_times, angvel_errors[:, 2], 'b--', linewidth=1.5, alpha=0.7, label='wz error')
+                    axes[5].axhline(y=0, color='k', linestyle=':', alpha=0.5)
+                    axes[5].set_xlabel('Time (s)')
+                    axes[5].set_ylabel('Angular Velocity Error (rad/s)')
+                    axes[5].set_title('Angular Velocity Error (target=0)')
+                    axes[5].legend()
+                    axes[5].grid(True)
+                
+                # Plot 8: Control inputs
                 for i in range(sim_controls.shape[1]):
-                    axes[3].plot(sim_times[:-1], sim_controls[:, i], 'o-', markersize=3, 
+                    axes[6].plot(sim_times[:-1], sim_controls[:, i], 'o-', markersize=3, 
                               label=f'u{i+1}', linewidth=1.5)
-                axes[3].axhline(y=u_lim, color='r', linestyle='--', alpha=0.5, label='upper limit')
-                axes[3].axhline(y=l_lim, color='b', linestyle='--', alpha=0.5, label='lower limit')
-                axes[3].axhline(y=u_hover[0], color='g', linestyle=':', linewidth=2, label='hover thrust')
-                axes[3].set_xlabel('Time (s)')
-                axes[3].set_ylabel('Control Input')
-                axes[3].set_title('Control Trajectory')
-                axes[3].legend()
-                axes[3].grid(True)
+                axes[6].axhline(y=u_lim, color='r', linestyle='--', alpha=0.5, label='upper limit')
+                axes[6].axhline(y=l_lim, color='b', linestyle='--', alpha=0.5, label='lower limit')
+                axes[6].axhline(y=u_hover[0], color='g', linestyle=':', linewidth=2, label='hover thrust')
+                axes[6].set_xlabel('Time (s)')
+                axes[6].set_ylabel('Control Input')
+                axes[6].set_title('Control Trajectory')
+                axes[6].legend()
+                axes[6].grid(True)
+                
+                # Plot 9: 2D trajectory (X-Y plane)
+                min_len = min(len(sim_states), len(trajectory['positions']))
+                axes[7].plot(sim_states[:min_len, 0], sim_states[:min_len, 1], 'b-', label='actual', linewidth=2)
+                axes[7].plot(trajectory['positions'][:min_len, 0], trajectory['positions'][:min_len, 1], 
+                           'r--', label='reference', linewidth=2, alpha=0.7)
+                axes[7].plot(sim_states[0, 0], sim_states[0, 1], 'go', markersize=10, label='start')
+                axes[7].plot(sim_states[-1, 0], sim_states[-1, 1], 'ro', markersize=10, label='end')
+                axes[7].set_xlabel('X (m)')
+                axes[7].set_ylabel('Y (m)')
+                axes[7].set_title('2D Trajectory (X-Y plane)')
+                axes[7].legend()
+                axes[7].grid(True)
+                axes[7].axis('equal')
                 
                 fig.tight_layout()
                 plt.show()
