@@ -7,6 +7,8 @@ import numpy as np
 import pinocchio
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+from scipy import interpolate
+from scipy.spatial.transform import Rotation as R, Slerp
 
 import crocoddyl
 
@@ -14,6 +16,7 @@ WITHDISPLAY = "display" in sys.argv or "CROCODDYL_DISPLAY" in os.environ
 WITHPLOT = "plot" in sys.argv or "CROCODDYL_PLOT" in os.environ
 DEBUG = "debug" in sys.argv or "CROCODDYL_DEBUG" in os.environ
 WITHPLOT = True
+DEBUG = True
 
 
 def initialize_quadrotor_system(
@@ -22,7 +25,7 @@ def initialize_quadrotor_system(
     cf=6.6e-5,
     cm=1e-6,
     u_lim=8.0,
-    l_lim=0.1,
+    l_lim=-8.0,  # TODO: Set control limit back to 0.1 [11.10]
     pos_lb=None,
     pos_ub=None,
     vel_lb=None,
@@ -66,7 +69,7 @@ def initialize_quadrotor_system(
     hector = example_robot_data.load(robot_name)
     robot_model = hector.model
     state = crocoddyl.StateMultibody(robot_model)
-    
+
     # Thruster configuration
     ps = [
         crocoddyl.Thruster(
@@ -92,7 +95,7 @@ def initialize_quadrotor_system(
     ]
     actuation = crocoddyl.ActuationModelFloatingBaseThrusters(state, ps)
     nu = actuation.nu
-    
+
     # Calculate hover thrust
     mass = robot_model.inertias[1].mass
     g = 9.81
@@ -175,6 +178,151 @@ l_lim = system['l_lim']
 state_tangent_lb = system['state_tangent_lb']
 state_tangent_ub = system['state_tangent_ub']
 state_barrier_weights = system['state_barrier_weights']
+
+
+def convert_optimized_trajectory_to_tracking_format(solver, dt):
+    """
+    Convert trajectory optimization results to tracking format
+    
+    Args:
+        solver: Crocoddyl solver with optimized trajectory (solver.xs contains states, solver.us contains controls)
+        dt: Time step used in optimization
+    
+    Returns:
+        trajectory: Dictionary with 'times', 'positions', 'quaternions', 'velocities', 'controls'
+    """
+    xs = solver.xs
+    us = solver.us
+    n_points = len(xs)
+    
+    # Convert to numpy arrays
+    xs_array = np.array([np.array(x) for x in xs])
+    
+    # Extract positions, quaternions, and velocities
+    positions = xs_array[:, :3]  # First 3 elements are position [x, y, z]
+    
+    # Extract quaternions (indices 3:7)
+    quaternions = []
+    for i in range(n_points):
+        quat_coeffs = xs_array[i, 3:7]  # [qx, qy, qz, qw]
+        quat = pinocchio.Quaternion(quat_coeffs[3], quat_coeffs[0], quat_coeffs[1], quat_coeffs[2])
+        quaternions.append(quat)
+    
+    # Extract velocities (indices 7:10 for linear velocity, 10:13 for angular velocity)
+    # For StateMultibody, velocities are stored after configuration (nq elements)
+    # nq = 7 for quadrotor (3 pos + 4 quat), so velocities start at index 7
+    velocities = np.zeros((n_points, 3))
+    if xs_array.shape[1] > 9:
+        velocities = xs_array[:, 7:10]  # Linear velocities [vx, vy, vz]
+    
+    # Extract controls (feedforward)
+    controls = np.zeros((len(us), len(us[0]) if len(us) > 0 else 4))
+    if len(us) > 0:
+        controls = np.array([np.array(u) for u in us])
+    
+    # Generate time array
+    times = np.arange(n_points) * dt
+    
+    return {
+        'times': times,
+        'positions': positions,
+        'quaternions': quaternions,
+        'velocities': velocities,
+        'controls': controls  # Feedforward controls from optimization
+    }
+
+
+def interpolate_trajectory_at_time(trajectory, t):
+    """
+    Interpolate trajectory data at a specific time point
+    
+    Args:
+        trajectory: Dictionary with 'times', 'positions', 'quaternions', 'velocities', 'controls' (optional)
+        t: Target time for interpolation
+    
+    Returns:
+        Dictionary with interpolated 'position', 'quaternion', 'velocity' (optional), 'control' (optional)
+    """
+    traj_times = trajectory['times']
+    
+    # Handle edge case: trajectory with only one point
+    if len(traj_times) <= 1:
+        return {
+            'position': trajectory['positions'][0],
+            'quaternion': trajectory['quaternions'][0]
+        }
+    
+    # Clamp time to valid range
+    if t <= traj_times[0]:
+        idx = 0
+        alpha = 0.0
+    elif t >= traj_times[-1]:
+        idx = len(traj_times) - 2
+        alpha = 1.0
+    else:
+        # Find the index where t would be inserted
+        idx = np.searchsorted(traj_times, t) - 1
+        idx = max(0, min(idx, len(traj_times) - 2))
+        # Calculate interpolation factor
+        alpha = (t - traj_times[idx]) / (traj_times[idx + 1] - traj_times[idx])
+    
+    # Interpolate position (linear)
+    pos1 = trajectory['positions'][idx]
+    pos2 = trajectory['positions'][idx + 1]
+    interp_pos = pos1 + alpha * (pos2 - pos1)
+    
+    # Interpolate quaternion (SLERP - spherical linear interpolation)
+    quat1 = trajectory['quaternions'][idx]
+    quat2 = trajectory['quaternions'][idx + 1]
+    
+    # Convert pinocchio.Quaternion to numpy array [x, y, z, w] format for scipy
+    if isinstance(quat1, pinocchio.Quaternion):
+        quat1_array = np.array([quat1.x, quat1.y, quat1.z, quat1.w])
+    else:
+        quat1_array = np.array(quat1)
+    
+    if isinstance(quat2, pinocchio.Quaternion):
+        quat2_array = np.array([quat2.x, quat2.y, quat2.z, quat2.w])
+    else:
+        quat2_array = np.array(quat2)
+    
+    # Use scipy's Slerp for spherical linear interpolation
+    key_rots = R.from_quat([quat1_array, quat2_array])
+    key_times = [0, 1]
+    slerp = Slerp(key_times, key_rots)
+    interp_rot = slerp(alpha)
+    interp_quat_array = interp_rot.as_quat()  # Returns [x, y, z, w]
+    
+    # Convert back to pinocchio.Quaternion format [w, x, y, z]
+    interp_quat = pinocchio.Quaternion(interp_quat_array[3], interp_quat_array[0], 
+                                       interp_quat_array[1], interp_quat_array[2])
+    
+    result = {
+        'position': interp_pos,
+        'quaternion': interp_quat
+    }
+    
+    # Interpolate velocity if available
+    if 'velocities' in trajectory and len(trajectory['velocities']) > 0:
+        vel1 = trajectory['velocities'][idx]
+        vel2 = trajectory['velocities'][idx + 1]
+        result['velocity'] = vel1 + alpha * (vel2 - vel1)
+    
+    # Interpolate control if available
+    if 'controls' in trajectory and len(trajectory['controls']) > 0:
+        # Controls are typically one less than states (N-1 controls for N states)
+        # Handle edge case where controls might have different length
+        control_idx1 = min(idx, len(trajectory['controls']) - 1)
+        control_idx2 = min(idx + 1, len(trajectory['controls']) - 1)
+        
+        if control_idx1 == control_idx2:
+            result['control'] = trajectory['controls'][control_idx1].copy()
+        else:
+            control1 = trajectory['controls'][control_idx1]
+            control2 = trajectory['controls'][control_idx2]
+            result['control'] = control1 + alpha * (control2 - control1)
+    
+    return result
 
 
 def generate_figure8_trajectory(center_pos, radius, height, duration, dt=0.01):
@@ -269,7 +417,7 @@ def create_cost_models(target_pos, target_quat, u_hover, state, nu, robot_model,
     # Control regularization (relative to hover thrust)
     uResidual = crocoddyl.ResidualModelControl(state, u_hover)
     uRegCost = crocoddyl.CostModelResidual(state, uResidual)
-    
+
     # State bounds
     xBoundsResidual = crocoddyl.ResidualModelState(state, state.zero(), nu)
     xBoundsActivation = crocoddyl.ActivationModelWeightedQuadraticBarrier(
@@ -380,7 +528,7 @@ def trajectory_optimization(target_pos, target_quat, dt=0.1, T=100, max_iter=400
     runningModel.u_ub = np.array([u_lim, u_lim, u_lim, u_lim])
     terminalModel.u_lb = np.array([l_lim, l_lim, l_lim, l_lim])
     terminalModel.u_ub = np.array([u_lim, u_lim, u_lim, u_lim])
-    
+
     # Create problem and solver
     x0 = np.concatenate([hector.q0, np.zeros(state.nv)])
     problem = crocoddyl.ShootingProblem(x0, [runningModel] * T, terminalModel)
@@ -467,9 +615,16 @@ def trajectory_optimization(target_pos, target_quat, dt=0.1, T=100, max_iter=400
     
     solver.setCallbacks(callbacks)
     
-    # Solve
+    # Initialize trajectory
     xs_init = [x0.copy() for _ in range(T + 1)]
     us_init = [u_hover.copy() for _ in range(T)]
+    
+    # Set initial trajectory in solver so it can be plotted before first iteration
+    if with_plot:
+        solver.xs = xs_init
+        solver.us = us_init
+        # Plot initial trajectory (iteration 0)
+        plot_callback(solver)
     
     start_time = time.time()
     solver.solve(xs_init, us_init, max_iter)
@@ -979,7 +1134,7 @@ def mpc_tracking(target_pos, target_quat, dt_mpc=0.5, N=20,
                     axes[1].set_title('Linear Velocity')
                     axes[1].legend()
                     axes[1].grid(True)
-    
+                
                 # Plot 3: Angular velocity
                 if sim_states_array.shape[1] > 9:
                     axes[2].plot(sim_times, sim_states_array[:, 10], 'r-', label='wx', linewidth=2)
@@ -1094,18 +1249,20 @@ def mpc_tracking(target_pos, target_quat, dt_mpc=0.5, N=20,
 
 
 def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20, 
-                            sim_duration=10.0, sim_dt=0.01, max_iter=10, debug_level=0):
+                            sim_duration=10.0, sim_dt=0.01, max_iter=10, debug_level=0,
+                            use_feedforward=False):
     """
     MPC trajectory tracking: track a time-varying trajectory using MPC control
     
     Args:
-        trajectory: Dictionary with 'times', 'positions', 'quaternions', 'velocities'
+        trajectory: Dictionary with 'times', 'positions', 'quaternions', 'velocities', 'controls' (optional)
         dt_mpc: MPC control time step (seconds)
         N: MPC prediction horizon
         sim_duration: Total simulation duration (seconds)
         sim_dt: Simulation time step (seconds)
         max_iter: Maximum MPC solver iterations per step
         debug_level: Debug level (0=no debug, 1=show step results, 2=show step results + MPC iterations)
+        use_feedforward: If True, use feedforward controls from trajectory as initial guess for MPC
     """
     print("=" * 60)
     print("MPC Trajectory Tracking")
@@ -1113,6 +1270,12 @@ def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20,
     print(f"Trajectory duration: {trajectory['times'][-1]:.2f} s, {len(trajectory['times'])} points")
     print(f"MPC dt: {dt_mpc} s, Horizon: {N}, Max iter: {max_iter}")
     print(f"Simulation duration: {sim_duration} s, dt: {sim_dt} s")
+    print(f"Feedforward control: {'ENABLED' if use_feedforward else 'DISABLED'}")
+    if use_feedforward and 'controls' in trajectory:
+        print(f"  Feedforward controls available: {len(trajectory['controls'])} points")
+    elif use_feedforward:
+        print(f"  WARNING: Feedforward requested but no controls in trajectory, disabling feedforward")
+        use_feedforward = False
     
     # Initial state
     x0 = np.concatenate([hector.q0, np.zeros(state.nv)])
@@ -1123,12 +1286,16 @@ def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20,
     
     # Simulation data storage
     sim_states = [current_state.copy()]
-    sim_controls = []
+    sim_controls = []  # Total control (feedforward + feedback)
+    sim_feedforward_controls = []  # Feedforward control from trajectory
+    sim_feedback_controls = []  # Feedback control from MPC
     sim_times = [0.0]
     mpc_solve_times = []
     
     # Current MPC control (will be updated when MPC is solved)
     current_mpc_control = u_hover.copy()
+    current_feedforward_control = np.zeros(nu)  # Current feedforward control
+    current_feedback_control = np.zeros(nu)  # Current feedback control
     
     # Store previous MPC solution for warm start
     prev_mpc_xs = None
@@ -1145,7 +1312,7 @@ def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20,
     
     # Simulation loop
     num_sim_steps = int(sim_duration / sim_dt)
-    mpc_steps_per_solve = int(dt_mpc / sim_dt)  # How many sim steps per MPC solve
+    mpc_steps_per_solve = 1  # How many sim steps per MPC solve
     
     print(f"\nStarting simulation...")
     print(f"Total sim steps: {num_sim_steps}, MPC solve every {mpc_steps_per_solve} steps")
@@ -1174,10 +1341,10 @@ def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20,
                 print("=" * 60)
                 print(f"Current state (before MPC): pos=[{current_state[0]:.4f}, {current_state[1]:.4f}, {current_state[2]:.4f}]")
             
-            # Get reference state from trajectory at current time
-            traj_idx = min(int(current_time / sim_dt), len(trajectory['times']) - 1)
-            ref_pos = trajectory['positions'][traj_idx]
-            ref_quat = trajectory['quaternions'][traj_idx]
+            # Get reference state from trajectory at current time using interpolation
+            interp_data = interpolate_trajectory_at_time(trajectory, current_time)
+            ref_pos = interp_data['position']
+            ref_quat = interp_data['quaternion']
             
             if debug_level > 0:
                 print(f"Reference position: [{ref_pos[0]:.4f}, {ref_pos[1]:.4f}, {ref_pos[2]:.4f}]")
@@ -1252,17 +1419,44 @@ def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20,
             prev_mpc_xs = [x.copy() for x in solver.xs] if len(solver.xs) > 0 else None
             prev_mpc_us = [u.copy() for u in solver.us] if len(solver.us) > 0 else None
             
-            # Update current MPC control (use first control from solution)
-            prev_mpc_control = current_mpc_control.copy() if hasattr(current_mpc_control, 'copy') else current_mpc_control
+            # Get MPC feedback control (use first control from solution)
             if len(solver.us) > 0:
-                current_mpc_control = solver.us[0].copy()
-                if debug_level > 0:
-                    control_diff = np.linalg.norm(current_mpc_control - prev_mpc_control) if hasattr(prev_mpc_control, '__len__') else float('inf')
-                    print(f"MPC control updated: {current_mpc_control} (change: {control_diff:.6f})")
+                current_mpc_feedback = solver.us[0].copy()  # MPC feedback control
             else:
-                current_mpc_control = u_hover.copy()
+                current_mpc_feedback = np.zeros(nu)  # Zero feedback if no solution
                 if debug_level > 0:
-                    print(f"WARNING: No control from solver, using hover thrust: {current_mpc_control}")
+                    print(f"WARNING: No control from solver, using zero feedback")
+            
+            # Get feedforward control at current time if enabled (using interpolation)
+            feedforward_control = np.zeros(nu)
+            if use_feedforward and 'controls' in trajectory:
+                interp_data = interpolate_trajectory_at_time(trajectory, current_time)
+                if 'control' in interp_data:
+                    feedforward_control = interp_data['control']
+                else:
+                    # Fallback: if interpolation didn't return control, use nearest neighbor
+                    traj_times = trajectory['times']
+                    traj_controls = trajectory['controls']
+                    idx = np.searchsorted(traj_times, current_time)
+                    if idx >= len(traj_times):
+                        control_idx = len(traj_controls) - 1
+                    elif idx == 0:
+                        control_idx = 0
+                    else:
+                        control_idx = idx - 1 if abs(traj_times[idx-1] - current_time) < abs(traj_times[idx] - current_time) else idx
+                    control_idx = min(control_idx, len(traj_controls) - 1)
+                    feedforward_control = traj_controls[control_idx].copy()
+                if debug_level > 0:
+                    print(f"Feedforward control (interpolated): {feedforward_control}")
+            
+            # Total control = feedforward + feedback
+            current_mpc_control = feedforward_control + current_mpc_feedback
+            # Store feedforward and feedback controls separately
+            current_feedforward_control = feedforward_control.copy()
+            current_feedback_control = current_mpc_feedback.copy()
+            if debug_level > 0:
+                print(f"MPC feedback control: {current_mpc_feedback}")
+                print(f"Total control (feedforward + feedback): {current_mpc_control}")
             
             # Display MPC solve results
             if debug_level > 0:
@@ -1290,6 +1484,8 @@ def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20,
         
         # Store data
         sim_controls.append(current_mpc_control.copy())
+        sim_feedforward_controls.append(current_feedforward_control.copy())
+        sim_feedback_controls.append(current_feedback_control.copy())
         current_state = next_state.copy()  # Update current state for next iteration
         sim_states.append(current_state.copy())
         sim_times.append((sim_step + 1) * sim_dt)
@@ -1317,10 +1513,25 @@ def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20,
                 print(f"  Angular velocity: [{angvel[0]:.4f}, {angvel[1]:.4f}, {angvel[2]:.4f}] rad/s")
             
             # Control information
-            print(f"Applied Control: {current_mpc_control}")
+            print(f"Feedforward Control: {current_feedforward_control}")
+            print(f"Feedback Control: {current_feedback_control}")
+            print(f"Total Control: {current_mpc_control}")
             
             # Get current reference for error calculation
-            traj_idx = min(int(sim_times[-1] / sim_dt), len(trajectory['times']) - 1)
+            # Find the closest time index in trajectory
+            current_time = sim_times[-1]
+            traj_times = trajectory['times']
+            idx = np.searchsorted(traj_times, current_time)
+            if idx >= len(traj_times):
+                traj_idx = len(traj_times) - 1
+            elif idx == 0:
+                traj_idx = 0
+            else:
+                # Choose the closer time point
+                if abs(traj_times[idx] - current_time) < abs(traj_times[idx-1] - current_time):
+                    traj_idx = idx
+                else:
+                    traj_idx = idx - 1
             ref_pos = trajectory['positions'][traj_idx]
             pos_error = np.linalg.norm(pos - ref_pos)
             print(f"Position error to reference: {pos_error:.4f} m")
@@ -1330,6 +1541,8 @@ def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20,
                 # Convert to arrays for plotting
                 sim_states_array = np.array([np.array(x) for x in sim_states])
                 sim_controls_array = np.array([np.array(u) for u in sim_controls])
+                sim_feedforward_controls_array = np.array([np.array(u) for u in sim_feedforward_controls])
+                sim_feedback_controls_array = np.array([np.array(u) for u in sim_feedback_controls])
                 
                 # Clear all axes
                 for i in range(9):  # Clear all 9 axes
@@ -1374,16 +1587,22 @@ def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20,
                     axes[2].legend()
                     axes[2].grid(True)
                 
-                # Plot 4: Control inputs
+                # Plot 4: Control inputs (Total, Feedforward, Feedback)
                 for i in range(sim_controls_array.shape[1]):
                     axes[3].plot(sim_times[:-1], sim_controls_array[:, i], 'o-', markersize=3, 
-                              label=f'u{i+1}', linewidth=1.5)
+                              label=f'Total u{i+1}', linewidth=1.5, alpha=0.8)
+                    if len(sim_feedforward_controls_array) > 0:
+                        axes[3].plot(sim_times[:-1], sim_feedforward_controls_array[:, i], '--', 
+                                  label=f'Feedforward u{i+1}', linewidth=1.5, alpha=0.6)
+                    if len(sim_feedback_controls_array) > 0:
+                        axes[3].plot(sim_times[:-1], sim_feedback_controls_array[:, i], ':', 
+                                  label=f'Feedback u{i+1}', linewidth=1.5, alpha=0.6)
                 axes[3].axhline(y=u_lim, color='r', linestyle='--', alpha=0.5, label='upper limit')
                 axes[3].axhline(y=l_lim, color='b', linestyle='--', alpha=0.5, label='lower limit')
                 axes[3].axhline(y=u_hover[0], color='g', linestyle=':', linewidth=2, label='hover thrust')
                 axes[3].set_xlabel('Time (s)')
                 axes[3].set_ylabel('Control Input')
-                axes[3].set_title('Control Trajectory')
+                axes[3].set_title('Control Trajectory (Total, Feedforward, Feedback)')
                 axes[3].legend()
                 axes[3].grid(True)
                 
@@ -1461,8 +1680,10 @@ def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20,
     # Convert to arrays for plotting
     sim_states_array = np.array([np.array(x) for x in sim_states])
     sim_controls_array = np.array([np.array(u) for u in sim_controls])
+    sim_feedforward_controls_array = np.array([np.array(u) for u in sim_feedforward_controls]) if len(sim_feedforward_controls) > 0 else np.zeros((0, nu))
+    sim_feedback_controls_array = np.array([np.array(u) for u in sim_feedback_controls]) if len(sim_feedback_controls) > 0 else np.zeros((0, nu))
     
-    return sim_states_array, sim_controls_array, sim_times, mpc_solve_times
+    return sim_states_array, sim_controls_array, sim_times, mpc_solve_times, sim_feedforward_controls_array, sim_feedback_controls_array
 
 
 def plot_mpc_results(sim_states, sim_controls, sim_times, target_pos):
@@ -1552,11 +1773,11 @@ def plot_mpc_results(sim_states, sim_controls, sim_times, target_pos):
 
 
 if __name__ == "__main__":
-    traj_opt = False
-    mpc = True
+    traj_opt = True
+    mpc = False
     
-    # MPC tracking mode: "fixed_point" or "figure8"
-    mpc_mode = "figure8"  # Options: "fixed_point" or "figure8"
+    # MPC tracking mode: "fixed_point", "figure8", or "optimized_trajectory"
+    mpc_mode = "optimized_trajectory"  # Options: "fixed_point", "figure8", or "optimized_trajectory"
     
     # Fixed point target (for fixed_point mode)
     target_pos = np.array([1.0, 1.0, 1.0])
@@ -1631,7 +1852,7 @@ if __name__ == "__main__":
             print(f"  Duration: {figure8_duration} s")
             
             # Run MPC trajectory tracking
-            sim_states, sim_controls, sim_times, mpc_solve_times = mpc_trajectory_tracking(
+            sim_states, sim_controls, sim_times, mpc_solve_times, sim_feedforward_controls, sim_feedback_controls = mpc_trajectory_tracking(
                 trajectory,
                 dt_mpc=0.05, N=20,
                 sim_duration=figure8_duration, sim_dt=0.01,
@@ -1765,16 +1986,22 @@ if __name__ == "__main__":
                     axes[5].legend()
                     axes[5].grid(True)
                 
-                # Plot 8: Control inputs
+                # Plot 8: Control inputs (Total, Feedforward, Feedback)
                 for i in range(sim_controls.shape[1]):
                     axes[6].plot(sim_times[:-1], sim_controls[:, i], 'o-', markersize=3, 
-                              label=f'u{i+1}', linewidth=1.5)
+                              label=f'Total u{i+1}', linewidth=1.5, alpha=0.8)
+                    if len(sim_feedforward_controls) > 0:
+                        axes[6].plot(sim_times[:-1], sim_feedforward_controls[:, i], '--', 
+                                  label=f'Feedforward u{i+1}', linewidth=1.5, alpha=0.6)
+                    if len(sim_feedback_controls) > 0:
+                        axes[6].plot(sim_times[:-1], sim_feedback_controls[:, i], ':', 
+                                  label=f'Feedback u{i+1}', linewidth=1.5, alpha=0.6)
                 axes[6].axhline(y=u_lim, color='r', linestyle='--', alpha=0.5, label='upper limit')
                 axes[6].axhline(y=l_lim, color='b', linestyle='--', alpha=0.5, label='lower limit')
                 axes[6].axhline(y=u_hover[0], color='g', linestyle=':', linewidth=2, label='hover thrust')
                 axes[6].set_xlabel('Time (s)')
                 axes[6].set_ylabel('Control Input')
-                axes[6].set_title('Control Trajectory')
+                axes[6].set_title('Control Trajectory (Total, Feedforward, Feedback)')
                 axes[6].legend()
                 axes[6].grid(True)
                 
@@ -1795,6 +2022,258 @@ if __name__ == "__main__":
                 fig.tight_layout()
                 plt.show()
         
+        elif mpc_mode == "optimized_trajectory":
+            # Optimized trajectory tracking: first optimize a trajectory, then track it with MPC
+            print("\n" + "=" * 60)
+            print("MPC Mode: Optimized Trajectory Tracking")
+            print("=" * 60)
+            
+            # Step 1: Generate optimized trajectory
+            print("\nStep 1: Generating optimized trajectory...")
+            opt_solver, opt_logger, opt_dt = trajectory_optimization(
+                target_pos, target_quat,
+                dt=0.1, T=100, max_iter=400,
+                with_plot=False, debug=False
+            )
+            
+            print(f"Optimization completed!")
+            print(f"  Optimized trajectory duration: {len(opt_solver.xs) * opt_dt:.2f} s")
+            print(f"  Number of waypoints: {len(opt_solver.xs)}")
+            
+            # Plot optimization results if requested
+            if WITHPLOT:
+                plot_trajectory_optimization_results(opt_solver, opt_logger, opt_dt, target_pos, u_hover)
+            
+            # Step 2: Convert optimized trajectory to tracking format
+            print("\nStep 2: Converting optimized trajectory to tracking format...")
+            trajectory = convert_optimized_trajectory_to_tracking_format(opt_solver, opt_dt)
+            
+            print(f"Trajectory converted:")
+            print(f"  Duration: {trajectory['times'][-1]:.2f} s")
+            print(f"  Number of points: {len(trajectory['times'])}")
+            print(f"  Time step: {opt_dt:.3f} s")
+            print(f"  Time range: [{trajectory['times'][0]:.3f}, {trajectory['times'][-1]:.3f}] s")
+            if 'controls' in trajectory:
+                print(f"  Feedforward controls: {len(trajectory['controls'])} points available")
+            
+            # Step 3: Track the optimized trajectory using MPC
+            print("\nStep 3: Tracking optimized trajectory with MPC...")
+            sim_duration = trajectory['times'][-1]  # Use the full trajectory duration
+            print(f"  Simulation duration: {sim_duration:.2f} s")
+            print(f"  Simulation time step: 0.01 s")
+            print(f"  Expected simulation steps: {int(sim_duration / 0.01)}")
+            
+            # Option to use feedforward control (can be toggled for comparison)
+            use_feedforward = False  # Set to False to disable feedforward and use pure feedback
+            
+            sim_states, sim_controls, sim_times, mpc_solve_times, sim_feedforward_controls, sim_feedback_controls = mpc_trajectory_tracking(
+                trajectory,
+                dt_mpc=0.05, N=20,
+                sim_duration=sim_duration, sim_dt=0.01,
+                max_iter=100,
+                debug_level=debug_level,
+                use_feedforward=use_feedforward
+            )
+            
+            print(f"\nSimulation completed:")
+            print(f"  Actual simulation duration: {sim_times[-1]:.2f} s")
+            print(f"  Number of simulation steps: {len(sim_times)}")
+            print(f"  Expected steps: {int(sim_duration / 0.01)}")
+            print(f"  sim_states shape: {sim_states.shape}")
+            print(f"  sim_controls shape: {sim_controls.shape}")
+            print(f"  sim_times range: [{sim_times[0]:.3f}, {sim_times[-1]:.3f}] s")
+            
+            if WITHPLOT:
+                print(f"\nPlotting results...")
+                print(f"  Using sim_times range: [{sim_times[0]:.3f}, {sim_times[-1]:.3f}] s")
+                print(f"  sim_times length: {len(sim_times)}")
+                print(f"  sim_states length: {len(sim_states)}")
+                print(f"  sim_controls length: {len(sim_controls)}")
+                # Plot trajectory tracking results (same as figure8 mode)
+                fig = plt.figure(figsize=(20, 12))
+                
+                # Plot 1: 3D trajectory
+                axes_3d = fig.add_subplot(3, 3, 1, projection='3d')
+                # Use full simulation data
+                axes_3d.plot(sim_states[:, 0], sim_states[:, 1], sim_states[:, 2], 
+                           'b-', label='MPC tracking', linewidth=2)
+                # Interpolate reference positions for 3D plot
+                from scipy import interpolate
+                ref_positions_interp_3d = np.zeros((len(sim_times), 3))
+                for i in range(3):
+                    f = interpolate.interp1d(trajectory['times'], trajectory['positions'][:, i], 
+                                           kind='linear', fill_value='extrapolate', bounds_error=False)
+                    ref_positions_interp_3d[:, i] = f(sim_times)
+                axes_3d.plot(ref_positions_interp_3d[:, 0], ref_positions_interp_3d[:, 1], 
+                           ref_positions_interp_3d[:, 2], 'r--', label='optimized trajectory', linewidth=2, alpha=0.7)
+                axes_3d.set_xlabel('X (m)')
+                axes_3d.set_ylabel('Y (m)')
+                axes_3d.set_zlabel('Z (m)')
+                axes_3d.set_title('3D Trajectory: MPC Tracking Optimized Trajectory')
+                axes_3d.legend()
+                axes_3d.grid(True)
+                
+                # Set z-axis range to at least 0.5m
+                z_min = min(np.min(sim_states[:, 2]), np.min(ref_positions_interp_3d[:, 2]))
+                z_max = max(np.max(sim_states[:, 2]), np.max(ref_positions_interp_3d[:, 2]))
+                z_range = z_max - z_min
+                if z_range < 0.5:
+                    z_center = (z_min + z_max) / 2.0
+                    z_min = z_center - 0.25
+                    z_max = z_center + 0.25
+                axes_3d.set_zlim(z_min, z_max)
+                
+                # Create remaining axes
+                axes = [fig.add_subplot(3, 3, i+2) for i in range(8)]
+                
+                # Plot 2: Position tracking
+                # Use full simulation data, interpolate reference trajectory to match
+                axes[0].plot(sim_times, sim_states[:, 0], 'r-', label='x', linewidth=2)
+                axes[0].plot(sim_times, sim_states[:, 1], 'g-', label='y', linewidth=2)
+                axes[0].plot(sim_times, sim_states[:, 2], 'b-', label='z', linewidth=2)
+                # Interpolate reference trajectory to match simulation times
+                from scipy import interpolate
+                ref_positions_interp = np.zeros((len(sim_times), 3))
+                for i in range(3):
+                    f = interpolate.interp1d(trajectory['times'], trajectory['positions'][:, i], 
+                                           kind='linear', fill_value='extrapolate', bounds_error=False)
+                    ref_positions_interp[:, i] = f(sim_times)
+                axes[0].plot(sim_times, ref_positions_interp[:, 0], 'r--', alpha=0.5, label='ref x')
+                axes[0].plot(sim_times, ref_positions_interp[:, 1], 'g--', alpha=0.5, label='ref y')
+                axes[0].plot(sim_times, ref_positions_interp[:, 2], 'b--', alpha=0.5, label='ref z')
+                axes[0].set_xlabel('Time (s)')
+                axes[0].set_ylabel('Position (m)')
+                axes[0].set_title('Position Tracking')
+                axes[0].legend()
+                axes[0].grid(True)
+                
+                # Plot 3: Position error
+                # Interpolate reference positions to match simulation times
+                ref_positions_interp_err = np.zeros((len(sim_times), 3))
+                for i in range(3):
+                    f = interpolate.interp1d(trajectory['times'], trajectory['positions'][:, i], 
+                                           kind='linear', fill_value='extrapolate', bounds_error=False)
+                    ref_positions_interp_err[:, i] = f(sim_times)
+                pos_errors = sim_states[:, :3] - ref_positions_interp_err
+                pos_error_norm = np.linalg.norm(pos_errors, axis=1) * 100  # Convert to cm
+                axes[1].plot(sim_times, pos_error_norm, 'b-', linewidth=2)
+                axes[1].set_xlabel('Time (s)')
+                axes[1].set_ylabel('Position Error (cm)')
+                axes[1].set_title('Position Error to Optimized Trajectory')
+                axes[1].grid(True)
+                
+                # Plot 4: Velocity tracking
+                if sim_states.shape[1] > 9 and len(trajectory['velocities']) > 0:
+                    # Use full simulation data
+                    axes[2].plot(sim_times, sim_states[:, 7], 'r-', label='vx', linewidth=2)
+                    axes[2].plot(sim_times, sim_states[:, 8], 'g-', label='vy', linewidth=2)
+                    axes[2].plot(sim_times, sim_states[:, 9], 'b-', label='vz', linewidth=2)
+                    # Interpolate reference velocities to match simulation times
+                    ref_velocities_interp = np.zeros((len(sim_times), 3))
+                    for i in range(3):
+                        f = interpolate.interp1d(trajectory['times'], trajectory['velocities'][:, i], 
+                                               kind='linear', fill_value='extrapolate', bounds_error=False)
+                        ref_velocities_interp[:, i] = f(sim_times)
+                    axes[2].plot(sim_times, ref_velocities_interp[:, 0], 'r--', alpha=0.5, label='ref vx')
+                    axes[2].plot(sim_times, ref_velocities_interp[:, 1], 'g--', alpha=0.5, label='ref vy')
+                    axes[2].plot(sim_times, ref_velocities_interp[:, 2], 'b--', alpha=0.5, label='ref vz')
+                    axes[2].set_xlabel('Time (s)')
+                    axes[2].set_ylabel('Linear Velocity (m/s)')
+                    axes[2].set_title('Velocity Tracking')
+                    axes[2].legend()
+                    axes[2].grid(True)
+                
+                # Plot 5: Velocity error
+                if sim_states.shape[1] > 9 and len(trajectory['velocities']) > 0:
+                    # Interpolate reference velocities to match simulation times
+                    ref_velocities_interp_err = np.zeros((len(sim_times), 3))
+                    for i in range(3):
+                        f = interpolate.interp1d(trajectory['times'], trajectory['velocities'][:, i], 
+                                               kind='linear', fill_value='extrapolate', bounds_error=False)
+                        ref_velocities_interp_err[:, i] = f(sim_times)
+                    vel_errors = sim_states[:, 7:10] - ref_velocities_interp_err
+                    vel_error_norm = np.linalg.norm(vel_errors, axis=1)
+                    axes[3].plot(sim_times, vel_error_norm, 'r-', linewidth=2, label='||vel error||')
+                    axes[3].plot(sim_times, vel_errors[:, 0], 'r--', linewidth=1.5, alpha=0.7, label='vx error')
+                    axes[3].plot(sim_times, vel_errors[:, 1], 'g--', linewidth=1.5, alpha=0.7, label='vy error')
+                    axes[3].plot(sim_times, vel_errors[:, 2], 'b--', linewidth=1.5, alpha=0.7, label='vz error')
+                    axes[3].axhline(y=0, color='k', linestyle=':', alpha=0.5)
+                    axes[3].set_xlabel('Time (s)')
+                    axes[3].set_ylabel('Velocity Error (m/s)')
+                    axes[3].set_title('Velocity Error to Optimized Trajectory')
+                    axes[3].legend()
+                    axes[3].grid(True)
+                
+                # Plot 6: Angular velocity tracking
+                if sim_states.shape[1] > 12:
+                    axes[4].plot(sim_times, sim_states[:, 10], 'r-', label='wx', linewidth=2)
+                    axes[4].plot(sim_times, sim_states[:, 11], 'g-', label='wy', linewidth=2)
+                    axes[4].plot(sim_times, sim_states[:, 12], 'b-', label='wz', linewidth=2)
+                    axes[4].axhline(y=0, color='k', linestyle='--', alpha=0.5, label='target (0)')
+                    axes[4].set_xlabel('Time (s)')
+                    axes[4].set_ylabel('Angular Velocity (rad/s)')
+                    axes[4].set_title('Angular Velocity Tracking')
+                    axes[4].legend()
+                    axes[4].grid(True)
+                
+                # Plot 7: Angular velocity error
+                if sim_states.shape[1] > 12:
+                    target_angvel = np.zeros(3)
+                    angvel_errors = sim_states[:, 10:13] - target_angvel
+                    angvel_error_norm = np.linalg.norm(angvel_errors, axis=1)
+                    axes[5].plot(sim_times, angvel_error_norm, 'm-', linewidth=2, label='||angvel error||')
+                    axes[5].plot(sim_times, angvel_errors[:, 0], 'r--', linewidth=1.5, alpha=0.7, label='wx error')
+                    axes[5].plot(sim_times, angvel_errors[:, 1], 'g--', linewidth=1.5, alpha=0.7, label='wy error')
+                    axes[5].plot(sim_times, angvel_errors[:, 2], 'b--', linewidth=1.5, alpha=0.7, label='wz error')
+                    axes[5].axhline(y=0, color='k', linestyle=':', alpha=0.5)
+                    axes[5].set_xlabel('Time (s)')
+                    axes[5].set_ylabel('Angular Velocity Error (rad/s)')
+                    axes[5].set_title('Angular Velocity Error (target=0)')
+                    axes[5].legend()
+                    axes[5].grid(True)
+                
+                # Plot 8: Control inputs (Total, Feedforward, Feedback)
+                for i in range(sim_controls.shape[1]-3):
+                    axes[6].plot(sim_times[:-1], sim_controls[:, i], 'o-', markersize=3, 
+                              label=f'Total u{i+1}', linewidth=1.5, alpha=0.8)
+                    if len(sim_feedforward_controls) > 0:
+                        axes[6].plot(sim_times[:-1], sim_feedforward_controls[:, i], '--', 
+                                  label=f'Feedforward u{i+1}', linewidth=1.5, alpha=0.6)
+                    if len(sim_feedback_controls) > 0:
+                        axes[6].plot(sim_times[:-1], sim_feedback_controls[:, i], ':', 
+                                  label=f'Feedback u{i+1}', linewidth=1.5, alpha=0.6)
+                axes[6].axhline(y=u_lim, color='r', linestyle='--', alpha=0.5, label='upper limit')
+                axes[6].axhline(y=l_lim, color='b', linestyle='--', alpha=0.5, label='lower limit')
+                axes[6].axhline(y=u_hover[0], color='g', linestyle=':', linewidth=2, label='hover thrust')
+                axes[6].set_xlabel('Time (s)')
+                axes[6].set_ylabel('Control Input')
+                axes[6].set_title('Control Trajectory (Total, Feedforward, Feedback)')
+                axes[6].legend()
+                axes[6].grid(True)
+                
+                # Plot 9: 2D trajectory (X-Y plane)
+                # Use full simulation data
+                axes[7].plot(sim_states[:, 0], sim_states[:, 1], 'b-', label='MPC tracking', linewidth=2)
+                # Interpolate reference positions for 2D plot
+                ref_positions_interp_2d = np.zeros((len(sim_times), 3))
+                for i in range(3):
+                    f = interpolate.interp1d(trajectory['times'], trajectory['positions'][:, i], 
+                                           kind='linear', fill_value='extrapolate', bounds_error=False)
+                    ref_positions_interp_2d[:, i] = f(sim_times)
+                axes[7].plot(ref_positions_interp_2d[:, 0], ref_positions_interp_2d[:, 1], 
+                           'r--', label='optimized trajectory', linewidth=2, alpha=0.7)
+                axes[7].plot(sim_states[0, 0], sim_states[0, 1], 'go', markersize=10, label='start')
+                axes[7].plot(sim_states[-1, 0], sim_states[-1, 1], 'ro', markersize=10, label='end')
+                axes[7].set_xlabel('X (m)')
+                axes[7].set_ylabel('Y (m)')
+                axes[7].set_title('2D Trajectory (X-Y plane)')
+                axes[7].legend()
+                axes[7].grid(True)
+                axes[7].axis('equal')
+                
+                fig.tight_layout()
+                plt.show()
+        
         else:
             print(f"Unknown MPC mode: {mpc_mode}")
-            print("Available modes: 'fixed_point', 'figure8'")
+            print("Available modes: 'fixed_point', 'figure8', 'optimized_trajectory'")
