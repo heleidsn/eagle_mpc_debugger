@@ -173,7 +173,7 @@ def get_opt_traj(robotName, trajectoryName, dt_traj_opt, useSquash, yaml_file_pa
         
         solver.setCallbacks([trajectory.logger, crocoddyl.CallbackVerbose()])
         start_time = time.time()
-        solver.solve([], [], maxiter=400)
+        solver.solve([], [], maxiter=100)
         end_time = time.time()
 
         print("Time taken for trajectory optimization: {:.2f} ms".format((end_time - start_time)*1000))
@@ -211,11 +211,11 @@ def load_trajectory_from_generated_yaml(dt_traj_opt, useSquash):
         trajectory.logger = crocoddyl.CallbackLogger()
         solver.setCallbacks([trajectory.logger, crocoddyl.CallbackVerbose()])
         start_time = time.time()
-        solver.solve([], [], maxiter=400)
+        solver.solve([], [], maxiter=100)
         end_time = time.time()
         print("Time taken for trajectory optimization: {:.2f} ms".format((end_time - start_time)*1000))
         traj_state_ref = solver.xs
-        
+        traj_control_ref = solver.us_squash
         
         return solver, traj_state_ref, problem, trajectory
     finally:
@@ -262,6 +262,9 @@ def create_mpc_controller(mpc_name, trajectory, traj_state_ref, dt_traj_opt, mpc
     try:
         if mpc_name == 'rail':
             mpcController = eagle_mpc.RailMpc(traj_state_ref, dt_traj_opt, temp_yaml_path)
+        # elif mpc_name == 'rail_with_ref_control':
+        #     traj_control_ref = control_ref
+        #     mpcController = eagle_mpc.RailMpc(traj_state_ref, traj_control_ref, dt_traj_opt, temp_yaml_path)
         elif mpc_name == 'weighted':
             mpcController = eagle_mpc.WeightedMpc(trajectory, dt_traj_opt, temp_yaml_path)
         elif mpc_name == 'carrot':
@@ -274,7 +277,7 @@ def create_mpc_controller(mpc_name, trajectory, traj_state_ref, dt_traj_opt, mpc
         
         mpcController.solver.setCallbacks([logger, mpcController.safe_cb])
         mpcController.updateProblem(0)
-        mpcController.solver.convergence_init = 1e-3
+        mpcController.solver.convergence_init = 1e-6
         
         mpcController.logger = logger
         
