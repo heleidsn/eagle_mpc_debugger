@@ -38,7 +38,7 @@ l1_filter_time_constant: [0.01, 0.01, 0.01]
 l1_version: v2
 
 # Simulation actuation model
-simulation_actuation_mode: thrust_angular_velocity  # options: 'full', 'quad', 'thrust_angular_velocity'
+simulation_actuation_mode: full  # options: 'full', 'quad', 'thrust_angular_velocity'
 
 thrust_filter_time_constant: 0.005  # seconds - time constant for first-order thrust filter same as gazebo plugin
 

@@ -116,13 +116,14 @@ class TrajectoryOptimizer:
             print(f"✗ 初始化机器人模型失败: {e}")
             raise
             
-    def create_cost_model(self, stage_config, is_terminal=False):
+    def create_cost_model(self, stage_config, is_terminal=False, waypoint_multiplier=10.0):
         """
         根据配置创建代价模型
         
         Args:
             stage_config: 阶段配置字典
             is_terminal: 是否为终端代价
+            waypoint_multiplier: waypoint阶段的权重倍数
             
         Returns:
             代价模型
@@ -134,10 +135,25 @@ class TrajectoryOptimizer:
         if 'costs' not in stage_config:
             return cost_model
             
+        # 检测是否为waypoint阶段（duration为0或阶段名包含"wp_"）
+        is_waypoint = False
+        stage_name = stage_config.get('name', '').lower()
+        stage_duration = stage_config.get('duration', 0)
+        
+        if stage_duration == 0 or 'wp_' in stage_name:
+            is_waypoint = True
+            print(f"🎯 检测到waypoint阶段: {stage_name}, 将应用{waypoint_multiplier}x权重倍数")
+            
         for cost_config in stage_config['costs']:
             cost_name = cost_config['name']
             cost_type = cost_config['type']
-            weight = cost_config['weight']
+            weight = float(cost_config['weight'])
+            
+            # 为waypoint阶段的状态cost应用更高权重
+            if is_waypoint and cost_type == "ResidualModelState":
+                original_weight = weight
+                weight = float(weight * waypoint_multiplier)
+                print(f"  📈 {cost_name}: {original_weight} -> {weight} (waypoint权重增强)")
             
             if cost_type == "ResidualModelState":
                 # 状态正则化代价
@@ -201,12 +217,13 @@ class TrajectoryOptimizer:
                 
         return cost_model
         
-    def create_problem(self, dt=0.02):
+    def create_problem(self, dt=0.02, waypoint_multiplier=10.0):
         """
         创建轨迹优化问题
         
         Args:
             dt: 时间步长 (秒)
+            waypoint_multiplier: waypoint阶段的权重倍数
         """
         try:
             # 获取初始状态
@@ -228,7 +245,7 @@ class TrajectoryOptimizer:
                 n_steps = max(1, int(duration_s / dt))
                 
                 # 创建代价模型
-                cost_model = self.create_cost_model(stage)
+                cost_model = self.create_cost_model(stage, is_terminal=False, waypoint_multiplier=waypoint_multiplier)
                 
                 # 创建微分动作模型
                 diff_model = crocoddyl.DifferentialActionModelFreeFwdDynamics(
@@ -243,7 +260,7 @@ class TrajectoryOptimizer:
                     running_models.append(int_model)
             
             # 创建终端模型 (使用最后一个阶段的配置)
-            terminal_cost = self.create_cost_model(stages[-1], is_terminal=True)
+            terminal_cost = self.create_cost_model(stages[-1], is_terminal=True, waypoint_multiplier=waypoint_multiplier)
             
             
             # 创建终端微分动作模型
@@ -329,12 +346,48 @@ class TrajectoryOptimizer:
             
         return self.solver.xs, self.solver.us
         
-    def plot_results(self, save_path=None):
+    def _identify_waypoint_indices(self, dt=0.02):
+        """
+        识别waypoint在轨迹中的索引位置
+        
+        Args:
+            dt: 时间步长
+            
+        Returns:
+            List[int]: waypoint索引列表
+        """
+        if not hasattr(self, 'config') or 'trajectory' not in self.config:
+            return []
+            
+        waypoint_indices = []
+        stages = self.config['trajectory']['stages']
+        current_index = 0
+        
+        for stage in stages:
+            stage_name = stage.get('name', '').lower()
+            duration_ms = stage.get('duration', 0)
+            duration_s = duration_ms / 1000.0
+            
+            # 检测是否为waypoint阶段
+            is_waypoint = duration_s == 0 or 'wp_' in stage_name
+            
+            if is_waypoint:
+                waypoint_indices.append(current_index)
+                print(f"🎯 发现waypoint: {stage.get('name', 'unnamed')} at index {current_index}")
+            
+            # 计算该阶段的时间步数
+            n_steps = max(1, int(duration_s / dt))
+            current_index += n_steps
+        
+        return waypoint_indices
+        
+    def plot_results(self, save_path=None, show_waypoints=True):
         """
         绘制优化结果
         
         Args:
             save_path: 保存路径 (可选)
+            show_waypoints: 是否显示waypoint标注 (默认True)
         """
         if self.solver is None:
             print("✗ 请先求解轨迹优化问题")
@@ -346,6 +399,11 @@ class TrajectoryOptimizer:
         dt = 0.02  # 假设时间步长
         time_states = np.arange(len(states)) * dt
         time_controls = np.arange(len(controls)) * dt
+        
+        # 识别waypoint位置
+        waypoint_indices = []
+        if show_waypoints:
+            waypoint_indices = self._identify_waypoint_indices(dt)
         
         # 创建图形
         fig, axes = plt.subplots(3, 2, figsize=(15, 12))
@@ -360,6 +418,16 @@ class TrajectoryOptimizer:
         axes[0, 0].plot(time_states, positions[:, 0], 'r-', label='x')
         axes[0, 0].plot(time_states, positions[:, 1], 'g-', label='y')
         axes[0, 0].plot(time_states, positions[:, 2], 'b-', label='z')
+        
+        # 添加waypoint标注
+        if show_waypoints and waypoint_indices:
+            for i, wp_idx in enumerate(waypoint_indices):
+                if wp_idx < len(time_states):
+                    axes[0, 0].axvline(x=time_states[wp_idx], color='orange', linestyle='--', alpha=0.7)
+                    axes[0, 0].text(time_states[wp_idx], axes[0, 0].get_ylim()[1]*0.9, 
+                                   f'WP{i+1}', rotation=90, ha='right', va='top',
+                                   bbox=dict(boxstyle="round,pad=0.3", facecolor='orange', alpha=0.7))
+        
         axes[0, 0].set_xlabel('Time (s)')
         axes[0, 0].set_ylabel('Position (m)')
         axes[0, 0].set_title('Position Trajectory')
@@ -404,6 +472,19 @@ class TrajectoryOptimizer:
                      color='g', s=100, label='Start')
         ax_3d.scatter(positions[-1, 0], positions[-1, 1], positions[-1, 2], 
                      color='r', s=100, label='End')
+        
+        # 添加waypoint标注到3D图
+        if show_waypoints and waypoint_indices:
+            for i, wp_idx in enumerate(waypoint_indices):
+                if wp_idx < len(positions):
+                    wp_pos = positions[wp_idx]
+                    ax_3d.scatter(wp_pos[0], wp_pos[1], wp_pos[2], 
+                                 color='orange', s=150, marker='*', 
+                                 label='Waypoints' if i == 0 else "", alpha=0.8)
+                    ax_3d.text(wp_pos[0], wp_pos[1], wp_pos[2] + 0.1, 
+                              f'WP{i+1}', fontsize=10, ha='center',
+                              bbox=dict(boxstyle="round,pad=0.3", facecolor='orange', alpha=0.7))
+        
         ax_3d.set_xlabel('X (m)')
         ax_3d.set_ylabel('Y (m)')
         ax_3d.set_zlabel('Z (m)')

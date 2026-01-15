@@ -55,20 +55,56 @@ class CrocoddylMPCController:
         # For quaternion states: nq=9, nv=8, but ndx=16 (quaternion tangent space is 3D, not 4D)
         tangent_dim = self.state.ndx
         
-        # Cost weights (adjust dimensions based on actual dimensions)
-        default_state_weights = [100, 100, 100, 10, 10, 10, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]  # 16 elements for ndx=16
-        default_control_weights = [1, 1, 1, 1, 1, 1]  # 6 controls for actuation.nu=6
-        default_terminal_weights = [1000, 1000, 1000, 100, 100, 100, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]  # 16 elements for ndx=16
+        # Cost weights (16D tangent space, aligned with Eagle MPC)
+        default_state_weights = [100, 100, 100, 1, 1, 1, 100, 100, 1, 1, 1, 1, 1, 1, 1, 1]  # 16 elements for ndx=16
+        default_control_weights = [0, 0, 0, 0, 0, 0]  # 6 controls for actuation.nu=6
+        default_terminal_weights = [100, 100, 100, 1, 1, 1, 100, 100, 1, 1, 1, 1, 1, 1, 1, 1]  # 16 elements for ndx=16
+        
+        # Control bounds (use platform parameters for thrust limits)
+        thrust_min = platform_params.min_thrust
+        thrust_max = platform_params.max_thrust
+        default_control_lower_bounds = [thrust_min, thrust_min, thrust_min, thrust_min, -5.0, -5.0]
+        default_control_upper_bounds = [thrust_max, thrust_max, thrust_max, thrust_max, 5.0, 5.0]
         
         # Ensure weights match actual dimensions
-        state_weights = mpc_config.get('state_weights', default_state_weights)
-        control_weights = mpc_config.get('control_weights', default_control_weights)
-        terminal_weights = mpc_config.get('terminal_weights', default_terminal_weights)
+        # state_weights = mpc_config.get('state_weights', default_state_weights)
+        # control_weights = mpc_config.get('control_weights', default_control_weights)
+        # terminal_weights = mpc_config.get('terminal_weights', default_terminal_weights)
         
-        # Adjust weights to match actual dimensions
-        self.state_weights = np.array(state_weights[:tangent_dim] + [1.0] * max(0, tangent_dim - len(state_weights)))
-        self.control_weights = np.array(control_weights[:self.control_dim] + [1.0] * max(0, self.control_dim - len(control_weights)))
-        self.terminal_weights = np.array(terminal_weights[:tangent_dim] + [1.0] * max(0, tangent_dim - len(terminal_weights)))
+        # Control bounds
+        # control_lower_bounds = mpc_config.get('control_lower_bounds', default_control_lower_bounds)
+        # control_upper_bounds = mpc_config.get('control_upper_bounds', default_control_upper_bounds)
+        
+        # using default weights and bounds
+        state_weights = default_state_weights
+        control_weights = default_control_weights
+        terminal_weights = default_terminal_weights
+        control_lower_bounds = default_control_lower_bounds
+        control_upper_bounds = default_control_upper_bounds
+        
+        # Adjust weights to match actual dimensions and ensure float type
+        self.state_weights = np.array(state_weights[:tangent_dim] + [1.0] * max(0, tangent_dim - len(state_weights)), dtype=np.float64)
+        self.control_weights = np.array(control_weights[:self.control_dim] + [1.0] * max(0, self.control_dim - len(control_weights)), dtype=np.float64)
+        self.terminal_weights = np.array(terminal_weights[:tangent_dim] + [1.0] * max(0, tangent_dim - len(terminal_weights)), dtype=np.float64)
+        
+        # Store dt scaling option for use in cost function creation
+        self.enable_dt_scaling = mpc_config.get('enable_dt_scaling', True)
+        
+        if self.enable_dt_scaling:
+            print(f"Eagle MPC-style dt scaling enabled (dt = {self.dt_mpc}s)")
+            print("  Weights will be applied in cost function with dt scaling")
+            print(f"  State weights: {self.state_weights}")
+            print(f"  Control weights: {self.control_weights}")
+            print(f"  Terminal weights: {self.terminal_weights}")
+        else:
+            print("Eagle MPC-style dt scaling disabled - using standard Crocoddyl approach")
+            print(f"  State weights: {self.state_weights}")
+            print(f"  Control weights: {self.control_weights}")
+            print(f"  Terminal weights: {self.terminal_weights}")
+        
+        # Adjust control bounds to match actual control dimensions
+        self.control_lower_bounds = np.array(control_lower_bounds[:self.control_dim] + [control_lower_bounds[-1]] * max(0, self.control_dim - len(control_lower_bounds)))
+        self.control_upper_bounds = np.array(control_upper_bounds[:self.control_dim] + [control_upper_bounds[-1]] * max(0, self.control_dim - len(control_upper_bounds)))
         
         # Initialize trajectory reference
         self.reference_trajectory = []
@@ -88,6 +124,9 @@ class CrocoddylMPCController:
         print(f"  State weights shape: {self.state_weights.shape}")
         print(f"  Control weights shape: {self.control_weights.shape}")
         print(f"  Terminal weights shape: {self.terminal_weights.shape}")
+        print(f"  Control bounds: [{self.control_lower_bounds.min():.1f}, {self.control_upper_bounds.max():.1f}]")
+        print(f"  Control lower bounds: {self.control_lower_bounds}")
+        print(f"  Control upper bounds: {self.control_upper_bounds}")
     
     def _create_actuation_model(self):
         """Create actuation model based on platform parameters"""
@@ -144,11 +183,19 @@ class CrocoddylMPCController:
         # Create cost model first with correct control dimension
         cost_model = crocoddyl.CostModelSum(self.state, self.actuation.nu)
         
+        # Apply dt scaling to cost weights (like Eagle MPC) if enabled
+        if self.enable_dt_scaling:
+            # Eagle MPC scales weights by dt_s = dt_mpc (in seconds)
+            dt_scale = self.dt_mpc
+        else:
+            # Standard Crocoddyl approach without dt scaling
+            dt_scale = 1.0
+        
         # State regulation cost
         state_residual = crocoddyl.ResidualModelState(self.state, ref_state, self.actuation.nu)
         state_activation = crocoddyl.ActivationModelWeightedQuad(self.state_weights)
         state_cost = crocoddyl.CostModelResidual(self.state, state_activation, state_residual)
-        cost_model.addCost("state_reg", state_cost, 1.0)
+        cost_model.addCost("state_reg", state_cost, dt_scale*100)
         
         # Control regulation cost
         if ref_control is not None:
@@ -163,7 +210,7 @@ class CrocoddylMPCController:
             control_residual = crocoddyl.ResidualModelControl(self.state, self.actuation.nu)
         control_activation = crocoddyl.ActivationModelWeightedQuad(self.control_weights)
         control_cost = crocoddyl.CostModelResidual(self.state, control_activation, control_residual)
-        cost_model.addCost("control_reg", control_cost, 1.0)
+        cost_model.addCost("control_reg", control_cost, dt_scale)
         
         # Create differential action model with all required arguments
         diff_model = crocoddyl.DifferentialActionModelFreeFwdDynamics(
@@ -172,6 +219,10 @@ class CrocoddylMPCController:
         
         # Create integrated action model
         int_model = crocoddyl.IntegratedActionModelEuler(diff_model, self.dt_mpc)
+        
+        # Set control bounds directly on the running model
+        int_model.u_lb = self.control_lower_bounds
+        int_model.u_ub = self.control_upper_bounds
         
         return int_model
     
@@ -180,11 +231,16 @@ class CrocoddylMPCController:
         # Create cost model first with correct control dimension
         cost_model = crocoddyl.CostModelSum(self.state, self.actuation.nu)
         
-        # Terminal state cost
+        # Terminal state cost with optional dt scaling (like Eagle MPC)
+        if self.enable_dt_scaling:
+            dt_scale = self.dt_mpc
+        else:
+            dt_scale = 1.0
+            
         state_residual = crocoddyl.ResidualModelState(self.state, ref_state, self.actuation.nu)
         state_activation = crocoddyl.ActivationModelWeightedQuad(self.terminal_weights)
         state_cost = crocoddyl.CostModelResidual(self.state, state_activation, state_residual)
-        cost_model.addCost("terminal_state", state_cost, 1.0)
+        cost_model.addCost("terminal_state", state_cost, dt_scale)
         
         # Create differential action model with all required arguments
         diff_model = crocoddyl.DifferentialActionModelFreeFwdDynamics(
@@ -193,6 +249,10 @@ class CrocoddylMPCController:
         
         # Create integrated action model
         int_model = crocoddyl.IntegratedActionModelEuler(diff_model, self.dt_mpc)
+        
+        # Set control bounds directly on the terminal model (optional)
+        int_model.u_lb = self.control_lower_bounds
+        int_model.u_ub = self.control_upper_bounds
         
         return int_model
     
@@ -229,7 +289,7 @@ class CrocoddylMPCController:
         self.problem = crocoddyl.ShootingProblem(current_state, running_models, terminal_model)
         
         # Create solver
-        self.solver = crocoddyl.SolverFDDP(self.problem)
+        self.solver = crocoddyl.SolverBoxFDDP(self.problem)
         self.solver.setCallbacks([crocoddyl.CallbackVerbose()])
         
         # Set solver parameters
@@ -314,14 +374,62 @@ class PlatformParams:
     
     def __init__(self, config_dict):
         """Initialize from configuration dictionary"""
-        self.n_rotors = config_dict.get('n_rotors', 4)
-        self.cf = config_dict.get('cf', 1.0)
-        self.cm = config_dict.get('cm', 0.1)
-        self.max_thrust = config_dict.get('max_thrust', 10.0)
-        self.min_thrust = config_dict.get('min_thrust', 0.0)
+        # Extract platform parameters from config
+        platform_config = config_dict.get('platform', config_dict)
+        
+        self.n_rotors = platform_config.get('n_rotors', 4)
+        self.cf = platform_config.get('cf', 1.0)
+        self.cm = platform_config.get('cm', 0.1)
+        self.max_thrust = platform_config.get('max_thrust', 10.0)
+        self.min_thrust = platform_config.get('min_thrust', 0.0)
+        self.base_link_name = platform_config.get('base_link_name', 'base_link')
+        
+        # Parse rotor configurations
+        self.rotors = self._parse_rotors(platform_config)
         
         # Create tau_f matrix (thrust to force/torque mapping)
-        self.tau_f = self._create_tau_f_matrix(config_dict)
+        self.tau_f = self._create_tau_f_matrix(platform_config)
+        
+        print(f"Platform parameters loaded:")
+        print(f"  n_rotors: {self.n_rotors}")
+        print(f"  cf: {self.cf}")
+        print(f"  cm: {self.cm}")
+        print(f"  max_thrust: {self.max_thrust}")
+        print(f"  min_thrust: {self.min_thrust}")
+        print(f"  base_link_name: {self.base_link_name}")
+        print(f"  rotors: {len(self.rotors)} configured")
+    
+    def _parse_rotors(self, platform_config):
+        """Parse rotor configurations from platform config"""
+        rotors = []
+        
+        # Check for $rotors key (with $ prefix as in the YAML)
+        rotor_configs = platform_config.get('$rotors', platform_config.get('rotors', []))
+        
+        for i, rotor_config in enumerate(rotor_configs):
+            if i >= self.n_rotors:
+                break
+                
+            rotor = {
+                'index': i,
+                'translation': rotor_config.get('translation', [0, 0, 0]),
+                'orientation': rotor_config.get('orientation', [0, 0, 0, 1]),
+                'spin_direction': rotor_config.get('spin_direction', [1])[0]  # Extract from list
+            }
+            rotors.append(rotor)
+            
+        # If no rotors configured, use default quadrotor layout
+        if not rotors:
+            arm_length = 0.171  # From s500.yaml
+            default_rotors = [
+                {'index': 0, 'translation': [arm_length, -arm_length, 0.045], 'spin_direction': -1},
+                {'index': 1, 'translation': [-arm_length, arm_length, 0.045], 'spin_direction': -1},
+                {'index': 2, 'translation': [arm_length, arm_length, 0.045], 'spin_direction': 1},
+                {'index': 3, 'translation': [-arm_length, -arm_length, 0.045], 'spin_direction': 1},
+            ]
+            rotors = default_rotors[:self.n_rotors]
+            
+        return rotors
     
     def _create_tau_f_matrix(self, config_dict):
         """Create tau_f matrix from configuration"""
@@ -332,49 +440,30 @@ class PlatformParams:
         # Initialize tau_f matrix (6 x n_rotors)
         tau_f = np.zeros((6, n_rotors))
         
-        # Get rotor positions and directions from config
-        if 'rotors' in config_dict:
-            rotors = config_dict['rotors']
-            for i, rotor in enumerate(rotors):
-                if i >= n_rotors:
-                    break
+        # Use parsed rotor configurations
+        for i, rotor in enumerate(self.rotors):
+            if i >= n_rotors:
+                break
                 
-                # Position
-                pos = rotor.get('position', [0, 0, 0])
-                # Direction (thrust direction)
-                direction = rotor.get('direction', 1)  # 1 or -1
-                
-                # Force mapping (thrust in z-direction)
-                tau_f[2, i] = cf * direction  # Fz
-                
-                # Torque mapping
-                tau_f[3, i] = cf * pos[1] * direction  # Mx = Fz * y
-                tau_f[4, i] = -cf * pos[0] * direction  # My = -Fz * x
-                tau_f[5, i] = cm * direction  # Mz
-        else:
-            # Default quadrotor configuration
-            arm_length = config_dict.get('arm_length', 0.25)
+            # Position from translation
+            pos = rotor['translation']
+            # Spin direction
+            direction = rotor['spin_direction']
             
-            # Standard quadrotor layout
-            positions = [
-                [arm_length, 0, 0],      # Front
-                [0, arm_length, 0],      # Right  
-                [-arm_length, 0, 0],     # Back
-                [0, -arm_length, 0]      # Left
-            ]
-            directions = [1, -1, 1, -1]  # Alternating spin directions
+            # Force mapping (thrust in z-direction)
+            tau_f[2, i] = cf  # Fz (all rotors contribute to lift)
             
-            for i in range(min(n_rotors, 4)):
-                pos = positions[i]
-                direction = directions[i]
-                
-                # Force mapping
-                tau_f[2, i] = cf  # Fz (all rotors contribute to lift)
-                
-                # Torque mapping
-                tau_f[3, i] = cf * pos[1]  # Mx = Fz * y
-                tau_f[4, i] = -cf * pos[0]  # My = -Fz * x
-                tau_f[5, i] = cm * direction  # Mz (yaw torque)
+            # Torque mapping
+            tau_f[3, i] = cf * pos[1]  # Mx = Fz * y
+            tau_f[4, i] = -cf * pos[0]  # My = -Fz * x
+            tau_f[5, i] = cm * direction  # Mz (yaw torque based on spin direction)
+            
+        print(f"tau_f matrix created:")
+        print(f"  Shape: {tau_f.shape}")
+        print(f"  Force coefficients (Fz): {tau_f[2, :]}")
+        print(f"  Moment coefficients (Mx): {tau_f[3, :]}")
+        print(f"  Moment coefficients (My): {tau_f[4, :]}")
+        print(f"  Moment coefficients (Mz): {tau_f[5, :]}")
         
         return tau_f
 

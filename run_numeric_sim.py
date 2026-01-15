@@ -179,7 +179,7 @@ class NumericSimulator:
             # Thrust filter parameters for thrust + angular velocity mode
             'thrust_filter_time_constant': 0.0,  # seconds - time constant for first-order thrust filter
             # MPC controller type
-            'mpc_controller_type': 'crocoddyl',  # options: 'eagle_mpc', 'crocoddyl'
+            'mpc_controller_type': 'eagle_mpc',  # options: 'eagle_mpc', 'crocoddyl'
         }
         
         # Try to load config file if it exists
@@ -1048,8 +1048,9 @@ class NumericSimulator:
         # Compute accelerations using ABA (Articulated Body Algorithm)
         a = pin.aba(self.robot, self.robot_data, q, v, control_input)
         
-        # Euler integration
-        next_q = q + v * self.simulation_dt
+        # Proper integration for robots with quaternions
+        # Use Pinocchio's integrate function for correct quaternion handling
+        next_q = pin.integrate(self.robot, q, v * self.simulation_dt)
         next_v = v + a * self.simulation_dt
         
         # Combine to form next state
@@ -2800,7 +2801,7 @@ def create_default_config(filename='numeric_sim_config.yaml'):
 def main():
     """Main function"""
     parser = argparse.ArgumentParser(description='Numeric simulation for MPC controller')
-    parser.add_argument('--config', type=str, default='numeric_sim_config_regulation.yaml',
+    parser.add_argument('--config', type=str, default='numeric_sim_config_catch_fast.yaml',
                        help='Configuration file path')
     parser.add_argument('--create-config', action='store_true',
                        help='Create default configuration file and exit')

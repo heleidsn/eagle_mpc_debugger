@@ -25,9 +25,10 @@ import time
 from datetime import datetime
 
 class TrajectoryDataPlotter:
-    def __init__(self):
-        self.base_results_dir = os.path.join(os.path.dirname(__file__), 'results', 'catch_test')
-        # self.results_dir = os.path.join(self.base_results_dir, 'catch_test')
+    def __init__(self, robot_name=None, trajectory_name=None):
+        self.robot_name = robot_name
+        self.trajectory_name = trajectory_name
+        self.base_results_dir = os.path.join(os.path.dirname(__file__), 'results', f'{robot_name}_{trajectory_name}')
         
     def load_data(self, filepath):
         """Load trajectory data file"""
@@ -932,9 +933,10 @@ class TrajectoryDataPlotter:
         figures.append(fig1)
         
         # Arm joints (if data available)
-        fig2 = self.plot_arm_joints(data, metadata, save_path)
-        if fig2:
-            figures.append(fig2)
+        if self.robot_name == 's500_uam':
+            fig2 = self.plot_arm_joints(data, metadata, save_path)
+            if fig2:
+                figures.append(fig2)
         
         # MPC performance
         fig3 = self.plot_mpc_performance(data, metadata, save_path)

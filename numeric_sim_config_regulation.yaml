@@ -17,10 +17,10 @@ results_dir: results/numeric_sim
 save_results: false
 plot_results: true
 
-enable_disturbance: false
+enable_disturbance: true
 disturbance_start_time: 3.0
-disturbance_force: [1.0, 0.5, 10.0]
-disturbance_torque: [0.2, 0.5, 1.0]
+disturbance_force: [0.0, 0.0, 10.0]
+disturbance_torque: [0.0, 0.0, 0.0]
 disturbance_torque_arm: [0.0, 0.4]
 
 # Joint sin disturbance parameters
