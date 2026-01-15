@@ -1,0 +1,286 @@
+trajectory:
+  robot:
+    name: "s500"
+    urdf: "models/urdf/s500_simple.urdf"
+    follow: "config/yaml/multicopter/s500.yaml"
+
+  initial_state: [0, 0, 1.5, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
+
+  stages:
+    
+    - name: "nav_wp1"
+      duration: 2000 #ms
+      transition: true
+      costs:
+        - name: "reg_state"
+          type: "ResidualModelState"
+          weight: 1e-1
+          reference: [1.5, 0, 1.5, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
+          activation: "ActivationModelWeightedQuad"
+          weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]        
+
+        - name: "reg_control"
+          type: "ResidualModelControl"
+          weight: 1e-2
+          reference: [5, 5, 5, 5]
+          activation: "ActivationModelWeightedQuad"
+          weights: [1, 1, 1, 1]
+
+    - name: "wp_1"
+      duration: 0 #ms
+      costs:
+        - name: "reg_state"
+          type: "ResidualModelState"
+          weight: 1000
+          reference: [1.5, 0, 1.5, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
+          activation: "ActivationModelWeightedQuad"
+          weights: [1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1]
+
+        - name: "reg_control"
+          type: "ResidualModelControl"
+          weight: 1e-2
+          reference: [5, 5, 5, 5]
+          activation: "ActivationModelWeightedQuad"
+          weights: [1, 1, 1, 1]
+
+        # - name: "placement_base_link"
+        #   type: "ResidualModelFramePlacement"
+        #   weight: 2000
+        #   link_name: "base_link"
+        #   position: [1.5, 0, 1.5]
+        #   orientation: [0, 0, 0, 1] # x,y,z,w
+
+        # - name: "motion_base_link"
+        #   type: "ResidualModelFrameVelocity"
+        #   weight: 2000
+        #   link_name: "base_link"
+        #   linear: [0, 0, 0]
+        #   angular: [0, 0, 0]
+
+
+    - name: "hold"
+      duration: 2000 #ms
+      transition: true
+      costs:
+        - name: "reg_state"
+          type: "ResidualModelState"
+          weight: 1e-1
+          reference: [1.5, 0, 1.5, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
+          activation: "ActivationModelWeightedQuad"
+          weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]        
+
+        - name: "reg_control"
+          type: "ResidualModelControl"
+          weight: 1e-2
+          reference: [5, 5, 5, 5]
+          activation: "ActivationModelWeightedQuad"
+          weights: [1, 1, 1, 1]
+
+    - name: "hold_point"
+      duration: 0 #ms
+      costs:
+        - name: "reg_state"
+          type: "ResidualModelState"
+          weight: 1000
+          reference: [1.5, 0, 1.5, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
+          activation: "ActivationModelWeightedQuad"
+          weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+
+        - name: "reg_control"
+          type: "ResidualModelControl"
+          weight: 1e-2
+          reference: [5, 5, 5, 5]
+          activation: "ActivationModelWeightedQuad"
+          weights: [1, 1, 1, 1]
+
+    - name: "nav_wp2"
+      duration: 1000 #ms
+      transition: true
+      costs:
+        - name: "reg_state"
+          type: "ResidualModelState"
+          weight: 1e-1
+          reference: [0, 0, 1.5, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
+          activation: "ActivationModelWeightedQuad"
+          weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]        
+
+        - name: "reg_control"
+          type: "ResidualModelControl"
+          weight: 1e-2
+          reference: [5, 5, 5, 5]
+          activation: "ActivationModelWeightedQuad"
+          weights: [1, 1, 1, 1]
+
+    - name: "wp_2"
+      duration: 0 #ms
+      costs:
+        - name: "reg_state"
+          type: "ResidualModelState"
+          weight: 1000
+          reference: [0, 0, 1.5, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
+          activation: "ActivationModelWeightedQuad"
+          weights: [1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1]
+
+        - name: "reg_control"
+          type: "ResidualModelControl"
+          weight: 1e-2
+          reference: [5, 5, 5, 5]
+          activation: "ActivationModelWeightedQuad"
+          weights: [1, 1, 1, 1]
+
+        # - name: "placement_base_link"
+        #   type: "ResidualModelFramePlacement"
+        #   weight: 2000
+        #   link_name: "base_link"
+        #   position: [0, 0, 1.5]
+        #   orientation: [0, 0, 0, 1] # x,y,z,w
+
+        # - name: "motion_base_link"
+        #   type: "ResidualModelFrameVelocity"
+        #   weight: 1000
+        #   link_name: "base_link"
+        #   linear: [0, 0, 0]
+        #   angular: [0, 0, 0]
+
+    # - name: "nav_wp2"
+    #   duration: 1000 #ms
+    #   transition: true
+    #   costs:
+    #     - name: "reg_state"
+    #       type: "ResidualModelState"
+    #       weight: 1e-1
+    #       reference: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
+    #       activation: "ActivationModelWeightedQuad"
+    #       weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+
+    #     - name: "reg_control"
+    #       type: "ResidualModelControl"
+    #       weight: 0
+    #       reference: [0, 0, 0, 0]
+    #       activation: "ActivationModelWeightedQuad"
+    #       weights: [1, 1, 1, 1]
+
+    # - name: "wp_2"
+    #   duration: 0 #ms
+    #   costs:
+    #     - name: "reg_state"
+    #       type: "ResidualModelState"
+    #       weight: 1e-1
+    #       reference: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
+    #       activation: "ActivationModelWeightedQuad"
+    #       weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+
+    #     - name: "reg_control"
+    #       type: "ResidualModelControl"
+    #       weight: 1e-2
+    #       reference: [0, 0, 0, 0]
+    #       activation: "ActivationModelWeightedQuad"
+    #       weights: [1, 1, 1, 1]
+
+    #     - name: "placement_base_link"
+    #       type: "ResidualModelFramePlacement"
+    #       weight: 2000
+    #       link_name: "base_link"
+    #       position: [0, 0, 1.5]
+    #       # orientation: [0, 0, 1, 0] # x,y,z,w
+    #       orientation: [0, 0, 0, 1] # x,y,z,w
+    #     - name: "motion_base_link"
+    #       type: "ResidualModelFrameVelocity"
+    #       weight: 1000
+    #       link_name: "base_link"
+    #       linear: [0, 0, 0]
+    #       angular: [0, 0, 0]
+
+        
+    # - name: "nav_wp3"
+    #   duration: 2000 #ms
+    #   transition: true
+    #   costs:
+    #     - name: "reg_state"
+    #       type: "ResidualModelState"
+    #       weight: 1e-1
+    #       reference: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
+    #       activation: "ActivationModelWeightedQuad"
+    #       weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+
+    #     - name: "reg_control"
+    #       type: "ResidualModelControl"
+    #       weight: 1e-2
+    #       reference: [0, 0, 0, 0]
+    #       activation: "ActivationModelWeightedQuad"
+    #       weights: [1, 1, 1, 1]
+
+    # - name: "wp_3"
+    #   duration: 0 #ms
+    #   costs:
+    #     - name: "reg_state"
+    #       type: "ResidualModelState"
+    #       weight: 1e-1
+    #       reference: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
+    #       activation: "ActivationModelWeightedQuad"
+    #       weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+
+    #     - name: "reg_control"
+    #       type: "ResidualModelControl"
+    #       weight: 1e-2
+    #       reference: [0, 0, 0, 0]
+    #       activation: "ActivationModelWeightedQuad"
+    #       weights: [1, 1, 1, 1]
+
+    #     - name: "placement_base_link"
+    #       type: "ResidualModelFramePlacement"
+    #       weight: 2000
+    #       link_name: "base_link"
+    #       position: [0.0, 1.5, 1.5]
+    #       # orientation: [0, 0, 1, 0] # x,y,z,w
+    #       orientation: [0, 0, 0, 1] # x,y,z,w
+
+    # - name: "nav_wp4"
+    #   duration: 2000 #ms
+    #   transition: true
+    #   costs:
+    #     - name: "reg_state"
+    #       type: "ResidualModelState"
+    #       weight: 1e-1
+    #       reference: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
+    #       activation: "ActivationModelWeightedQuad"
+    #       weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+
+    #     - name: "reg_control"
+    #       type: "ResidualModelControl"
+    #       weight: 1e-2
+    #       reference: [0, 0, 0, 0]
+    #       activation: "ActivationModelWeightedQuad"
+    #       weights: [1, 1, 1, 1]
+
+    # - name: "wp_4"
+    #   duration: 0 #ms
+    #   costs:
+    #     - name: "reg_state"
+    #       type: "ResidualModelState"
+    #       weight: 1e-1
+    #       reference: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
+    #       activation: "ActivationModelWeightedQuad"
+    #       weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+
+    #     - name: "reg_control"
+    #       type: "ResidualModelControl"
+    #       weight: 1e-2
+    #       reference: [0, 0, 0, 0]
+    #       activation: "ActivationModelWeightedQuad"
+    #       weights: [1, 1, 1, 1]
+
+    #     - name: "placement_base_link"
+    #       type: "ResidualModelFramePlacement"
+    #       weight: 2000
+    #       link_name: "base_link"
+    #       position: [0.0, 0.0, 1.5]
+    #       # orientation: [0, 0, 1, 0] # x,y,z,w
+    #       orientation: [0, 0, 0, 1] # x,y,z,w
+
+    #     - name: "motion_base_link"
+    #       type: "ResidualModelFrameVelocity"
+    #       weight: 1000
+    #       link_name: "base_link"
+    #       linear: [0, 0, 0]
+    #       angular: [0, 0, 0]

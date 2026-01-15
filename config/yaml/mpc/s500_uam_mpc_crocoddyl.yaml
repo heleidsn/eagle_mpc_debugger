@@ -1,0 +1,54 @@
+mpc_controller:
+  robot:
+    name: "s500_uam"
+    urdf: "models/urdf/s500_uam_simple.urdf"
+    follow: "config/yaml/multicopter/s500.yaml"
+
+  # Crocoddyl MPC specific parameters
+  horizon: 50                    # MPC prediction horizon
+  max_iterations: 100           # Maximum solver iterations
+  convergence_tolerance: 1e-6   # Convergence tolerance
+  
+  # Eagle MPC compatibility options
+  enable_dt_scaling: true       # Apply time step scaling to weights (to match Eagle MPC)
+  
+  # Cost function weights (aligned with Eagle MPC - CORRECTED TO TANGENT SPACE)
+  # State weights (16D tangent space): [px, py, pz, rx, ry, rz, j1, j2, vx, vy, vz, wx, wy, wz, vj1, vj2]
+  # Note: orientation weights [rx,ry,rz] correspond to SO(3) tangent space (3D), not quaternion (4D)
+  state_weights: [100, 100, 100, 1, 1, 1, 100, 100, 1, 1, 1, 1, 1, 1, 1, 1]
+  
+  # Control weights: [f1, f2, f3, f4, tau_j1, tau_j2] (motor forces + joint torques)
+  control_weights: [0, 0, 0, 0, 0, 0]
+  
+  # Terminal state weights (16D tangent space, aligned with Eagle MPC)
+  terminal_weights: [100, 100, 100, 1, 1, 1, 100, 100, 1, 1, 1, 1, 1, 1, 1, 1]
+  
+  # Reference control (hover control for quadrotor + zero torques for arm)
+  control_reference: [4.94, 4.94, 4.94, 4.94, 0, 0]
+  
+  # Control bounds (constraints on control inputs)
+  # Lower bounds: [f1_min, f2_min, f3_min, f4_min, tau_j1_min, tau_j2_min]
+  control_lower_bounds: [0.0854858, 0.0854858, 0.0854858, 0.0854858, -5.0, -5.0]
+  
+  # Upper bounds: [f1_max, f2_max, f3_max, f4_max, tau_j1_max, tau_j2_max]
+  control_upper_bounds: [10.3437818, 10.3437818, 10.3437818, 10.3437818, 5.0, 5.0]
+
+# Platform configuration (for tau_f matrix generation)
+platform:
+  n_rotors: 4
+  cf: 8.54858e-06          # Thrust coefficient
+  cm: 1.3677728e-6         # Moment coefficient  
+  max_thrust: 10.3437818 # Maximum thrust per rotor
+  min_thrust: 0.0854858  # Minimum thrust per rotor
+  arm_length: 0.17 # Distance from center to rotor
+  
+  # Rotor configuration (optional, will use default quadrotor layout if not specified)
+  rotors:
+    - position: [0.25, 0, 0]      # Front rotor
+      direction: 1                # CCW = 1, CW = -1
+    - position: [0, 0.25, 0]      # Right rotor  
+      direction: -1
+    - position: [-0.25, 0, 0]     # Back rotor
+      direction: 1
+    - position: [0, -0.25, 0]     # Left rotor
+      direction: -1
