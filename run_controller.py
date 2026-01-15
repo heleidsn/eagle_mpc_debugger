@@ -20,7 +20,7 @@ from eagle_mpc_msgs.msg import MpcState
 from utils.create_problem import get_opt_traj, create_mpc_controller, create_state_update_model, create_state_update_model_quadrotor, load_trajectory_from_generated_yaml
 from utils.u_convert import thrustToForceTorqueAll
 
-# from controller_msgs.msg import FlatTarget
+from controller_msgs.msg import FlatTarget
 from mavros_msgs.msg import State, PositionTarget, AttitudeTarget, ActuatorControl
 from mavros_msgs.srv import SetMode, SetModeRequest
 from tf.transformations import quaternion_matrix
@@ -62,12 +62,12 @@ class TrajectoryPublisher:
         self.env_info = self.detect_environment()
         
         # main parameters
-        self.robot_name = rospy.get_param('~robot_name', 's500')     # s500, s500_uam, hexacopter370_flying_arm_3
-        self.trajectory_name = rospy.get_param('~trajectory_name', 'displacement_fast')   # displacement, catch_vicon
+        self.robot_name = rospy.get_param('~robot_name', 's500_uam')     # s500, s500_uam, hexacopter370_flying_arm_3
+        self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon')   # displacement, catch_vicon
         self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 10)  # ms
         
         self.simulation_actuation_method = 'full' # full, quadrotor
-        self.l1_control_method = 'simulation' # mpc_next, simulation, planned
+        self.l1_control_method = 'simulation' # mpc_next, simulation, planned, simulation model is used to get next state
         
         self.dt_simulation = rospy.get_param('~dt_simulation', 50)  # ms
         self.use_squash = rospy.get_param('~use_squash', True)
@@ -106,10 +106,10 @@ class TrajectoryPublisher:
         self.publish_reference_trajectory_enabled = rospy.get_param('~publish_reference_trajectory', False)
         
         # Control limits for controller
-        self.max_thrust = rospy.get_param('~max_thrust', 10.5 * 4)  # 7.43 for s500_uam, 7.1 for s500
+        self.max_thrust = rospy.get_param('~max_thrust', 7.43 * 4)  # 7.43 for s500_uam, 7.1 for s500  # 10.5 for ??
         self.max_angular_velocity = rospy.get_param('~max_angular_velocity', math.radians(120))  # rad/s
         self.min_thrust_cmd = rospy.get_param('~min_thrust_cmd', 0.0)  # Minimum thrust command pass to px4
-        self.max_thrust_cmd = rospy.get_param('~max_thrust_cmd', 0.9)  # Maximum thrust command pass to px4
+        self.max_thrust_cmd = rospy.get_param('~max_thrust_cmd', 1.0)  # Maximum thrust command pass to px4
         
         # for L1 controller
         self.l1_version = rospy.get_param('~l1_version', 'v2')  # v1, v2, v3
@@ -165,9 +165,9 @@ class TrajectoryPublisher:
         self.load_trajectory()
         
         # Initialize MPC and L1 controller
-        if self.control_mode == 'MPC':
-            self.init_mpc_controller()
-            self.init_l1_controller()
+        # if self.control_mode == 'MPC':
+        self.init_mpc_controller()
+        self.init_l1_controller()
         
         # Subscriber
         self.px4_state = State()
@@ -185,7 +185,7 @@ class TrajectoryPublisher:
         
         # Publishers
         self.pose_pub = rospy.Publisher('/reference/pose', PoseStamped, queue_size=10)
-        # self.flat_target_pub = rospy.Publisher('/reference/flatsetpoint', FlatTarget, queue_size=10)
+        self.flat_target_pub = rospy.Publisher('/reference/flatsetpoint', FlatTarget, queue_size=10)
         self.mavros_setpoint_raw_pub = rospy.Publisher('/mavros/setpoint_raw/local', PositionTarget, queue_size=10)
         self.yaw_pub = rospy.Publisher('/reference/yaw', Float32, queue_size=10)
         self.body_rate_thrust_pub = rospy.Publisher('/mavros/setpoint_raw/attitude', AttitudeTarget, queue_size=10)
@@ -334,7 +334,7 @@ class TrajectoryPublisher:
         
         # Grasping related variables
         self.grasp_position = np.array([0.0, 0.0, 0.85])  # Fixed target position for grasping
-        self.grasp_time = rospy.Duration(3.0)  # Fixed grasp time (2 seconds)
+        self.grasp_time = rospy.Duration(2.0)  # Fixed grasp time (2 seconds)
         self.is_grasping = False    # Whether the gripper is grasping
         self.gripper_open_position = -0.7  # Position when gripper is open
         self.gripper_close_position = 0.0  # Position when gripper is closed
@@ -694,17 +694,26 @@ class TrajectoryPublisher:
             # Get rotation matrix from quaternion
             R = quaternion_matrix([ref_state[3], ref_state[4], ref_state[5], ref_state[6]])[:3, :3]
             
-            # Convert body velocities to world frame
-            vel_body = ref_state[7:10]
-            vel_world = R @ vel_body
-            
-            # Get pre-calculated acceleration
-            acc_world = self.accelerations[self.traj_ref_index]
-            
-            # Get yaw from quaternion
-            quat = ref_state[3:7]
-            yaw = euler_from_quaternion([quat[0], quat[1], quat[2], quat[3]])[2]
-            
+            if self.robot_name == 's500_uam':
+                vel_world = ref_state[9:12]
+                # acc_world = self.accelerations[self.traj_ref_index]
+                
+                acc_world = np.zeros(3)
+                
+                quat = ref_state[3:7]
+                yaw = euler_from_quaternion([quat[0], quat[1], quat[2], quat[3]])[2]
+            else:
+                # Convert body velocities to world frame
+                vel_body = ref_state[7:10]
+                vel_world = R @ vel_body
+                
+                # Get pre-calculated acceleration
+                acc_world = self.accelerations[self.traj_ref_index]
+                
+                # Get yaw from quaternion
+                quat = ref_state[3:7]
+                yaw = euler_from_quaternion([quat[0], quat[1], quat[2], quat[3]])[2]
+                
             if self.traj_finished:
                 vel_world = np.zeros(3)
                 acc_world = np.zeros(3)
@@ -721,6 +730,9 @@ class TrajectoryPublisher:
             if self.control_mode == 'PX4':
                 # using default PX4 controller, recieve p, v, a
                 self.publish_mavros_setpoint_raw(ref_state[0:3], vel_world, acc_world, yaw, 0)  
+                # print(f"publish_mavros_setpoint_raw: {ref_state[0:3]}, {vel_world}, {acc_world}, {yaw}")
+                
+                self.publish_arm_control_command()
             elif self.control_mode == 'Geometric':
                 # using geometric controller
                 self.publish_flat_target(ref_state[0:3], vel_world, acc_world)
@@ -757,9 +769,9 @@ class TrajectoryPublisher:
             # print(f"state_next: {self.state_next}")
             
             # 3. Publish control command
-            # self.publish_drone_command_thrust_angular_rate(self.l1_controller.u_mpc, self.l1_controller.u_ad, self.l1_controller.u_tracking)
+            self.publish_drone_command_thrust_angular_rate(self.l1_controller.u_mpc, self.l1_controller.u_ad, self.l1_controller.u_tracking)
             
-            self.publish_drone_command_thrust_torque()
+            # self.publish_drone_command_thrust_torque()
             
             # self.publish_drone_command_thrust_orientation()  # hard to use, large tracking error and delay
             
@@ -1192,7 +1204,7 @@ class TrajectoryPublisher:
         # control_method = 'simulation'
         
         # 1: using planned trajectory
-        if self.l1_control_method == 'planned':
+        if self.l1_control_method == 'planned' or self.control_mode == 'PX4':
             ref_state = self.traj_state_ref[self.traj_ref_index]
             ref_control = self.traj_solver.us[min(self.traj_ref_index, len(self.traj_solver.us)-1)]
         elif self.l1_control_method == 'mpc_next':
@@ -1692,31 +1704,31 @@ class TrajectoryPublisher:
         yaw_msg.data = yaw
         self.yaw_pub.publish(yaw_msg)
         
-    # def publish_flat_target(self, pos_world, vel_world, acc_world):
+    def publish_flat_target(self, pos_world, vel_world, acc_world):
         
-    #     # Publish flat reference
-    #     flat_target_msg = FlatTarget()
-    #     flat_target_msg.header.stamp = rospy.Time.now()
-    #     flat_target_msg.header.frame_id = "world"
-    #     flat_target_msg.type_mask = flat_target_msg.IGNORE_SNAP_JERK  # Don't ignore acceleration
+        # Publish flat reference
+        flat_target_msg = FlatTarget()
+        flat_target_msg.header.stamp = rospy.Time.now()
+        flat_target_msg.header.frame_id = "world"
+        flat_target_msg.type_mask = flat_target_msg.IGNORE_SNAP_JERK  # Don't ignore acceleration
         
-    #     # Position
-    #     flat_target_msg.position.x = pos_world[0]
-    #     flat_target_msg.position.y = pos_world[1]
-    #     flat_target_msg.position.z = pos_world[2] + 3
+        # Position
+        flat_target_msg.position.x = pos_world[0]
+        flat_target_msg.position.y = pos_world[1]
+        flat_target_msg.position.z = pos_world[2]
         
-    #     # Velocity (world frame)
-    #     flat_target_msg.velocity.x = vel_world[0]
-    #     flat_target_msg.velocity.y = vel_world[1]
-    #     flat_target_msg.velocity.z = vel_world[2]
+        # Velocity (world frame)
+        flat_target_msg.velocity.x = vel_world[0]
+        flat_target_msg.velocity.y = vel_world[1]
+        flat_target_msg.velocity.z = vel_world[2]
         
-    #     # Acceleration (world frame)
-    #     flat_target_msg.acceleration.x = acc_world[0]
-    #     flat_target_msg.acceleration.y = acc_world[1]
-    #     flat_target_msg.acceleration.z = acc_world[2]
+        # Acceleration (world frame)
+        flat_target_msg.acceleration.x = acc_world[0]
+        flat_target_msg.acceleration.y = acc_world[1]
+        flat_target_msg.acceleration.z = acc_world[2]
         
-    #     # Publish messages
-    #     self.flat_target_pub.publish(flat_target_msg)
+        # Publish messages
+        self.flat_target_pub.publish(flat_target_msg)
         
     def mav_state_callback(self, msg):
         if self.trajectory_name == "arm_test":
@@ -2211,7 +2223,7 @@ class TrajectoryPublisher:
             self.recorded_data['arm_joint_velocities'].append([0.0, 0.0])
             
         # Record control commands
-        if hasattr(self, 'mpc_control_command_ft'):
+        if hasattr(self, 'mpc_control_command_ft') and self.mpc_control_command_ft is not None:
             self.recorded_data['mpc_control_ft'].append(self.mpc_control_command_ft.copy())
         else:
             self.recorded_data['mpc_control_ft'].append(np.zeros(6))
@@ -2298,17 +2310,20 @@ class TrajectoryPublisher:
             return
             
         # Create catch_test directory if it doesn't exist
-        catch_test_dir = os.path.join(os.path.dirname(__file__), 'results', 'catch_test')
+        catch_test_dir = os.path.join(os.path.dirname(__file__), 'results', f'{self.robot_name}_{self.trajectory_name}')
         if not os.path.exists(catch_test_dir):
             os.makedirs(catch_test_dir)
             
         # Generate timestamp and experiment folder name
         timestamp = time.strftime("%Y%m%d_%H%M%S")
+        
+        experiment_folder_name = f"{timestamp}_{self.arm_control_mode}_{self.control_mode}"
+        
         if self.enable_l1_control:
-            control_mode = 'l1'
+            experiment_folder_name += '_l1'
         else:
-            control_mode = 'mpc'
-        experiment_folder_name = f"{timestamp}_{self.arm_control_mode}_{control_mode}"
+            experiment_folder_name += '_mpc'
+        
         experiment_dir = os.path.join(catch_test_dir, experiment_folder_name)
         
         # Create experiment directory
@@ -2390,7 +2405,7 @@ class TrajectoryPublisher:
                 return TriggerResponse(success=False, message=f"Data file not found: {self.latest_saved_file}")
             
             # Create plotter and process the file
-            plotter = TrajectoryDataPlotter()
+            plotter = TrajectoryDataPlotter(self.robot_name, self.trajectory_name)
             plotter.process_single_file(self.latest_saved_file, show_plots=False, save_plots=True)
             
             return TriggerResponse(success=True, message=f"Plots generated successfully from: {self.latest_saved_file}")

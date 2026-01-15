@@ -2,7 +2,7 @@
 '''
 Author: Lei He
 Date: 2025-02-19 11:40:31
-LastEditTime: 2025-07-22 13:54:46
+LastEditTime: 2025-10-17 11:53:28
 Description: MPC Debug Interface, useful for debugging your MPC controller before deploying it to the real robot
 Github: https://github.com/heleidsn
 '''
@@ -53,8 +53,14 @@ class MpcDebugInterface(QWidget):
         self.trajectory_name = trajectory_name
         self.use_squash = True
         self.dt_traj_opt = dt_traj_opt  # ms
-        self.yaml_path = rospy.get_param('~yaml_path', 'config/yaml')
-        self.arm_enabled = rospy.get_param('~arm_enabled', True)
+        
+        # Only use ROS parameters if ROS is enabled
+        if self.using_ros:
+            self.yaml_path = rospy.get_param('~yaml_path', 'config/yaml')
+            self.arm_enabled = rospy.get_param('~arm_enabled', True)
+        else:
+            self.yaml_path = 'config/yaml'
+            self.arm_enabled = True
         
         # Dynamic allocation, initialized as None, will be allocated specific dimensions after mpc_controller initialization
         if self.robot_name == 's500_uam':
@@ -426,7 +432,7 @@ class MpcDebugInterface(QWidget):
             
             # Timer for updating plots (faster update rate for real-time display)
             self.timer_plot.stop()  # Stop the original timer
-            self.timer_plot.start(50)  # 20Hz update for real-time display
+            self.timer_plot.start(10)  # 20Hz update for real-time display
             
             rospy.loginfo("ROS mode initialized - all data will be fetched from ROS topics")
             
@@ -479,7 +485,10 @@ class MpcDebugInterface(QWidget):
             )
             
             self.trajectory_duration = self.trajectory_obj.duration  # ms
-            rospy.loginfo(f"Loaded trajectory with duration: {self.trajectory_duration}ms")
+            if self.using_ros:
+                rospy.loginfo(f"Loaded trajectory with duration: {self.trajectory_duration}ms")
+            else:
+                print(f"Loaded trajectory with duration: {self.trajectory_duration}ms")
             
             # Pre-calculate accelerations using finite differences
             self.accelerations = []
@@ -512,7 +521,10 @@ class MpcDebugInterface(QWidget):
                 self.accelerations.append(acc)
             
         except Exception as e:
-            rospy.logerr(f"Failed to load trajectory: {str(e)}")
+            if self.using_ros:
+                rospy.logerr(f"Failed to load trajectory: {str(e)}")
+            else:
+                print(f"ERROR: Failed to load trajectory: {str(e)}")
             raise
     
     def init_mpc_controller(self):
@@ -567,10 +579,11 @@ class MpcDebugInterface(QWidget):
         self.traj_ref_index = int(self.mpc_ref_time / self.dt_traj_opt)
         self.control_command = self.mpc_controller.solver.us_squash[0]
         
-        rospy.logdebug('MPC ref index      : {}'.format(self.traj_ref_index))
-        rospy.logdebug('MPC state          : {}'.format(self.state[7:]))
-        rospy.logdebug('MPC reference state: {}'.format(self.traj_state_ref[self.traj_ref_index][7:]))
-        rospy.logdebug('MPC control command: {}'.format(self.control_command))
+        if self.using_ros:
+            rospy.logdebug('MPC ref index      : {}'.format(self.traj_ref_index))
+            rospy.logdebug('MPC state          : {}'.format(self.state[7:]))
+            rospy.logdebug('MPC reference state: {}'.format(self.traj_state_ref[self.traj_ref_index][7:]))
+            rospy.logdebug('MPC control command: {}'.format(self.control_command))
         
         
         # Publish MPC data
@@ -827,7 +840,10 @@ class MpcDebugInterface(QWidget):
                 if len(self.joint_control_buffer) > max_buffer_size:
                     self.joint_control_buffer.pop(0)
             else:
-                rospy.logwarn(f"Invalid control_command length: {len(self.control_command)}, expected at least 2")
+                if self.using_ros:
+                    rospy.logwarn(f"Invalid control_command length: {len(self.control_command)}, expected at least 2")
+                else:
+                    print(f"WARNING: Invalid control_command length: {len(self.control_command)}, expected at least 2")
     
     def odom_callback(self, msg):
         """Callback for position and orientation data"""
@@ -1225,13 +1241,15 @@ class MpcDebugInterface(QWidget):
             if len(self.joint_effort_buffer) > 100:
                 self.joint_effort_buffer.pop(0)
         
-        print("solving time: {:.2f} ms".format(self.solving_time * 1000))
-        print("state: ", self.state)
+        # print("solving time: {:.2f} ms".format(self.solving_time * 1000))
+        # print("state: ", self.state)
         
-        state_predict = np.array(self.mpc_controller.solver.xs)   # 50, 13
-        print('body rate current0: ', state_predict[0][10:13])
-        print('body rate command1: ', state_predict[1][10:13])
-        print('body rate command2: ', state_predict[2][10:13])
+        # state_predict = np.array(self.mpc_controller.solver.xs)   # 50, 13
+        # print('body rate current0: ', state_predict[0][10:13])
+        # print('body rate command1: ', state_predict[1][10:13])
+        # print('body rate command2: ', state_predict[2][10:13])
+        
+        print('control command: ', control_predict)
 
     #endregion
 
@@ -1738,7 +1756,10 @@ class MpcDebugInterface(QWidget):
                 if all(len(item) == 2 for item in self.joint_position_buffer):
                     joint_position = np.array(self.joint_position_buffer)
                 else:
-                    rospy.logwarn("Joint position buffer contains inconsistent data lengths")
+                    if self.using_ros:
+                        rospy.logwarn("Joint position buffer contains inconsistent data lengths")
+                    else:
+                        print("WARNING: Joint position buffer contains inconsistent data lengths")
             
             if joint_position is not None:
                 # Use estimated frequency instead of hardcoded 62Hz
@@ -1758,7 +1779,10 @@ class MpcDebugInterface(QWidget):
                 if all(len(item) == 2 for item in self.joint_velocity_buffer):
                     joint_velocity = np.array(self.joint_velocity_buffer)
                 else:
-                    rospy.logwarn("Joint velocity buffer contains inconsistent data lengths")
+                    if self.using_ros:
+                        rospy.logwarn("Joint velocity buffer contains inconsistent data lengths")
+                    else:
+                        print("WARNING: Joint velocity buffer contains inconsistent data lengths")
             
             if joint_velocity is not None:
                 # Use estimated frequency instead of hardcoded 62Hz
@@ -1778,7 +1802,10 @@ class MpcDebugInterface(QWidget):
                 if all(len(item) == 2 for item in self.joint_effort_buffer):
                     joint_effort = np.array(self.joint_effort_buffer)
                 else:
-                    rospy.logwarn("Joint effort buffer contains inconsistent data lengths")
+                    if self.using_ros:
+                        rospy.logwarn("Joint effort buffer contains inconsistent data lengths")
+                    else:
+                        print("WARNING: Joint effort buffer contains inconsistent data lengths")
             
             if joint_effort is not None:
                 # Use estimated frequency instead of hardcoded 62Hz
@@ -1794,7 +1821,10 @@ class MpcDebugInterface(QWidget):
             if all(len(item) == 2 for item in self.joint_control_buffer):
                 joint_control = np.array(self.joint_control_buffer)
             else:
-                rospy.logwarn("Joint control buffer contains inconsistent data lengths, skipping control plot")
+                if self.using_ros:
+                    rospy.logwarn("Joint control buffer contains inconsistent data lengths, skipping control plot")
+                else:
+                    print("WARNING: Joint control buffer contains inconsistent data lengths, skipping control plot")
         
         if joint_control is not None:
             # Use estimated frequency instead of hardcoded 62Hz
@@ -1990,8 +2020,12 @@ class MpcDebugInterface(QWidget):
         
         # Check if we found the required joints
         if len(joint_indices) < 2:
-            rospy.logwarn(f"Required joints not found. Available joints: {msg.name}")
-            rospy.logwarn(f"Looking for: {list(self.joint_names.keys())}")
+            if self.using_ros:
+                rospy.logwarn(f"Required joints not found. Available joints: {msg.name}")
+                rospy.logwarn(f"Looking for: {list(self.joint_names.keys())}")
+            else:
+                print(f"WARNING: Required joints not found. Available joints: {msg.name}")
+                print(f"WARNING: Looking for: {list(self.joint_names.keys())}")
             return None
         
         # Extract data for joint_1 and joint_2
@@ -2005,7 +2039,10 @@ class MpcDebugInterface(QWidget):
             
             return joint_data
         else:
-            rospy.logwarn(f"Missing required joints. Found: {list(joint_indices.keys())}")
+            if self.using_ros:
+                rospy.logwarn(f"Missing required joints. Found: {list(joint_indices.keys())}")
+            else:
+                print(f"WARNING: Missing required joints. Found: {list(joint_indices.keys())}")
             return None
     
     def cleanup_joint_buffers(self):
@@ -2026,7 +2063,10 @@ class MpcDebugInterface(QWidget):
         if self.joint_control_buffer:
             self.joint_control_buffer = [item for item in self.joint_control_buffer if len(item) == 2]
         
-        rospy.loginfo("Joint buffers cleaned up for data consistency")
+        if self.using_ros:
+            rospy.loginfo("Joint buffers cleaned up for data consistency")
+        else:
+            print("Joint buffers cleaned up for data consistency")
     
     def update_joint_frequency_estimate(self, timestamp):
         """Update the estimated joint data frequency based on actual timestamps"""
@@ -2154,8 +2194,8 @@ if __name__ == '__main__':
     mpc_yaml_path = 'config/yaml'
     
     robot_name = 's500_uam'
-    trajectory_name = 'arm_test'
-    dt_traj_opt = 50  # ms
+    trajectory_name = 'catch_vicon_fast'
+    dt_traj_opt = 10  # ms
     useSquash = True
     
     if using_ros:
