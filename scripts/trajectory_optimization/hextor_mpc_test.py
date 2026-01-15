@@ -201,7 +201,8 @@ def convert_optimized_trajectory_to_tracking_format(solver, dt):
     """
     xs = solver.xs
     us = solver.us
-    n_points = len(xs)
+    n_points = len(xs)   # 1001
+    n_controls = len(us) # 1000
     
     # Convert to numpy arrays
     xs_array = np.array([np.array(x) for x in xs])
@@ -316,36 +317,30 @@ def interpolate_trajectory_at_time(trajectory, t):
         vel2 = trajectory['velocities'][idx + 1]
         result['velocity'] = vel1 + alpha * (vel2 - vel1)
     
+    # Interpolate angular velocity if available
+    if 'angular_velocities' in trajectory and len(trajectory['angular_velocities']) > 0:
+        angvel1 = trajectory['angular_velocities'][idx]
+        angvel2 = trajectory['angular_velocities'][idx + 1]
+        result['angular_velocity'] = angvel1 + alpha * (angvel2 - angvel1)
+    
     # Interpolate control if available
     if 'controls' in trajectory and len(trajectory['controls']) > 0:
         # Controls are typically one less than states (N-1 controls for N states)
-        # Prepend hover thrust to align controls with states for proper interpolation
+        # controls[i] corresponds to the control applied from state[i] to state[i+1]
+        # The first control value is the control to be executed at the initial state
         controls = np.array(trajectory['controls'])  # Ensure it's a numpy array
-        n_times = len(traj_times)
         n_controls = len(controls)
         
-        # If controls length is one less than times, prepend hover thrust
-        if n_controls == n_times - 1:
-            # Prepend u_hover at the beginning to make controls align with states
-            # Now controls[i] corresponds to the control applied from state[i] to state[i+1]
-            # After prepending, controls[0] = u_hover, controls[1] = original controls[0], etc.
-            if controls.ndim == 1:
-                # If controls is 1D, reshape to 2D first
-                controls = controls.reshape(-1, len(u_hover))
-            controls_with_hover = np.vstack([u_hover.reshape(1, -1), controls])
-        else:
-            # Controls already have same length as times, use as is
-            controls_with_hover = controls
-        
-        # Now interpolate using the aligned controls array
-        control_idx1 = min(idx, len(controls_with_hover) - 1)
-        control_idx2 = min(idx + 1, len(controls_with_hover) - 1)
+        # Use controls directly without prepending hover
+        # controls[idx] corresponds to the control from times[idx] to times[idx+1]
+        control_idx1 = min(idx, n_controls - 1)
+        control_idx2 = min(idx + 1, n_controls - 1)
         
         if control_idx1 == control_idx2:
-            result['control'] = controls_with_hover[control_idx1].copy()
+            result['control'] = controls[control_idx1].copy()
         else:
-            control1 = controls_with_hover[control_idx1]
-            control2 = controls_with_hover[control_idx2]
+            control1 = controls[control_idx1]
+            control2 = controls[control_idx2]
             result['control'] = control1 + alpha * (control2 - control1)
     
     return result
@@ -694,7 +689,12 @@ def generate_minimum_snap_trajectory(waypoints, dt=0.01, degree=8,
         initial_velocity: Initial velocity [vx, vy, vz] at start (optional, default: [0, 0, 0])
     
     Returns:
-        trajectory: Dictionary with 'times', 'positions', 'quaternions', 'velocities'
+        trajectory: Dictionary with 'times', 'positions', 'quaternions', 'velocities', 'angular_velocities'
+            - 'times': Array of time points
+            - 'positions': Array of positions (N x 3)
+            - 'quaternions': List of quaternions (N quaternions, yaw follows velocity direction)
+            - 'velocities': Array of linear velocities (N x 3)
+            - 'angular_velocities': Array of angular velocities (N x 3) [wx, wy, wz]
     """
     if not MINSNAP_AVAILABLE:
         raise ImportError("minsnap_trajectories library is not available. Please install it to use minimum_snap mode.")
@@ -786,16 +786,99 @@ def generate_minimum_snap_trajectory(waypoints, dt=0.01, degree=8,
     positions = derivatives[0]  # Shape: (n_points, 3)
     velocities = derivatives[1]  # Shape: (n_points, 3)
     
-    # Generate quaternions (keep orientation horizontal/identity for now)
-    # In the future, this could be extended to support orientation waypoints
     n_points = len(times)
-    quaternions = [pinocchio.Quaternion(1.0, 0.0, 0.0, 0.0) for _ in range(n_points)]
+    
+    # Generate quaternions based on velocity direction
+    # For quadrotor: keep horizontal (roll=0, pitch=0), but yaw follows velocity direction
+    quaternions = []
+    angular_velocities = np.zeros((n_points, 3))  # Angular velocities [wx, wy, wz]
+    
+    # Default orientation (horizontal, no yaw) for zero velocity
+    default_quat = pinocchio.Quaternion(1.0, 0.0, 0.0, 0.0)
+    
+    for i in range(n_points):
+        vel = velocities[i]
+        vel_norm = np.linalg.norm(vel)
+        
+        if vel_norm > 1e-3:  # If velocity is significant, compute yaw from velocity direction
+            # Compute yaw angle from velocity direction (in x-y plane)
+            yaw = np.arctan2(vel[1], vel[0])  # Yaw angle in radians
+            
+            # Create quaternion: roll=0, pitch=0, yaw=yaw
+            # Using Euler angles (ZYX convention): yaw around z-axis
+            quat = R.from_euler('ZYX', [yaw, 0.0, 0.0], degrees=False).as_quat()
+            # Convert to pinocchio.Quaternion format (w, x, y, z)
+            quat_pin = pinocchio.Quaternion(quat[3], quat[0], quat[1], quat[2])
+        else:
+            # Zero or very small velocity: use previous orientation or default
+            if i > 0:
+                quat_pin = quaternions[-1]  # Use previous orientation
+            else:
+                quat_pin = default_quat  # Use default orientation
+        
+        quaternions.append(quat_pin)
+    
+    # Compute angular velocities from quaternion differences
+    # Angular velocity = 2 * (dq/dt) * q^(-1) in quaternion space
+    # Or use finite differences: omega = 2 * (q_next - q_prev) / dt * q_prev^(-1)
+    for i in range(n_points):
+        if i == 0:
+            # First point: use forward difference
+            if n_points > 1:
+                dt_actual = times[1] - times[0]
+                q_curr = quaternions[0]
+                q_next = quaternions[1]
+                # Compute relative rotation: q_rel = q_next * q_curr^(-1)
+                q_curr_inv = q_curr.inverse()
+                q_rel = q_next * q_curr_inv
+                # Convert to rotation vector (axis-angle representation)
+                q_rel_array = np.array([q_rel.x, q_rel.y, q_rel.z, q_rel.w])
+                rot = R.from_quat(q_rel_array)
+                rotvec = rot.as_rotvec()
+                # Angular velocity = rotation vector / dt
+                angular_vel = rotvec / dt_actual
+            else:
+                angular_vel = np.zeros(3)
+        elif i == n_points - 1:
+            # Last point: use backward difference
+            dt_actual = times[-1] - times[-2]
+            q_prev = quaternions[-2]
+            q_curr = quaternions[-1]
+            # Compute relative rotation: q_rel = q_curr * q_prev^(-1)
+            q_prev_inv = q_prev.inverse()
+            q_rel = q_curr * q_prev_inv
+            # Convert to rotation vector
+            q_rel_array = np.array([q_rel.x, q_rel.y, q_rel.z, q_rel.w])
+            rot = R.from_quat(q_rel_array)
+            rotvec = rot.as_rotvec()
+            # Angular velocity = rotation vector / dt
+            angular_vel = rotvec / dt_actual
+        else:
+            # Interior points: use central difference
+            dt_prev = times[i] - times[i-1]
+            dt_next = times[i+1] - times[i]
+            dt_avg = (dt_prev + dt_next) / 2.0
+            
+            q_prev = quaternions[i-1]
+            q_next = quaternions[i+1]
+            # Compute relative rotation from prev to next: q_rel = q_next * q_prev^(-1)
+            q_prev_inv = q_prev.inverse()
+            q_rel = q_next * q_prev_inv
+            # Convert to rotation vector
+            q_rel_array = np.array([q_rel.x, q_rel.y, q_rel.z, q_rel.w])
+            rot = R.from_quat(q_rel_array)
+            rotvec = rot.as_rotvec()
+            # Angular velocity = rotation vector / (2 * dt_avg) for central difference
+            angular_vel = rotvec / (2.0 * dt_avg)
+        
+        angular_velocities[i] = angular_vel
     
     return {
         'times': times,
         'positions': positions,
         'quaternions': quaternions,
-        'velocities': velocities
+        'velocities': velocities,
+        'angular_velocities': angular_velocities  # Add angular velocities to trajectory
     }
 
 
@@ -985,8 +1068,12 @@ Waypoints: {len(waypoints) if waypoints is not None else 0}
 
 
 def create_cost_models(target_pos, target_quat, u_hover, state, nu, robot_model,
-                       state_tangent_lb, state_tangent_ub, state_barrier_weights,
-                       pos_weights=None, ori_weights=None, vel_weights=None):
+                      state_tangent_lb, state_tangent_ub, state_barrier_weights,
+                      pos_weights=None, ori_weights=None, vel_weights=None, angvel_weights=None,
+                      feedforward_control=None, mpc_mode="full_controller",
+                      control_reg_weight=None, tracking_cost_weight=None,
+                      terminal_cost_weight=None, state_bounds_weight=None,
+                      target_vel=None, target_angvel=None):
     """
     Create cost models for trajectory optimization or MPC tracking
     Mimics Eagle MPC weight structure with separate weights for each dimension
@@ -1001,21 +1088,50 @@ def create_cost_models(target_pos, target_quat, u_hover, state, nu, robot_model,
         state_tangent_lb: Lower state bounds (tangent space)
         state_tangent_ub: Upper state bounds (tangent space)
         state_barrier_weights: Weights for state barrier activation
-        pos_weights: Position weights [wx, wy, wz] (default: [100, 100, 100] like Eagle MPC)
-        ori_weights: Orientation weights [wrx, wry, wrz] in SO(3) tangent space (default: [1, 1, 1] like Eagle MPC)
-        vel_weights: Velocity weights [wvx, wvy, wvz, wwx, wwy, wwz] (default: [1, 1, 1, 1, 1, 1] like Eagle MPC)
+        pos_weights: Position weights [wx, wy, wz] (default: [1000, 1000, 1000] for tracking, [1, 1, 1] for planning)
+        ori_weights: Orientation weights [wrx, wry, wrz] in SO(3) tangent space (default: [1, 1, 1])
+        vel_weights: Linear velocity weights [wvx, wvy, wvz] (default: [1, 1, 1])
+        angvel_weights: Angular velocity weights [wwx, wwy, wwz] (default: [1, 1, 1])
+                        If None and vel_weights is provided with 6 elements, uses vel_weights[3:6]
+        feedforward_control: Feedforward control for error_compensator mode
+        mpc_mode: MPC mode ("full_controller" or "error_compensator")
+        control_reg_weight: Weight for control regularization cost (default: 100.0)
+        tracking_cost_weight: Weight for pose/velocity tracking cost (default: 1.0)
+        terminal_cost_weight: Weight for terminal cost (default: 1.0)
+        state_bounds_weight: Weight for state bounds cost in running model (default: 1.0)
+                             Terminal state bounds weight is automatically set to 10x this value
+        target_vel: Target linear velocity [vx, vy, vz] (default: [0, 0, 0])
+        target_angvel: Target angular velocity [wx, wy, wz] (default: [0, 0, 0])
     """
     runningCostModel = crocoddyl.CostModelSum(state, nu)
     terminalCostModel = crocoddyl.CostModelSum(state, nu)
     
-    # Default weights matching Eagle MPC structure
-    # Tangent space: [px, py, pz, rx, ry, rz, vx, vy, vz, wx, wy, wz, ...]
+    # Default weights - can be overridden by caller
+    # For tracking: use large position weights for tight tracking
+    # For planning: use smaller weights for smoother trajectories
     if pos_weights is None:
-        pos_weights = [100.0, 100.0, 100.0]  # [wx, wy, wz] - Eagle MPC default
+        pos_weights = [1000.0, 1000.0, 1000.0]  # Default for tracking (can be overridden)
     if ori_weights is None:
-        ori_weights = [1.0, 1.0, 1.0]  # [wrx, wry, wrz] - Eagle MPC default
+        ori_weights = [1.0, 1.0, 1.0]  # [wrx, wry, wrz] - default orientation weights
     if vel_weights is None:
-        vel_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]  # [wvx, wvy, wvz, wwx, wwy, wwz] - Eagle MPC default
+        vel_weights = [1.0, 1.0, 1.0]  # [wvx, wvy, wvz] - default linear velocity weights
+    elif len(vel_weights) == 6:
+        # Backward compatibility: if 6 elements provided, split into linear and angular
+        if angvel_weights is None:
+            angvel_weights = vel_weights[3:6]  # Extract angular velocity weights
+        vel_weights = vel_weights[:3]  # Keep only linear velocity weights
+    if angvel_weights is None:
+        angvel_weights = [1.0, 1.0, 1.0]  # [wwx, wwy, wwz] - default angular velocity weights
+    
+    # Default cost weights - can be overridden by caller
+    if control_reg_weight is None:
+        control_reg_weight = 100.0  # Default control regularization weight
+    if tracking_cost_weight is None:
+        tracking_cost_weight = 1.0  # Default tracking cost weight
+    if terminal_cost_weight is None:
+        terminal_cost_weight = 1.0  # Default terminal cost weight
+    if state_bounds_weight is None:
+        state_bounds_weight = 1.0  # Default state bounds weight (for running model)
     
     # State regularization
     xResidual = crocoddyl.ResidualModelState(state, state.zero(), nu)
@@ -1024,8 +1140,27 @@ def create_cost_models(target_pos, target_quat, u_hover, state, nu, robot_model,
     )
     xRegCost = crocoddyl.CostModelResidual(state, xActivation, xResidual)
     
-    # Control regularization (relative to hover thrust)
-    uResidual = crocoddyl.ResidualModelControl(state, u_hover)
+    # Control regularization
+    # Two MPC modes with different control reference points:
+    # 1. "full_controller": u reference = u_hover (hover thrust)
+    #    - MPC solves for total control, regularized relative to hover thrust
+    # 2. "error_compensator": u reference = feedforward_control (planned control)
+    #    - MPC solves for correction/feedback, regularized relative to feedforward
+    #    - If feedforward is optimal, MPC output should be small (near zero)
+    if mpc_mode == "error_compensator":
+        # Error compensator mode: regularize control relative to feedforward control
+        # This encourages MPC to output small corrections when feedforward is good
+        if feedforward_control is not None and np.linalg.norm(feedforward_control) > 0:
+            u_reference = feedforward_control  # Use feedforward as reference
+        else:
+            # If no feedforward provided, fallback to zero (MPC solves for correction from zero)
+            u_reference = np.zeros(nu)
+    else:  # mpc_mode == "full_controller"
+        # Full controller mode: regularize control relative to hover thrust
+        # MPC solves for total control, independent of feedforward
+        u_reference = u_hover  # Always use hover thrust as reference
+    
+    uResidual = crocoddyl.ResidualModelControl(state, u_reference)
     uRegCost = crocoddyl.CostModelResidual(state, uResidual)
 
     # State bounds
@@ -1036,7 +1171,7 @@ def create_cost_models(target_pos, target_quat, u_hover, state, nu, robot_model,
     )
     xBoundsCost = crocoddyl.CostModelResidual(state, xBoundsActivation, xBoundsResidual)
     
-    # Goal tracking: Create reference state with target pose and zero velocity
+    # Goal tracking: Create reference state with target pose and velocity
     # For StateMultibody, state is [q, v] where q=[x,y,z,qx,qy,qz,qw,...] and v=[vx,vy,vz,wx,wy,wz,...]
     # Create reference configuration q_ref
     ref_q = np.concatenate([target_pos, target_quat.coeffs()])  # [x, y, z, qx, qy, qz, qw]
@@ -1044,8 +1179,19 @@ def create_cost_models(target_pos, target_quat, u_hover, state, nu, robot_model,
         # Pad with zeros if needed (for joint positions if any)
         ref_q = np.concatenate([ref_q, np.zeros(robot_model.nq - len(ref_q))])
     
-    # Create reference velocities (all zeros)
-    ref_v = np.zeros(robot_model.nv)
+    # Create reference velocities
+    # Use provided target velocities, or default to zero
+    if target_vel is None:
+        target_vel = np.zeros(3)  # Default: zero linear velocity
+    if target_angvel is None:
+        target_angvel = np.zeros(3)  # Default: zero angular velocity
+    
+    # Combine linear and angular velocities into full velocity vector
+    # For floating base: v = [vx, vy, vz, wx, wy, wz]
+    ref_v = np.concatenate([target_vel[:3], target_angvel[:3]])
+    if len(ref_v) < robot_model.nv:
+        # Pad with zeros if needed (for joint velocities if any)
+        ref_v = np.concatenate([ref_v, np.zeros(robot_model.nv - len(ref_v))])
     
     # Combine into full reference state [q, v]
     ref_state_full = np.concatenate([ref_q, ref_v])
@@ -1061,16 +1207,18 @@ def create_cost_models(target_pos, target_quat, u_hover, state, nu, robot_model,
         pose_vel_tracking_weights[0:3] = pos_weights[:3]  # [wx, wy, wz]
     
     # Orientation weights in SO(3) tangent space (indices 3-5)
+    # These weights control the cost for orientation (angle) tracking errors
     if ndx >= 6:
-        pose_vel_tracking_weights[3:6] = ori_weights[:3]  # [wrx, wry, wrz]
+        pose_vel_tracking_weights[3:6] = ori_weights[:3]  # [wrx, wry, wrz] - angle tracking weights
     
     # Linear velocity weights (indices 6-8 in tangent space for floating base)
     if ndx >= 9:
-        pose_vel_tracking_weights[6:9] = vel_weights[:3]  # [wvx, wvy, wvz]
+        pose_vel_tracking_weights[6:9] = vel_weights[:3]  # [wvx, wvy, wvz] - linear velocity tracking weights
     
     # Angular velocity weights (indices 9-11 in tangent space for floating base)
+    # These weights control the cost for angular velocity tracking errors
     if ndx >= 12:
-        pose_vel_tracking_weights[9:12] = vel_weights[3:6]  # [wwx, wwy, wwz]
+        pose_vel_tracking_weights[9:12] = angvel_weights[:3]  # [wwx, wwy, wwz] - angular velocity tracking weights
     
     # Other dimensions (if any, e.g., joints) set to 0
     # They are not tracked in this cost
@@ -1080,15 +1228,17 @@ def create_cost_models(target_pos, target_quat, u_hover, state, nu, robot_model,
     poseVelTrackingActivation = crocoddyl.ActivationModelWeightedQuad(pose_vel_tracking_weights)
     poseVelTrackingCost = crocoddyl.CostModelResidual(state, poseVelTrackingActivation, poseVelTrackingResidual)
     
-    # Add costs to running model
-    runningCostModel.addCost("xReg", xRegCost, 0.0)
-    runningCostModel.addCost("uReg", uRegCost, 1)  # Control regularization weight
-    runningCostModel.addCost("trackPoseVel", poseVelTrackingCost, 1.0)  # Position, orientation, and velocity tracking
-    runningCostModel.addCost("stateBounds", xBoundsCost, 1.0)
+    # Add costs to running model with configurable weights
+    runningCostModel.addCost("xReg", xRegCost, 0.0)  # State regularization (usually disabled)
+    runningCostModel.addCost("uReg", uRegCost, control_reg_weight)  # Control regularization
+    runningCostModel.addCost("trackPoseVel", poseVelTrackingCost, tracking_cost_weight)  # Position, orientation, and velocity tracking
+    runningCostModel.addCost("stateBounds", xBoundsCost, state_bounds_weight)  # State bounds
     
-    # Add costs to terminal model
-    terminalCostModel.addCost("goalPoseVel", poseVelTrackingCost, 1.0)  # Terminal position, orientation, and velocity
-    terminalCostModel.addCost("stateBounds", xBoundsCost, 10.0)
+    # Add costs to terminal model with configurable weights
+    # Terminal state bounds typically have higher weight (10x running model)
+    terminal_state_bounds_weight = state_bounds_weight * 10.0
+    terminalCostModel.addCost("goalPoseVel", poseVelTrackingCost, terminal_cost_weight)  # Terminal position, orientation, and velocity
+    terminalCostModel.addCost("stateBounds", xBoundsCost, terminal_state_bounds_weight)  # Terminal state bounds
     
     return runningCostModel, terminalCostModel
 
@@ -1113,15 +1263,27 @@ def trajectory_optimization(target_pos, target_quat, dt=0.1, T=100, max_iter=400
     print(f"Target position: {target_pos}")
     print(f"Hover thrust per rotor: {hover_thrust:.4f} N")
     
-    pos_weights = [1.0, 1.0, 1.0]
-    ori_weights = [1.0, 1.0, 1.0]
-    vel_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    # Weights for trajectory planning (different from tracking)
+    # Planning: smaller position weights for smoother trajectories
+    # Tracking: larger position weights for tight tracking
+    pos_weights = [1.0, 1.0, 1.0]  # Smaller weights for planning
+    ori_weights = [1.0, 1.0, 1.0]  # Orientation (angle) weights
+    vel_weights = [1.0, 1.0, 1.0]  # Linear velocity weights
+    angvel_weights = [1.0, 1.0, 1.0]  # Angular velocity weights
     
-    # Create cost models
+    # Create cost models for trajectory planning
+    # Planning typically uses lower control regularization weight
     runningCostModel, terminalCostModel = create_cost_models(
         target_pos, target_quat, u_hover, state, nu, robot_model,
         state_tangent_lb, state_tangent_ub, state_barrier_weights, 
-        pos_weights=pos_weights, ori_weights=ori_weights, vel_weights=vel_weights
+        pos_weights=pos_weights, 
+        ori_weights=ori_weights, 
+        vel_weights=vel_weights,
+        angvel_weights=angvel_weights,
+        control_reg_weight=0.5,  # Lower weight for planning (allows more control variation)
+        tracking_cost_weight=1.0,
+        terminal_cost_weight=1.0,  # Higher terminal weight for planning (ensure reaching goal)
+        state_bounds_weight=1.0
     )
     
     # Create action models
@@ -1437,7 +1599,47 @@ class QuadrotorSimulator:
         return states, times
 
 
-def mpc_tracking(target_pos, target_quat, dt_mpc=0.5, N=20, 
+def create_action_models_with_bounds(runningCostModel, terminalCostModel, state, actuation, dt_mpc, l_lim, u_lim):
+    """
+    创建 action models 并设置 control bounds
+    
+    Args:
+        runningCostModel: Running cost model
+        terminalCostModel: Terminal cost model
+        state: Crocoddyl state model
+        actuation: Actuation model
+        dt_mpc: MPC time step
+        l_lim: Lower control limit
+        u_lim: Upper control limit
+    
+    Returns:
+        runningModel: Running action model with bounds set
+        terminalModel: Terminal action model with bounds set
+    """
+    # Create action models
+    runningModel = crocoddyl.IntegratedActionModelEuler(
+        crocoddyl.DifferentialActionModelFreeFwdDynamics(
+            state, actuation, runningCostModel
+        ),
+        dt_mpc,
+    )
+    terminalModel = crocoddyl.IntegratedActionModelEuler(
+        crocoddyl.DifferentialActionModelFreeFwdDynamics(
+            state, actuation, terminalCostModel
+        ),
+        dt_mpc,
+    )
+    
+    # Set control bounds
+    runningModel.u_lb = np.array([l_lim, l_lim, l_lim, l_lim])
+    runningModel.u_ub = np.array([u_lim, u_lim, u_lim, u_lim])
+    terminalModel.u_lb = np.array([l_lim, l_lim, l_lim, l_lim])
+    terminalModel.u_ub = np.array([u_lim, u_lim, u_lim, u_lim])
+    
+    return runningModel, terminalModel
+
+
+def mpc_tracking_fixed_point(target_pos, target_quat, dt_mpc=0.5, N=20, 
                 sim_duration=10.0, sim_dt=0.01, max_iter=100, debug_level=0):
     """
     MPC tracking: track a fixed target using MPC control
@@ -1459,31 +1661,25 @@ def mpc_tracking(target_pos, target_quat, dt_mpc=0.5, N=20,
     print(f"MPC dt: {dt_mpc} s, Horizon: {N}, Max iter: {max_iter}")
     print(f"Simulation duration: {sim_duration} s, dt: {sim_dt} s")
     
-    # Create cost models (same as trajectory optimization)
+    # Create cost models for MPC tracking (fixed target)
+    # Use tracking weights: larger position weights for tight tracking
     runningCostModel, terminalCostModel = create_cost_models(
         target_pos, target_quat, u_hover, state, nu, robot_model,
-        state_tangent_lb, state_tangent_ub, state_barrier_weights
+        state_tangent_lb, state_tangent_ub, state_barrier_weights,
+        pos_weights=[1.0, 1.0, 1.0],  # Large weights for tight tracking
+        ori_weights=[1.0, 1.0, 1.0],  # Orientation (angle) weights
+        vel_weights=[1.0, 1.0, 1.0],  # Linear velocity weights
+        angvel_weights=[1.0, 1.0, 1.0],  # Angular velocity weights
+        control_reg_weight=1.0,  # Higher weight for tracking
+        tracking_cost_weight=1.0,
+        terminal_cost_weight=1.0,
+        state_bounds_weight=1.0
     )
     
-    # Create action models
-    runningModel = crocoddyl.IntegratedActionModelEuler(
-        crocoddyl.DifferentialActionModelFreeFwdDynamics(
-            state, actuation, runningCostModel
-        ),
-        dt_mpc,  # Use MPC time step
+    # Create action models with bounds
+    runningModel, terminalModel = create_action_models_with_bounds(
+        runningCostModel, terminalCostModel, state, actuation, dt_mpc, l_lim, u_lim
     )
-    terminalModel = crocoddyl.IntegratedActionModelEuler(
-        crocoddyl.DifferentialActionModelFreeFwdDynamics(
-            state, actuation, terminalCostModel
-        ),
-        dt_mpc,
-    )
-    
-    # Set control bounds
-    runningModel.u_lb = np.array([l_lim, l_lim, l_lim, l_lim])
-    runningModel.u_ub = np.array([u_lim, u_lim, u_lim, u_lim])
-    terminalModel.u_lb = np.array([l_lim, l_lim, l_lim, l_lim])
-    terminalModel.u_ub = np.array([u_lim, u_lim, u_lim, u_lim])
     
     # Initial state
     x0 = np.concatenate([hector.q0, np.zeros(state.nv)])
@@ -1562,30 +1758,24 @@ def mpc_tracking(target_pos, target_quat, dt_mpc=0.5, N=20,
             
             # Recreate cost models to ensure they are fresh (though target is fixed, this ensures consistency)
             # For fixed target tracking, cost models don't need to change, but recreating ensures everything is fresh
+            # Use tracking weights: larger position weights for tight tracking
             runningCostModel, terminalCostModel = create_cost_models(
                 target_pos, target_quat, u_hover, state, nu, robot_model, 
-                state_tangent_lb, state_tangent_ub, state_barrier_weights
+                state_tangent_lb, state_tangent_ub, state_barrier_weights,
+                pos_weights=[1.0, 1.0, 1.0],  # Large weights for tight tracking
+                ori_weights=[1.0, 1.0, 1.0],  # Orientation (angle) weights
+                vel_weights=[1.0, 1.0, 1.0],  # Linear velocity weights
+                angvel_weights=[1.0, 1.0, 1.0],  # Angular velocity weights
+                control_reg_weight=1.0,  # Higher weight for tracking
+                tracking_cost_weight=1.0,
+                terminal_cost_weight=1.0,
+                state_bounds_weight=1.0
             )
             
-            # Recreate action models with fresh cost models
-            runningModel = crocoddyl.IntegratedActionModelEuler(
-                crocoddyl.DifferentialActionModelFreeFwdDynamics(
-                    state, actuation, runningCostModel
-                ),
-                dt_mpc,
+            # Recreate action models with fresh cost models and bounds
+            runningModel, terminalModel = create_action_models_with_bounds(
+                runningCostModel, terminalCostModel, state, actuation, dt_mpc, l_lim, u_lim
             )
-            terminalModel = crocoddyl.IntegratedActionModelEuler(
-                crocoddyl.DifferentialActionModelFreeFwdDynamics(
-                    state, actuation, terminalCostModel
-                ),
-                dt_mpc,
-            )
-            
-            # Set control bounds
-            runningModel.u_lb = np.array([l_lim, l_lim, l_lim, l_lim])
-            runningModel.u_ub = np.array([u_lim, u_lim, u_lim, u_lim])
-            terminalModel.u_lb = np.array([l_lim, l_lim, l_lim, l_lim])
-            terminalModel.u_ub = np.array([u_lim, u_lim, u_lim, u_lim])
             
             # Recreate problem with current state and fresh models
             problem = crocoddyl.ShootingProblem(current_state.copy(), [runningModel] * N, terminalModel)
@@ -1865,7 +2055,7 @@ def mpc_tracking(target_pos, target_quat, dt_mpc=0.5, N=20,
 
 def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20, 
                             sim_duration=10.0, sim_dt=0.01, max_iter=10, debug_level=0,
-                            use_feedforward=False):
+                            use_feedforward=False, mpc_mode="full_controller"):
     """
     MPC trajectory tracking: track a time-varying trajectory using MPC control
     
@@ -1877,7 +2067,10 @@ def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20,
         sim_dt: Simulation time step (seconds)
         max_iter: Maximum MPC solver iterations per step
         debug_level: Debug level (0=no debug, 1=show step results, 2=show step results + MPC iterations)
-        use_feedforward: If True, use feedforward controls from trajectory as initial guess for MPC
+        use_feedforward: If True, use feedforward controls from trajectory
+        mpc_mode: MPC mode selection
+            - "full_controller": MPC solves for total control (regularize relative to hover thrust)
+            - "error_compensator": MPC solves for correction/feedback (regularize relative to feedforward)
     """
     print("=" * 60)
     print("MPC Trajectory Tracking")
@@ -1885,12 +2078,9 @@ def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20,
     print(f"Trajectory duration: {trajectory['times'][-1]:.2f} s, {len(trajectory['times'])} points")
     print(f"MPC dt: {dt_mpc} s, Horizon: {N}, Max iter: {max_iter}")
     print(f"Simulation duration: {sim_duration} s, dt: {sim_dt} s")
+    print(f"MPC mode: {mpc_mode}")
+    print(f"  - {'Full Controller' if mpc_mode == 'full_controller' else 'Error Compensator'}")
     print(f"Feedforward control: {'ENABLED' if use_feedforward else 'DISABLED'}")
-    if use_feedforward and 'controls' in trajectory:
-        print(f"  Feedforward controls available: {len(trajectory['controls'])} points")
-    elif use_feedforward:
-        print(f"  WARNING: Feedforward requested but no controls in trajectory, disabling feedforward")
-        use_feedforward = False
     
     # Initial state
     x0 = np.concatenate([hector.q0, np.zeros(state.nv)])
@@ -1955,13 +2145,95 @@ def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20,
                 ref_pos = interp_data['position']
                 ref_quat = interp_data['quaternion']
                 
+                # Get reference velocity from trajectory (important for minimum_snap trajectories)
+                ref_vel = None
+                if 'velocity' in interp_data:
+                    ref_vel = interp_data['velocity']  # Linear velocity [vx, vy, vz]
+                elif 'velocities' in trajectory and len(trajectory['velocities']) > 0:
+                    # Fallback: interpolate from trajectory velocities
+                    traj_times = trajectory['times']
+                    traj_velocities = trajectory['velocities']
+                    idx = np.searchsorted(traj_times, horizon_time)
+                    if idx >= len(traj_times):
+                        vel_idx = len(traj_velocities) - 1
+                    elif idx == 0:
+                        vel_idx = 0
+                    else:
+                        alpha = (horizon_time - traj_times[idx-1]) / (traj_times[idx] - traj_times[idx-1])
+                        vel1 = traj_velocities[idx-1]
+                        vel2 = traj_velocities[min(idx, len(traj_velocities)-1)]
+                        ref_vel = vel1 + alpha * (vel2 - vel1)
+                    if vel_idx < len(traj_velocities):
+                        ref_vel = traj_velocities[vel_idx].copy()
+                
+                # Get reference angular velocity from trajectory
+                ref_angvel = None
+                if 'angular_velocity' in interp_data:
+                    ref_angvel = interp_data['angular_velocity']  # Angular velocity [wx, wy, wz]
+                elif 'angular_velocities' in trajectory and len(trajectory['angular_velocities']) > 0:
+                    # Fallback: interpolate from trajectory angular velocities
+                    traj_times = trajectory['times']
+                    traj_angvels = trajectory['angular_velocities']
+                    idx = np.searchsorted(traj_times, horizon_time)
+                    if idx >= len(traj_times):
+                        angvel_idx = len(traj_angvels) - 1
+                    elif idx == 0:
+                        angvel_idx = 0
+                    else:
+                        alpha = (horizon_time - traj_times[idx-1]) / (traj_times[idx] - traj_times[idx-1])
+                        angvel1 = traj_angvels[idx-1]
+                        angvel2 = traj_angvels[min(idx, len(traj_angvels)-1)]
+                        ref_angvel = angvel1 + alpha * (angvel2 - angvel1)
+                    if angvel_idx < len(traj_angvels):
+                        ref_angvel = traj_angvels[angvel_idx].copy()
+                
+                # Get feedforward control at this horizon time if enabled
+                # This makes MPC solve for correction relative to feedforward
+                feedforward_control_horizon = None
+                if use_feedforward and 'controls' in trajectory:
+                    if 'control' in interp_data:
+                        feedforward_control_horizon = interp_data['control']
+                    else:
+                        # Fallback: use nearest neighbor
+                        traj_times = trajectory['times']
+                        traj_controls = trajectory['controls']
+                        idx = np.searchsorted(traj_times, horizon_time)
+                        if idx >= len(traj_times):
+                            control_idx = len(traj_controls) - 1    
+                        elif idx == 0:
+                            control_idx = 0
+                        else:
+                            control_idx = idx - 1 if abs(traj_times[idx-1] - horizon_time) < abs(traj_times[idx] - horizon_time) else idx
+                            control_idx = min(control_idx, len(traj_controls) - 1)
+                        feedforward_control_horizon = traj_controls[control_idx].copy()
+                
                 if debug_level > 0 and k == 0:
-                    print(f"Reference position at t={horizon_time:.3f}s: [{ref_pos[0]:.4f}, {ref_pos[1]:.4f}, {ref_pos[2]:.4f}]")
+                    print(f"Reference at t={horizon_time:.3f}s: pos=[{ref_pos[0]:.4f}, {ref_pos[1]:.4f}, {ref_pos[2]:.4f}]")
+                    if ref_vel is not None:
+                        print(f"  Reference velocity: [{ref_vel[0]:.4f}, {ref_vel[1]:.4f}, {ref_vel[2]:.4f}] m/s")
+                    if ref_angvel is not None:
+                        print(f"  Reference angular velocity: [{ref_angvel[0]:.4f}, {ref_angvel[1]:.4f}, {ref_angvel[2]:.4f}] rad/s")
                 
                 # Create cost model with reference at this time step
+                # Control regularization reference point:
+                # - full_controller: u_reference = u_hover (always, regardless of feedforward)
+                # - error_compensator: u_reference = feedforward_control (if available)
+                # Tracking weights: larger position weights for tight tracking
+                # IMPORTANT: Pass reference velocity and angular velocity to track trajectory correctly
                 runningCostModel, _ = create_cost_models(
                     ref_pos, ref_quat, u_hover, state, nu, robot_model,
-                    state_tangent_lb, state_tangent_ub, state_barrier_weights
+                    state_tangent_lb, state_tangent_ub, state_barrier_weights,
+                    pos_weights=[100.0, 100.0, 100.0],  # Large weights for tight tracking
+                    ori_weights=[1.0, 1.0, 1.0],  # Orientation (angle) weights
+                    vel_weights=[1.0, 1.0, 1.0],  # Linear velocity weights
+                    angvel_weights=[1.0, 1.0, 1.0],  # Angular velocity weights
+                    feedforward_control=feedforward_control_horizon,
+                    mpc_mode="full_controller",
+                    control_reg_weight=1.0,  # Higher weight for tracking (encourages using feedforward)
+                    tracking_cost_weight=1.0,
+                    state_bounds_weight=1.0,
+                    target_vel=ref_vel,  # Pass reference velocity from trajectory
+                    target_angvel=ref_angvel  # Pass reference angular velocity from trajectory
                 )
                 
                 # Create action model for this time step
@@ -1984,13 +2256,91 @@ def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20,
             ref_pos_terminal = interp_data_terminal['position']
             ref_quat_terminal = interp_data_terminal['quaternion']
             
+            # Get reference velocity at terminal time (important for minimum_snap trajectories)
+            ref_vel_terminal = None
+            if 'velocity' in interp_data_terminal:
+                ref_vel_terminal = interp_data_terminal['velocity']  # Linear velocity [vx, vy, vz]
+            elif 'velocities' in trajectory and len(trajectory['velocities']) > 0:
+                # Fallback: interpolate from trajectory velocities
+                traj_times = trajectory['times']
+                traj_velocities = trajectory['velocities']
+                idx = np.searchsorted(traj_times, terminal_time)
+                if idx >= len(traj_times):
+                    vel_idx = len(traj_velocities) - 1
+                elif idx == 0:
+                    vel_idx = 0
+                else:
+                    alpha = (terminal_time - traj_times[idx-1]) / (traj_times[idx] - traj_times[idx-1])
+                    vel1 = traj_velocities[idx-1]
+                    vel2 = traj_velocities[min(idx, len(traj_velocities)-1)]
+                    ref_vel_terminal = vel1 + alpha * (vel2 - vel1)
+            
+            # Get reference angular velocity at terminal time
+            ref_angvel_terminal = None
+            if 'angular_velocity' in interp_data_terminal:
+                ref_angvel_terminal = interp_data_terminal['angular_velocity']  # Angular velocity [wx, wy, wz]
+            elif 'angular_velocities' in trajectory and len(trajectory['angular_velocities']) > 0:
+                # Fallback: interpolate from trajectory angular velocities
+                traj_times = trajectory['times']
+                traj_angvels = trajectory['angular_velocities']
+                idx = np.searchsorted(traj_times, terminal_time)
+                if idx >= len(traj_times):
+                    angvel_idx = len(traj_angvels) - 1
+                elif idx == 0:
+                    angvel_idx = 0
+                else:
+                    alpha = (terminal_time - traj_times[idx-1]) / (traj_times[idx] - traj_times[idx-1])
+                    angvel1 = traj_angvels[idx-1]
+                    angvel2 = traj_angvels[min(idx, len(traj_angvels)-1)]
+                    ref_angvel_terminal = angvel1 + alpha * (angvel2 - angvel1)
+            
+            # Get feedforward control at terminal time if enabled
+            feedforward_control_terminal = None
+            if use_feedforward and 'controls' in trajectory:
+                if 'control' in interp_data_terminal:
+                    feedforward_control_terminal = interp_data_terminal['control']
+                else:
+                    # Fallback: use nearest neighbor
+                    traj_times = trajectory['times']
+                    traj_controls = trajectory['controls']
+                    idx = np.searchsorted(traj_times, terminal_time)
+                    if idx >= len(traj_times):
+                        control_idx = len(traj_controls) - 1    
+                    elif idx == 0:
+                        control_idx = 0
+                    else:
+                        control_idx = idx - 1 if abs(traj_times[idx-1] - terminal_time) < abs(traj_times[idx] - terminal_time) else idx
+                        control_idx = min(control_idx, len(traj_controls) - 1)
+                    feedforward_control_terminal = traj_controls[control_idx].copy()
+            
             if debug_level > 0:
-                print(f"Terminal reference position at t={terminal_time:.3f}s: [{ref_pos_terminal[0]:.4f}, {ref_pos_terminal[1]:.4f}, {ref_pos_terminal[2]:.4f}]")
+                print(f"Terminal reference at t={terminal_time:.3f}s: pos=[{ref_pos_terminal[0]:.4f}, {ref_pos_terminal[1]:.4f}, {ref_pos_terminal[2]:.4f}]")
+                if ref_vel_terminal is not None:
+                    print(f"  Terminal reference velocity: [{ref_vel_terminal[0]:.4f}, {ref_vel_terminal[1]:.4f}, {ref_vel_terminal[2]:.4f}] m/s")
+                if ref_angvel_terminal is not None:
+                    print(f"  Terminal reference angular velocity: [{ref_angvel_terminal[0]:.4f}, {ref_angvel_terminal[1]:.4f}, {ref_angvel_terminal[2]:.4f}] rad/s")
             
             # Create terminal cost model
+            # Control regularization reference point:
+            # - full_controller: u_reference = u_hover (always, regardless of feedforward)
+            # - error_compensator: u_reference = feedforward_control (if available)
+            # Tracking weights: larger position weights for tight tracking
+            # IMPORTANT: Pass reference velocity and angular velocity to track trajectory correctly
             _, terminalCostModel = create_cost_models(
                 ref_pos_terminal, ref_quat_terminal, u_hover, state, nu, robot_model,
-                state_tangent_lb, state_tangent_ub, state_barrier_weights
+                state_tangent_lb, state_tangent_ub, state_barrier_weights,
+                pos_weights=[100.0, 100.0, 100.0],  # Large weights for tight tracking
+                ori_weights=[1.0, 1.0, 1.0],  # Orientation (angle) weights
+                vel_weights=[1.0, 1.0, 1.0],  # Linear velocity weights
+                angvel_weights=[1.0, 1.0, 1.0],  # Angular velocity weights
+                feedforward_control=feedforward_control_terminal if mpc_mode == "error_compensator" else None,
+                mpc_mode=mpc_mode,
+                control_reg_weight=1.0,  # Higher weight for tracking
+                tracking_cost_weight=1.0,
+                terminal_cost_weight=1.0,
+                state_bounds_weight=1.0,
+                target_vel=ref_vel_terminal,  # Pass reference velocity from trajectory
+                target_angvel=ref_angvel_terminal  # Pass reference angular velocity from trajectory
             )
             
             terminalModel = crocoddyl.IntegratedActionModelEuler(
@@ -2017,6 +2367,7 @@ def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20,
             solver.setCallbacks(callbacks)
             
             # Warm start: shift previous solution
+            # Initial guess depends on MPC mode
             if prev_mpc_xs is not None and prev_mpc_us is not None and len(prev_mpc_xs) > 1:
                 # Use previous solution as warm start (shift forward)
                 xs_init = [current_state.copy()] + [prev_mpc_xs[i+1].copy() for i in range(min(N, len(prev_mpc_xs)-1))]
@@ -2024,22 +2375,65 @@ def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20,
                 while len(xs_init) < N + 1:
                     xs_init.append(xs_init[-1].copy())
                 
-                us_init = [prev_mpc_us[i+1].copy() if i+1 < len(prev_mpc_us) else u_hover.copy() 
-                          for i in range(N)]
+                if mpc_mode == "error_compensator":
+                    # Previous solution is feedback (correction), use it directly
+                    us_init = [prev_mpc_us[i+1].copy() if i+1 < len(prev_mpc_us) else np.zeros(nu) 
+                              for i in range(N)]
+                else:  # full_controller
+                    # Previous solution is total control, use it directly
+                    us_init = [prev_mpc_us[i+1].copy() if i+1 < len(prev_mpc_us) else u_hover.copy() 
+                              for i in range(N)]
                 if debug_level > 0:
                     print(f"Using warm start from previous MPC solution")
             else:
-                # First solve: use hover thrust
+                # First solve: initial guess depends on MPC mode
                 xs_init = [current_state.copy() for _ in range(N + 1)]
-                us_init = [u_hover.copy() for _ in range(N)]
-                if debug_level > 0:
-                    print(f"First MPC solve: using hover thrust as initial guess")
+                if mpc_mode == "error_compensator":
+                    # MPC solves for correction, initial guess should be zero
+                    us_init = [np.zeros(nu) for _ in range(N)]
+                    if debug_level > 0:
+                        print(f"First MPC solve: using zero control as initial guess (MPC solves for correction)")
+                else:  # full_controller
+                    # MPC solves for total control, initial guess should be hover
+                    us_init = [u_hover.copy() for _ in range(N)]
+                    if debug_level > 0:
+                        print(f"First MPC solve: using hover thrust as initial guess")
             
             
             solve_start = time.time()
             solver.solve(xs_init, us_init, max_iter)
             solve_time = time.time() - solve_start
             mpc_solve_times.append(solve_time)
+            
+            # Get reference state at current time for error analysis
+            interp_data_ref = interpolate_trajectory_at_time(trajectory, current_time)
+            ref_pos = interp_data_ref['position']
+            ref_quat = interp_data_ref['quaternion']
+            current_pos = current_state[:3]
+            # Extract quaternion from state: state[3:7] = [qx, qy, qz, qw]
+            quat_coeffs = current_state[3:7]
+            current_quat = pinocchio.Quaternion(quat_coeffs[3], quat_coeffs[0], quat_coeffs[1], quat_coeffs[2])
+            
+            # Calculate position error
+            pos_error = current_pos - ref_pos
+            pos_error_norm = np.linalg.norm(pos_error)
+            
+            # Calculate quaternion error (in tangent space)
+            quat_error = ref_quat * current_quat.inverse()
+            quat_error_tangent = pinocchio.log3(quat_error.toRotationMatrix())
+            quat_error_norm = np.linalg.norm(quat_error_tangent)
+            
+            # Get velocity error if available
+            if 'velocity' in interp_data_ref:
+                ref_vel = interp_data_ref['velocity']
+                current_vel = current_state[7:10]  # Linear velocity
+                vel_error = current_vel - ref_vel
+                vel_error_norm = np.linalg.norm(vel_error)
+            else:
+                ref_vel = np.zeros(3)
+                current_vel = current_state[7:10]
+                vel_error = current_vel - ref_vel
+                vel_error_norm = np.linalg.norm(vel_error)
             
             # Monitor MPC solve performance
             if mpc_step_count % 10 == 0 or mpc_step_count == 1:  # Print every 10 solves or first solve
@@ -2055,15 +2449,7 @@ def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20,
             prev_mpc_xs = [x.copy() for x in solver.xs] if len(solver.xs) > 0 else None
             prev_mpc_us = [u.copy() for u in solver.us] if len(solver.us) > 0 else None
             
-            # Get MPC feedback control (use first control from solution)
-            if len(solver.us) > 0:
-                current_mpc_feedback = solver.us[0].copy()  # MPC feedback control
-            else:
-                current_mpc_feedback = np.zeros(nu)  # Zero feedback if no solution
-                if debug_level > 0:
-                    print(f"WARNING: No control from solver, using zero feedback")
-            
-            # Get feedforward control at current time if enabled (using interpolation)
+            # Get feedforward control at current time (needed for control extraction)
             feedforward_control = np.zeros(nu)
             if use_feedforward and 'controls' in trajectory:
                 interp_data = interpolate_trajectory_at_time(trajectory, current_time)
@@ -2080,13 +2466,30 @@ def mpc_trajectory_tracking(trajectory, dt_mpc=0.05, N=20,
                         control_idx = 0
                     else:
                         control_idx = idx - 1 if abs(traj_times[idx-1] - current_time) < abs(traj_times[idx] - current_time) else idx
-                    control_idx = min(control_idx, len(traj_controls) - 1)
+                        control_idx = min(control_idx, len(traj_controls) - 1)
                     feedforward_control = traj_controls[control_idx].copy()
-                if debug_level > 0:
-                    print(f"Feedforward control (interpolated): {feedforward_control}")
             
-            # Total control = feedforward + feedback
-            current_mpc_control = feedforward_control + current_mpc_feedback
+            # Extract control from MPC solution based on mode
+            if len(solver.us) > 0:
+                mpc_output = solver.us[0].copy()
+            else:
+                mpc_output = np.zeros(nu)  # Zero if no solution
+                if debug_level > 0:
+                    print(f"WARNING: No control from solver, using zero")
+            
+            # Interpret MPC output based on mode
+            
+            # MPC solves for total control
+            current_mpc_total = mpc_output  # MPC output is total control
+            # Feedback = total - feedforward (for analysis/plotting)
+            current_mpc_feedback = current_mpc_total - feedforward_control
+            # Total control = MPC total control
+            
+            if use_feedforward:
+                current_mpc_control = feedforward_control
+            else:
+                current_mpc_control = current_mpc_total
+            
             # Store feedforward and feedback controls separately
             current_feedforward_control = feedforward_control.copy()
             current_feedback_control = current_mpc_feedback.copy()
@@ -2470,9 +2873,6 @@ if __name__ == "__main__":
     traj_opt = False  # on/off trajectory optimization
     mpc = True        # on/off MPC tracking
     
-    # MPC tracking mode: "fixed_point", "figure8", "optimized_trajectory", or "minimum_snap"
-    mpc_mode = "minimum_snap"  # Options: "fixed_point", "figure8", "optimized_trajectory", or "minimum_snap"
-    
     # Fixed point target (for fixed_point mode)
     target_pos = np.array([1.0, 1.0, 1.0])
     target_quat = pinocchio.Quaternion(1.0, 0.0, 0.0, 0.0)
@@ -2509,13 +2909,19 @@ if __name__ == "__main__":
     if mpc:
         
         debug_level = 0
+        # MPC tracking mode: "fixed_point", "figure8", "optimized_trajectory", or "minimum_snap"
+        mpc_mode = "optimized_trajectory"  # Options: "fixed_point", "figure8", "optimized_trajectory", or "minimum_snap"
         
         if mpc_mode == "fixed_point":
             # Fixed point tracking
             print("\n" + "=" * 60)
             print("MPC Mode: Fixed Point Tracking")
             print("=" * 60)
-            sim_states, sim_controls, sim_times, mpc_solve_times = mpc_tracking(
+            
+            target_pos = np.array([0.8, 1.0, 1.2])
+            target_quat = pinocchio.Quaternion(1.0, 0.0, 0.0, 0.0)
+            
+            sim_states, sim_controls, sim_times, mpc_solve_times = mpc_tracking_fixed_point(
                 target_pos, target_quat,
                 dt_mpc=0.05, N=20,
                 sim_duration=10.0, sim_dt=0.01,
@@ -2575,12 +2981,12 @@ if __name__ == "__main__":
             print("\nStep 1: Generating optimized trajectory...")
             opt_solver, opt_logger, opt_dt = trajectory_optimization(
                 target_pos, target_quat,
-                dt=0.1, T=100, max_iter=400,
+                dt=0.01, T=1000, max_iter=400,
                 with_plot=False, debug=False
             )
             
             # Plot optimization results if requested
-            if False:
+            if True:
                 plot_trajectory_optimization_results(opt_solver, opt_logger, opt_dt, target_pos, u_hover)
             
             # Step 2: Convert optimized trajectory to tracking format
@@ -2592,15 +2998,15 @@ if __name__ == "__main__":
             sim_duration = trajectory['times'][-1]  # Use the full trajectory duration
             
             # Option to use feedforward control (can be toggled for comparison)
-            use_feedforward = True  # Set to False to disable feedforward and use pure feedback
             
             sim_states, sim_controls, sim_times, mpc_solve_times, sim_ff_control, sim_fb_control = mpc_trajectory_tracking(
                 trajectory,
-                dt_mpc=0.01, N=100,
-                sim_duration=sim_duration, sim_dt=0.001,
+                dt_mpc=0.01, N=50,
+                sim_duration=sim_duration, sim_dt=0.01,
                 max_iter=100,
                 debug_level=debug_level,
-                use_feedforward=use_feedforward
+                use_feedforward=False,
+                mpc_mode="full_controller"  # "full_controller" or "error_compensator"
             )
             
             if WITHPLOT:
@@ -2667,7 +3073,7 @@ if __name__ == "__main__":
             
             sim_states, sim_controls, sim_times, mpc_solve_times, sim_ff_control, sim_fb_control = mpc_trajectory_tracking(
                 trajectory,
-                dt_mpc=0.02, N=50,
+                dt_mpc=0.05, N=20,
                 sim_duration=sim_duration, sim_dt=0.01,
                 max_iter=100,
                 debug_level=debug_level,
