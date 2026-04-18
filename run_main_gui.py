@@ -273,6 +273,7 @@ class ROSServiceHandler:
             self.services['start_arm_test'] = rospy.ServiceProxy('/start_arm_test', Trigger)
             self.services['save_recorded_data'] = rospy.ServiceProxy('/save_recorded_data', Trigger)
             self.services['plot_trajectory_data'] = rospy.ServiceProxy('/plot_trajectory_data', Trigger)
+            self.services['clean_path'] = rospy.ServiceProxy('/clean_path', Trigger)
             # MAVROS services for drone control
             self.services['set_mode'] = rospy.ServiceProxy('/mavros/set_mode', SetMode)
             self.services['arm_disarm'] = rospy.ServiceProxy('/mavros/cmd/arming', CommandBool)
@@ -389,8 +390,21 @@ class EagleMPCDebuggerGUI(QMainWindow):
         
         # Define trajectory mapping for each robot
         self.robot_trajectories = {
-            "s500_uam": ["catch_vicon", "catch_vicon_real", "displacement", "arm_test"],
-            "s500": ["hover", "displacement", "displacement_real"],
+            "s500_uam": [
+                "catch_vicon",
+                "catch_vicon_real",
+                "displacement",
+                "arm_test",
+                "figure8",
+                "minimum_snap",
+            ],
+            "s500": [
+                "hover",
+                "displacement",
+                "displacement_real",
+                "figure8",
+                "minimum_snap",
+            ],
             "hexacopter370_flying_arm_3": ["eagle_catch_nc"]
         }
         
@@ -929,6 +943,10 @@ class EagleMPCDebuggerGUI(QMainWindow):
         self.plot_data_btn.clicked.connect(self.plot_trajectory_data)
         service_layout.addWidget(self.plot_data_btn)
         
+        self.clean_path_btn = QPushButton("Clear Path (RViz history)")
+        self.clean_path_btn.clicked.connect(self.clean_path)
+        service_layout.addWidget(self.clean_path_btn)
+        
         service_group.setLayout(service_layout)
         
         layout.addWidget(simulation_group)
@@ -1319,6 +1337,14 @@ class EagleMPCDebuggerGUI(QMainWindow):
             self.log_message(f"Plots generated successfully: {message}")
         else:
             self.log_message(f"Failed to generate plots: {message}")
+
+    def clean_path(self):
+        """Clear accumulated trajectory paths in controller (not reference/MPC planned)."""
+        success, message = self.service_handler.call_service('clean_path')
+        if success:
+            self.log_message(f"Paths cleared: {message}")
+        else:
+            self.log_message(f"Failed to clear paths: {message}")
             
     def mpc_state_callback(self, msg):
         """Callback for MPC state messages"""

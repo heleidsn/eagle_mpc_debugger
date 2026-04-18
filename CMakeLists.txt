@@ -160,6 +160,8 @@ include_directories(
 ## in contrast to setup.py, you can choose the destination
 catkin_install_python(PROGRAMS
   scripts/groundtruth_pub.py
+  scripts/reference_path_pub.py
+  scripts/pose_to_tf_pub.py
 #   scripts/pid_reconfigure.py
 #   trajectory_publisher_mpc.py
 #   eagle_mpc_gui.py
@@ -207,6 +209,12 @@ install(DIRECTORY launch/
 install(DIRECTORY cfg/
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/cfg
   FILES_MATCHING PATTERN "*.cfg"
+)
+
+# 安装 rviz 配置文件
+install(DIRECTORY config/rviz/
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/config/rviz
+  FILES_MATCHING PATTERN "*.rviz"
 )
 
 #############

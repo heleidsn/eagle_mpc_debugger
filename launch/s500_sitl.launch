@@ -15,6 +15,11 @@
     <arg name="verbose" default="false"/>
     <arg name="paused" default="false"/>
     <arg name="respawn_gazebo" default="false"/>
+    <arg name="launch_rviz" default="true"/>
+    <arg name="launch_reference_path_pub" default="true"/>
+    <arg name="show_uav_model_in_rviz" default="true"/>
+    <arg name="uav_urdf" default="$(find eagle_mpc_debugger)/models/urdf/s500_rviz_simple.urdf"/>
+    <arg name="rviz_config" default="$(find eagle_mpc_debugger)/config/rviz/s500_mpc_debug.rviz"/>
     <!-- MAVROS configs -->
     <arg name="fcu_url" default="udp://:14540@localhost:14557"/>
     <arg name="respawn_mavros" default="false"/>
@@ -44,5 +49,24 @@
     <node pkg="eagle_mpc_debugger" type="groundtruth_pub.py" name="groundtruth_pub" output="screen">
         <param name="model_name" value="$(arg vehicle)" />
     </node>
+
+    <node pkg="eagle_mpc_debugger" type="reference_path_pub.py" name="reference_path_pub" output="screen" if="$(arg launch_reference_path_pub)">
+        <param name="reference_pose_topic" value="/reference/pose" />
+        <param name="reference_path_topic" value="/reference/path" />
+        <param name="path_frame_id" value="map" />
+        <param name="max_path_length" value="3000" />
+    </node>
+
+    <node pkg="rviz" type="rviz" name="rviz" args="-d $(arg rviz_config)" if="$(arg launch_rviz)" />
+
+    <group if="$(arg show_uav_model_in_rviz)">
+        <param name="robot_description" textfile="$(arg uav_urdf)" />
+        <node pkg="robot_state_publisher" type="robot_state_publisher" name="robot_state_publisher" output="screen" />
+        <node pkg="eagle_mpc_debugger" type="pose_to_tf_pub.py" name="pose_to_tf_pub" output="screen">
+            <param name="pose_topic" value="/mavros/vision_pose/pose" />
+            <param name="parent_frame" value="map" />
+            <param name="child_frame" value="base_link" />
+        </node>
+    </group>
 
 </launch>
