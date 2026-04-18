@@ -138,11 +138,11 @@ class NumericSimulator:
         # Default configuration
         default_config = {
             'robot_name': 's500_uam',
-            'trajectory_name': 'catch_vicon',
+            'trajectory_name': 'hover',  # catch_vicon
             'dt_traj_opt': 50,  # ms
             'use_squash': True,
             'yaml_path': 'config/yaml',
-            'simulation_time': 10.0,  # seconds
+            'simulation_time': 3.0,  # seconds
             'initial_state': [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, -1.2, -0.6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             # Timing parameters
             'simulation_dt': 0.001,  # seconds - simulation time step (1ms)
@@ -179,7 +179,7 @@ class NumericSimulator:
             # Thrust filter parameters for thrust + angular velocity mode
             'thrust_filter_time_constant': 0.0,  # seconds - time constant for first-order thrust filter
             # MPC controller type
-            'mpc_controller_type': 'eagle_mpc',  # options: 'eagle_mpc', 'crocoddyl'
+            'mpc_controller_type': 'crocoddyl',  # options: 'eagle_mpc', 'crocoddyl'
         }
         
         # Try to load config file if it exists
@@ -383,22 +383,24 @@ class NumericSimulator:
         mpc_config = load_mpc_config(mpc_yaml)
         
         # Load platform configuration
-        platform_yaml = self.trajectory_obj.robot_model_path.replace('.urdf', '_platform.yaml')
-        if not os.path.exists(platform_yaml):
-            # Fallback to default platform config
-            platform_config = {
-                'n_rotors': 4,
-                'cf': 1.0,
-                'cm': 0.1,
-                'max_thrust': 10.0,
-                'min_thrust': 0.0,
-                'arm_length': 0.25
-            }
-        else:
-            platform_config = load_platform_config(platform_yaml)
+        # platform_yaml = self.trajectory_obj.robot_model_path.replace('.urdf', '_platform.yaml')
+        # if not os.path.exists(platform_yaml):
+        #     # Fallback to default platform config
+        #     platform_config = {
+        #         'n_rotors': 4,
+        #         'cf': 1.0,
+        #         'cm': 0.1,
+        #         'max_thrust': 10.0,
+        #         'min_thrust': 0.0,
+        #         'arm_length': 0.25
+        #     }
+        # else:
+        #     platform_config = load_platform_config(platform_yaml)
         
         # Create platform parameters
-        self.platform_params = PlatformParams(platform_config)
+        
+        self.platform_params = self.trajectory_obj.platform_params
+        # self.platform_params = PlatformParams(platform_config)
         
         # Create Crocoddyl MPC controller
         self.mpc_controller = CrocoddylMPCController(
@@ -779,8 +781,10 @@ class NumericSimulator:
         # Get reference state and index
         ref_state, traj_index = self.get_reference_state(current_time)
         
-        # Calculate reference index for MPC
-        reference_index = int(current_time * 1000 / self.dt_traj_opt)
+        # Calculate reference index aligned with controller update period.
+        # Crocoddyl controller runs at control_dt, so using dt_traj_opt here can
+        # introduce a persistent reference phase lag (e.g. 20ms control vs 50ms reference step).
+        reference_index = int(current_time / self.control_dt)
         reference_index = min(reference_index, len(self.traj_state_ref) - 1)
         
         try:
@@ -2801,7 +2805,7 @@ def create_default_config(filename='numeric_sim_config.yaml'):
 def main():
     """Main function"""
     parser = argparse.ArgumentParser(description='Numeric simulation for MPC controller')
-    parser.add_argument('--config', type=str, default='numeric_sim_config_catch_fast.yaml',
+    parser.add_argument('--config', type=str, default='numeric_sim_config_hover.yaml',
                        help='Configuration file path')
     parser.add_argument('--create-config', action='store_true',
                        help='Create default configuration file and exit')

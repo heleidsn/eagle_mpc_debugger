@@ -63,7 +63,8 @@ class TrajectoryPublisher:
         
         # main parameters
         self.robot_name = rospy.get_param('~robot_name', 's500_uam')     # s500, s500_uam, hexacopter370_flying_arm_3
-        self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon')   # displacement, catch_vicon
+        # YAML temp_trajectory is always loaded first; name figure8 / minimum_snap / min_snap replaces traj_state_ref.
+        self.trajectory_name = rospy.get_param('~trajectory_name', 'catch_vicon')
         self.dt_traj_opt = rospy.get_param('~dt_traj_opt', 10)  # ms
         
         self.simulation_actuation_method = 'full' # full, quadrotor
@@ -104,6 +105,27 @@ class TrajectoryPublisher:
         self.publish_planned_trajectory_enabled = rospy.get_param('~publish_planned_trajectory', False)
         self.publish_wholebody_state_enabled = rospy.get_param('~publish_wholebody_state', False)
         self.publish_reference_trajectory_enabled = rospy.get_param('~publish_reference_trajectory', False)
+        self.publish_current_trajectory_path_enabled = rospy.get_param('~publish_current_trajectory_path', True)
+        self.publish_current_planned_path_enabled = rospy.get_param('~publish_current_planned_path', True)
+        self.publish_uav_actual_path_enabled = rospy.get_param('~publish_uav_actual_path', True)
+        self.uav_actual_path_max_length = rospy.get_param('~uav_actual_path_max_length', 3000)
+        self.publish_ee_path_enabled = rospy.get_param('~publish_ee_path', True)
+        self.ee_actual_path_max_length = rospy.get_param('~ee_actual_path_max_length', 3000)
+        self.publish_local_position_path_enabled = rospy.get_param('~publish_local_position_path', True)
+        self.local_position_pose_topic = rospy.get_param('~local_position_pose_topic', '/mavros/local_position/pose')
+        self.local_position_path_max_length = rospy.get_param('~local_position_path_max_length', 3000)
+        # RViz Path发布与主控制环解耦：降频发布 + 缓存固定参考轨迹，减轻200Hz 环上的序列化开销
+        self.viz_path_publish_hz = float(rospy.get_param('~viz_path_publish_hz', 15.0))
+        self.viz_path_min_position_step = float(rospy.get_param('~viz_path_min_position_step', 0.0))
+        _viz_hz = max(self.viz_path_publish_hz, 0.5)
+        self._viz_path_min_period = 1.0 / _viz_hz
+        self._last_viz_path_pub_wall_t = 0.0
+        self._cached_reference_trajectory_path = None
+        self._cached_ee_planned_path = None
+        self._staged_mpc_planned_path = None
+        self._last_uav_path_position_sample = None
+        self._last_ee_path_position_sample = None
+        self._last_local_position_path_sample = None
         
         # Control limits for controller
         self.max_thrust = rospy.get_param('~max_thrust', 7.43 * 4)  # 7.43 for s500_uam, 7.1 for s500  # 10.5 for ??
@@ -153,6 +175,8 @@ class TrajectoryPublisher:
         self.mpc_final_cost = 0.0
         self.mpc_ref_index = 0
         self.traj_ref_index = 0
+        self._analytic_traj_controls = None
+        self._analytic_traj_us_squash = None
         
         self.mpc_controller = None
         self.l1_controller = None
@@ -182,6 +206,11 @@ class TrajectoryPublisher:
             self.odom_sub = rospy.Subscriber("/mavros/local_position/odom", Odometry, self.callback_model_local_position)
         else:
             self.odom_sub = rospy.Subscriber("/gazebo/model_states", ModelStates, self.callback_model_state_gazebo)
+
+        if self.publish_local_position_path_enabled:
+            self.local_position_pose_sub = rospy.Subscriber(
+                self.local_position_pose_topic, PoseStamped, self.local_position_pose_callback, queue_size=50
+            )
         
         # Publishers
         self.pose_pub = rospy.Publisher('/reference/pose', PoseStamped, queue_size=10)
@@ -235,6 +264,15 @@ class TrajectoryPublisher:
         self.path_pub = rospy.Publisher('uav_path', Path, queue_size=10)
         self.path_msg = Path()
         self.path_msg.header.frame_id = "map"
+        self.current_trajectory_path_pub = rospy.Publisher('/reference/current_trajectory', Path, queue_size=10)
+        self.current_planned_path_pub = rospy.Publisher('/mpc/current_planned_path', Path, queue_size=10)
+        self.ee_planned_path_pub = rospy.Publisher('/ee/planned_trajectory', Path, queue_size=10)
+        self.ee_actual_path_pub = rospy.Publisher('/ee/actual_trajectory', Path, queue_size=10)
+        self.ee_actual_path_msg = Path()
+        self.ee_actual_path_msg.header.frame_id = "map"
+        self.local_position_path_pub = rospy.Publisher('/uav/local_position_path', Path, queue_size=10)
+        self.local_position_path_msg = Path()
+        self.local_position_path_msg.header.frame_id = "map"
         
         # ------------------------------------------Services------------------------------------------
         rospy.Service('start_arm_test', Trigger, self.start_arm_test)  # !Note: the service is only used for arm test, do not use it in real flight
@@ -253,6 +291,7 @@ class TrajectoryPublisher:
         # Data recording and plotting services
         rospy.Service('save_recorded_data', Trigger, self.save_recorded_data_service)
         rospy.Service('plot_trajectory_data', Trigger, self.plot_trajectory_data_service)
+        rospy.Service('clean_path', Trigger, self.clean_path_service)
         
         # Wait for Gazebo services
         if self.use_simulation:
@@ -291,6 +330,8 @@ class TrajectoryPublisher:
         self.recording_start_time = None
         self.trajectory_end_time = None
         self.recording_stop_delay = 3.0  # Stop recording 2 seconds after trajectory ends
+        self.tracking_performance_computed = False
+        self.last_tracking_performance = {}
         self.recorded_data = {
             'time': [],
             'position': [],
@@ -421,8 +462,13 @@ class TrajectoryPublisher:
         rospy.loginfo(f"Publish reference trajectory: {self.publish_reference_trajectory_enabled}")
         
         rospy.loginfo(f"Control rate: {self.control_rate} Hz")
+        rospy.loginfo(
+            f"RViz path viz: publish_hz={self.viz_path_publish_hz} "
+            f"(period={self._viz_path_min_period:.4f}s), min_position_step={self.viz_path_min_position_step}"
+        )
         
         rospy.loginfo("Trajectory publisher initialized")
+        self._rebuild_cached_viz_paths()
         
     def apply_first_order_delay(self, input_signal, current_state, time_constant, dt):
         """
@@ -589,58 +635,141 @@ class TrajectoryPublisher:
         self.l1_controller.init_controller()
 
     def load_trajectory(self):
-        """Load and initialize trajectory"""
+        """Load trajectory from temp YAML, then optionally replace with analytic paths (figure8, minimum_snap)."""
         try:
-            # Get trajectory from eagle_mpc
-            # self.traj_solver, self.traj_state_ref, traj_problem, self.trajectory_obj = get_opt_traj(
-            #     self.robot_name,
-            #     self.trajectory_name,
-            #     self.dt_traj_opt,
-            #     self.use_squash,
-            #     self.yaml_path
-            # )
-            
+            self._analytic_traj_controls = None
+            self._analytic_traj_us_squash = None
+
             self.traj_solver, self.traj_state_ref, traj_problem, self.trajectory_obj = load_trajectory_from_generated_yaml(
                 self.dt_traj_opt,
                 self.use_squash
             )
-            
-            self.trajectory_duration = self.trajectory_obj.duration  # ms
-            rospy.loginfo(f"Loaded trajectory with duration: {self.trajectory_duration}ms")
-            
-            # Pre-calculate accelerations using finite differences, only used for other controllers
-            self.accelerations = []
-            dt = self.dt_traj_opt / 1000.0  # Convert to seconds
-            
-            for i in range(len(self.traj_state_ref)):
-                # Get current velocities in body frame
-                vel_body = self.traj_state_ref[i][7:10]  # [vx, vy, vz]
-                quat = self.traj_state_ref[i][3:7]  # [qx, qy, qz, qw]
-                
-                # Convert body velocities to world frame
-                R = quaternion_matrix([quat[0], quat[1], quat[2], quat[3]])[:3, :3]
-                vel_world = R @ vel_body
-                
-                # Calculate acceleration using finite differences
-                if i == 0:
-                    # Forward difference for first point
-                    vel_next = R @ self.traj_state_ref[i+1][7:10]
-                    acc = (vel_next - vel_world) / dt
-                elif i == len(self.traj_state_ref) - 1:
-                    # Backward difference for last point
-                    vel_prev = R @ self.traj_state_ref[i-1][7:10]
-                    acc = (vel_world - vel_prev) / dt
-                else:
-                    # Central difference for interior points
-                    vel_next = R @ self.traj_state_ref[i+1][7:10]
-                    vel_prev = R @ self.traj_state_ref[i-1][7:10]
-                    acc = (vel_next - vel_prev) / (2 * dt)
-                
-                self.accelerations.append(acc)
-            
+
+            tname = self.trajectory_name.lower().replace('-', '_')
+            if tname in ('figure8', 'fig8'):
+                self._load_analytic_figure8()
+            elif tname in ('minimum_snap', 'min_snap'):
+                self._load_analytic_minimum_snap()
+
+            self.trajectory_duration = int((len(self.traj_state_ref) - 1) * self.dt_traj_opt)
+            rospy.loginfo(
+                f"Trajectory duration: {self.trajectory_duration} ms, samples: {len(self.traj_state_ref)}"
+            )
+
+            self._compute_accelerations()
+
         except Exception as e:
             rospy.logerr(f"Failed to load trajectory: {str(e)}")
             raise
+
+    def _rebuild_analytic_reference_controls(self):
+        """Repeat nominal control from traj solver for each segment (analytic paths have no optimized u)."""
+        n = max(1, len(self.traj_state_ref) - 1)
+        u0 = np.asarray(self.traj_solver.us[0], dtype=float).copy()
+        u0s = np.asarray(self.traj_solver.us_squash[0], dtype=float).copy()
+        self._analytic_traj_controls = [u0.copy() for _ in range(n)]
+        self._analytic_traj_us_squash = [u0s.copy() for _ in range(n)]
+
+    def _reference_control_index(self):
+        if len(self.traj_state_ref) < 2:
+            return 0
+        return min(self.traj_ref_index, len(self.traj_state_ref) - 2)
+
+    def get_reference_traj_u(self):
+        i = self._reference_control_index()
+        if self._analytic_traj_controls is not None:
+            return self._analytic_traj_controls[min(i, len(self._analytic_traj_controls) - 1)]
+        return self.traj_solver.us[min(i, len(self.traj_solver.us) - 1)]
+
+    def get_reference_traj_u_squash(self):
+        i = self._reference_control_index()
+        if self._analytic_traj_us_squash is not None:
+            return self._analytic_traj_us_squash[min(i, len(self._analytic_traj_us_squash) - 1)]
+        return self.traj_solver.us_squash[min(i, len(self.traj_solver.us_squash) - 1)]
+
+    def _parse_min_snap_waypoints_param(self, wp_param):
+        from utils.analytic_trajectories import default_min_snap_waypoints
+
+        if wp_param is None:
+            return default_min_snap_waypoints()
+        out = []
+        for w in wp_param:
+            d = {'time': float(w['time']), 'position': np.array(w['position'], dtype=float)}
+            if 'velocity' in w and w['velocity'] is not None:
+                d['velocity'] = np.array(w['velocity'], dtype=float)
+            if 'acceleration' in w and w['acceleration'] is not None:
+                d['acceleration'] = np.array(w['acceleration'], dtype=float)
+            out.append(d)
+        return out
+
+    def _load_analytic_figure8(self):
+        from utils.analytic_trajectories import generate_figure8_trajectory, states_from_flat_trajectory
+
+        center = rospy.get_param('~figure8_center', [0.0, 0.0, 1.5])
+        radius = float(rospy.get_param('~figure8_radius', 2.0))
+        duration = float(rospy.get_param('~figure8_duration_sec', 8.0))
+        ramp = float(rospy.get_param('~figure8_ramp_time', 1.0))
+        dt_s = self.dt_traj_opt / 1000.0
+        c = np.array(center, dtype=float).reshape(-1)
+        if c.size < 3:
+            raise ValueError("~figure8_center must be [x, y, z]")
+        height = float(c[2])
+        traj = generate_figure8_trajectory(c, radius, height, duration, dt_s, ramp)
+        template = np.array(self.traj_state_ref[0], dtype=float)
+        self.traj_state_ref = states_from_flat_trajectory(template, self.robot_name, traj)
+        self._rebuild_analytic_reference_controls()
+        rospy.loginfo(f"Analytic figure8: {len(self.traj_state_ref)} samples, T={duration:.1f}s")
+
+    def _load_analytic_minimum_snap(self):
+        from utils import analytic_trajectories as at
+        from utils.analytic_trajectories import states_from_flat_trajectory
+
+        if not at.MINSNAP_AVAILABLE:
+            raise ImportError(
+                "minimum_snap / min_snap requires minsnap_trajectories and scipy "
+                "(e.g. pip install minsnap_trajectories scipy)"
+            )
+        dt_s = self.dt_traj_opt / 1000.0
+        wp_param = rospy.get_param('~min_snap_waypoints', None)
+        waypoints = self._parse_min_snap_waypoints_param(wp_param)
+        traj = at.generate_minimum_snap_trajectory(waypoints, dt=dt_s)
+        template = np.array(self.traj_state_ref[0], dtype=float)
+        self.traj_state_ref = states_from_flat_trajectory(template, self.robot_name, traj)
+        self._rebuild_analytic_reference_controls()
+        rospy.loginfo(f"Minimum-snap trajectory: {len(self.traj_state_ref)} samples")
+
+    def _compute_accelerations(self):
+        """Finite-difference accelerations in world frame for PX4 / geometric tracking."""
+        if self.trajectory_obj is not None and hasattr(self.trajectory_obj, 'robot_model'):
+            nq = self.trajectory_obj.robot_model.nq
+        elif self.mpc_controller is not None and hasattr(self.mpc_controller, 'state'):
+            nq = self.mpc_controller.state.nq
+        else:
+            # Fallback for startup edge cases; s500/s500_uam both use 7D base pose.
+            nq = 7
+
+        def linear_vel_world_from_state(x):
+            vel_body = np.array(x[nq:nq + 3], dtype=float)
+            quat = x[3:7]
+            R = quaternion_matrix([quat[0], quat[1], quat[2], quat[3]])[:3, :3]
+            return R @ vel_body
+
+        self.accelerations = []
+        dt = self.dt_traj_opt / 1000.0
+        n = len(self.traj_state_ref)
+        for i in range(n):
+            vel_world = linear_vel_world_from_state(self.traj_state_ref[i])
+            if i == 0:
+                vel_next = linear_vel_world_from_state(self.traj_state_ref[i + 1])
+                acc = (vel_next - vel_world) / dt
+            elif i == n - 1:
+                vel_prev = linear_vel_world_from_state(self.traj_state_ref[i - 1])
+                acc = (vel_world - vel_prev) / dt
+            else:
+                vel_next = linear_vel_world_from_state(self.traj_state_ref[i + 1])
+                vel_prev = linear_vel_world_from_state(self.traj_state_ref[i - 1])
+                acc = (vel_next - vel_prev) / (2 * dt)
+            self.accelerations.append(acc)
 
     def controller_callback(self, event):
         """Timer callback to publish control command
@@ -678,6 +807,7 @@ class TrajectoryPublisher:
                 if self.trajectory_end_time is None:
                     self.trajectory_end_time = rospy.Time.now()
                     rospy.loginfo("Trajectory finished - will stop recording in 2 seconds")
+                    self.compute_and_log_tracking_performance()
                 
                 rospy.loginfo("Trajectory finished")
                 
@@ -689,30 +819,22 @@ class TrajectoryPublisher:
             self.traj_ref_index = 0
             
         ref_state = self.traj_state_ref[self.traj_ref_index]
+        if self.publish_uav_actual_path_enabled:
+            self._append_uav_actual_path_point()
+        if self.publish_ee_path_enabled:
+            self._append_ee_actual_path_point()
         
         if self.control_mode == 'PX4' or self.control_mode == 'Geometric':
             # Get rotation matrix from quaternion
             R = quaternion_matrix([ref_state[3], ref_state[4], ref_state[5], ref_state[6]])[:3, :3]
+            nq = self.mpc_controller.state.nq
+            vel_body = ref_state[nq:nq + 3]
+            vel_world = R @ vel_body
             
-            if self.robot_name == 's500_uam':
-                vel_world = ref_state[9:12]
-                # acc_world = self.accelerations[self.traj_ref_index]
-                
-                acc_world = np.zeros(3)
-                
-                quat = ref_state[3:7]
-                yaw = euler_from_quaternion([quat[0], quat[1], quat[2], quat[3]])[2]
-            else:
-                # Convert body velocities to world frame
-                vel_body = ref_state[7:10]
-                vel_world = R @ vel_body
-                
-                # Get pre-calculated acceleration
-                acc_world = self.accelerations[self.traj_ref_index]
-                
-                # Get yaw from quaternion
-                quat = ref_state[3:7]
-                yaw = euler_from_quaternion([quat[0], quat[1], quat[2], quat[3]])[2]
+            # Get pre-calculated world-frame acceleration from reference
+            acc_world = self.accelerations[self.traj_ref_index]
+            quat = ref_state[3:7]
+            yaw = euler_from_quaternion([quat[0], quat[1], quat[2], quat[3]])[2]
                 
             if self.traj_finished:
                 vel_world = np.zeros(3)
@@ -780,6 +902,10 @@ class TrajectoryPublisher:
                 
             # 4. Publish debug info
             self.publish_mpc_l1_debug_data()
+
+            # 4.1 Stage current MPC planned horizon Path (published on viz throttle)
+            if self.publish_current_planned_path_enabled:
+                self.stage_current_mpc_planned_path()
             
             # 5. Publish planned trajectory
             if self.publish_planned_trajectory_enabled:
@@ -858,6 +984,8 @@ class TrajectoryPublisher:
         # Handle data recording
         self.handle_data_recording()
 
+        self._maybe_flush_viz_path_publishes()
+
     def get_mpc_command(self):
         """Get MPC control command."""
         if self.use_multi_thread:
@@ -928,7 +1056,7 @@ class TrajectoryPublisher:
         self.control_command_mpc = self.mpc_controller.solver.us_squash[0]
         
         # get control reference
-        self.control_ref_mpc = self.traj_solver.us[min(self.traj_ref_index, len(self.traj_solver.us)-1)]
+        self.control_ref_mpc = self.get_reference_traj_u()
         
         # print(f"control_command_mpc: {self.control_command_mpc}")
         
@@ -1206,7 +1334,7 @@ class TrajectoryPublisher:
         # 1: using planned trajectory
         if self.l1_control_method == 'planned' or self.control_mode == 'PX4':
             ref_state = self.traj_state_ref[self.traj_ref_index]
-            ref_control = self.traj_solver.us[min(self.traj_ref_index, len(self.traj_solver.us)-1)]
+            ref_control = self.get_reference_traj_u()
         elif self.l1_control_method == 'mpc_next':
             # mpc_planned_state = self.mpc_controller.solver.xs[0]
             ref_state = self.mpc_controller.solver.xs[1]
@@ -1373,15 +1501,15 @@ class TrajectoryPublisher:
         self.state_mpc_next_time_step = self.mpc_controller.solver.xs[1]
         tracking_error = self.traj_state_ref[self.traj_ref_index][:3] - self.state[:3]
         
-        if self.l1_control_method == 'simulation':
+        if self.l1_control_method == 'simulation':  # 直接使用MPC规划的下一时刻的角速度
             self.roll_rate_ref = self.state_next[self.mpc_controller.robot_model.nq + 3]
             self.pitch_rate_ref = self.state_next[self.mpc_controller.robot_model.nq + 4] + tracking_error[0] * 0
             self.yaw_rate_ref = self.state_next[self.mpc_controller.robot_model.nq + 5]
-        elif self.l1_control_method == 'planned':
+        elif self.l1_control_method == 'planned':   # 使用规划的下一时刻的角速度
             self.roll_rate_ref = self.traj_state_ref[self.traj_ref_index][self.mpc_controller.robot_model.nq + 3]
             self.pitch_rate_ref = self.traj_state_ref[self.traj_ref_index][self.mpc_controller.robot_model.nq + 4]
             self.yaw_rate_ref = self.traj_state_ref[self.traj_ref_index][self.mpc_controller.robot_model.nq + 5]
-        elif self.l1_control_method == 'mpc_next':
+        elif self.l1_control_method == 'mpc_next':  # 使用MPC规划的下一时刻的角速度 + 额外的角速度控制指令
             # mpc next state + additional body rate control command
             self.roll_rate_ref_next_step = self.state_mpc_next_time_step[self.mpc_controller.robot_model.nq + 3]
             self.pitch_rate_ref_next_step = self.state_mpc_next_time_step[self.mpc_controller.robot_model.nq + 4]
@@ -1790,12 +1918,15 @@ class TrajectoryPublisher:
                             pose.orientation.y,
                             pose.orientation.z,
                             pose.orientation.w]
-            self.state[7+self.arm_joint_number:10+self.arm_joint_number] = [twist.linear.x,
-                                twist.linear.y,
-                                twist.linear.z]
-            self.state[10+self.arm_joint_number:13+self.arm_joint_number] = [twist.angular.x,
-                                twist.angular.y,
-                                twist.angular.z]
+            # Gazebo model_states twist is in world frame; MPC state expects body-frame v/w.
+            quat = self.state[3:7]
+            R = quaternion_matrix([quat[0], quat[1], quat[2], quat[3]])[:3, :3]
+            v_world = np.array([twist.linear.x, twist.linear.y, twist.linear.z], dtype=float)
+            w_world = np.array([twist.angular.x, twist.angular.y, twist.angular.z], dtype=float)
+            v_body = R.T @ v_world
+            w_body = R.T @ w_world
+            self.state[7+self.arm_joint_number:10+self.arm_joint_number] = v_body
+            self.state[10+self.arm_joint_number:13+self.arm_joint_number] = w_body
         except ValueError:
             rospy.logerr("Robot model not found in Gazebo model states")
             return  
@@ -1844,6 +1975,53 @@ class TrajectoryPublisher:
         self.traj_finished = False
         
         return TriggerResponse(success=True, message="Trajectory initialized.")
+
+    def local_position_pose_callback(self, msg):
+        """Accumulate MAVROS local_position pose into a Path for RViz."""
+        pos = np.array([msg.pose.position.x, msg.pose.position.y, msg.pose.position.z], dtype=float)
+        if self.viz_path_min_position_step > 0.0 and self._last_local_position_path_sample is not None:
+            if np.linalg.norm(pos - self._last_local_position_path_sample) < self.viz_path_min_position_step:
+                return
+        self._last_local_position_path_sample = pos.copy()
+
+        pose_msg = PoseStamped()
+        pose_msg.header = msg.header
+        if not pose_msg.header.frame_id:
+            pose_msg.header.frame_id = "map"
+        pose_msg.pose = msg.pose
+
+        self.local_position_path_msg.header.stamp = pose_msg.header.stamp
+        self.local_position_path_msg.header.frame_id = pose_msg.header.frame_id
+        self.local_position_path_msg.poses.append(pose_msg)
+
+        if len(self.local_position_path_msg.poses) > self.local_position_path_max_length:
+            self.local_position_path_msg.poses = self.local_position_path_msg.poses[-self.local_position_path_max_length :]
+
+    def clean_path_service(self, req):
+        """Clear accumulated actual/history paths; does not affect reference or MPC planned paths."""
+        self.path_msg.poses = []
+        self.ee_actual_path_msg.poses = []
+        self.local_position_path_msg.poses = []
+        self._last_uav_path_position_sample = None
+        self._last_ee_path_position_sample = None
+        self._last_local_position_path_sample = None
+
+        empty_uav = Path()
+        empty_uav.header.stamp = rospy.Time.now()
+        empty_uav.header.frame_id = "map"
+        self.path_pub.publish(empty_uav)
+
+        empty_ee = Path()
+        empty_ee.header.stamp = rospy.Time.now()
+        empty_ee.header.frame_id = "map"
+        self.ee_actual_path_pub.publish(empty_ee)
+
+        empty_lp = Path()
+        empty_lp.header.stamp = rospy.Time.now()
+        empty_lp.header.frame_id = "map"
+        self.local_position_path_pub.publish(empty_lp)
+
+        return TriggerResponse(success=True, message="Cleared uav_path, ee actual, and local_position paths.")
     
     def start_l1_control(self, req):
         self.l1_controller.init_controller()
@@ -1882,7 +2060,7 @@ class TrajectoryPublisher:
         nq = self.mpc_controller.robot_model.nq
         nRotors = self.mpc_controller.platform_params.n_rotors
         
-        u = self.traj_solver.us_squash[self.traj_ref_index-1]
+        u = self.get_reference_traj_u_squash()
         
         # publish  t, q, v, thrusts, tau
         self.statePub_target.publish(0.123, x[:nq], x[nq:], u[:nRotors], u[nRotors:])
@@ -1912,22 +2090,6 @@ class TrajectoryPublisher:
             vs.append(x[nq:])
             ts.append(0.1)
         self.partialTrajectoryPub.publish(ts[0::2], qs[0::2], vs[0::2])
-        
-        # Add current position to the path
-        pose_msg = PoseStamped()
-        pose_msg.header.stamp = rospy.Time.now()
-        pose_msg.header.frame_id = "map"
-        pose_msg.pose.position.x = self.state[0]
-        pose_msg.pose.position.y = self.state[1]
-        pose_msg.pose.position.z = self.state[2]
-        self.path_msg.poses.append(pose_msg)
-        
-        # 限制路径长度
-        if len(self.path_msg.poses) > 1000:
-            self.path_msg.poses.pop(0)  # 移除最早的点
-        
-        # Publish the path
-        self.path_pub.publish(self.path_msg)
         
     def set_grasp_target(self, position, grasp_time):
         """
@@ -2135,6 +2297,226 @@ class TrajectoryPublisher:
         else:
             rospy.logwarn("No reference trajectory available")
 
+    def _rebuild_cached_viz_paths(self):
+        """Build reference / EE-planned Path messages once per trajectory load (heavy O(N) work)."""
+        self._cached_reference_trajectory_path = None
+        self._cached_ee_planned_path = None
+        if not hasattr(self, 'traj_state_ref') or len(self.traj_state_ref) == 0:
+            return
+
+        path_msg = Path()
+        path_msg.header.stamp = rospy.Time.now()
+        path_msg.header.frame_id = "map"
+        for x in self.traj_state_ref:
+            pose = PoseStamped()
+            pose.header = path_msg.header
+            pose.pose.position.x = float(x[0])
+            pose.pose.position.y = float(x[1])
+            pose.pose.position.z = float(x[2])
+            pose.pose.orientation.x = float(x[3])
+            pose.pose.orientation.y = float(x[4])
+            pose.pose.orientation.z = float(x[5])
+            pose.pose.orientation.w = float(x[6])
+            path_msg.poses.append(pose)
+        self._cached_reference_trajectory_path = path_msg
+
+        if self.arm_enabled and self.robot_name == 's500_uam':
+            planned_path_msg = Path()
+            planned_path_msg.header.stamp = rospy.Time.now()
+            planned_path_msg.header.frame_id = "map"
+            for x in self.traj_state_ref:
+                ee_pose = self.get_ee_pose_from_state(x)
+                if ee_pose is None:
+                    continue
+                ee_translation, ee_quat = ee_pose
+                pose = PoseStamped()
+                pose.header = planned_path_msg.header
+                pose.pose.position.x = float(ee_translation[0])
+                pose.pose.position.y = float(ee_translation[1])
+                pose.pose.position.z = float(ee_translation[2])
+                pose.pose.orientation.x = float(ee_quat.x)
+                pose.pose.orientation.y = float(ee_quat.y)
+                pose.pose.orientation.z = float(ee_quat.z)
+                pose.pose.orientation.w = float(ee_quat.w)
+                planned_path_msg.poses.append(pose)
+            if len(planned_path_msg.poses) > 0:
+                self._cached_ee_planned_path = planned_path_msg
+
+        n_ref = len(self._cached_reference_trajectory_path.poses)
+        n_ee = len(self._cached_ee_planned_path.poses) if self._cached_ee_planned_path else 0
+        rospy.loginfo(f"Viz path caches built: reference {n_ref} points" + (f", EE planned {n_ee} points" if n_ee else ""))
+
+    def _maybe_flush_viz_path_publishes(self):
+        """Rate-limited publish of Path topics so the control timer stays light."""
+        now = time.time()
+        if now - self._last_viz_path_pub_wall_t < self._viz_path_min_period:
+            return
+        self._last_viz_path_pub_wall_t = now
+        stamp = rospy.Time.now()
+
+        if self.publish_current_trajectory_path_enabled and self._cached_reference_trajectory_path is not None:
+            self._cached_reference_trajectory_path.header.stamp = stamp
+            self.current_trajectory_path_pub.publish(self._cached_reference_trajectory_path)
+
+        if self.publish_current_planned_path_enabled and self._staged_mpc_planned_path is not None:
+            if len(self._staged_mpc_planned_path.poses) > 0:
+                self._staged_mpc_planned_path.header.stamp = stamp
+                self.current_planned_path_pub.publish(self._staged_mpc_planned_path)
+
+        if self.publish_uav_actual_path_enabled and len(self.path_msg.poses) > 0:
+            self.path_msg.header.stamp = stamp
+            self.path_pub.publish(self.path_msg)
+
+        if self.publish_ee_path_enabled and self.arm_enabled and self.robot_name == 's500_uam':
+            if self._cached_ee_planned_path is not None and len(self._cached_ee_planned_path.poses) > 0:
+                self._cached_ee_planned_path.header.stamp = stamp
+                self.ee_planned_path_pub.publish(self._cached_ee_planned_path)
+            if len(self.ee_actual_path_msg.poses) > 0:
+                self.ee_actual_path_msg.header.stamp = stamp
+                self.ee_actual_path_pub.publish(self.ee_actual_path_msg)
+
+        if self.publish_local_position_path_enabled and len(self.local_position_path_msg.poses) > 0:
+            self.local_position_path_msg.header.stamp = stamp
+            self.local_position_path_pub.publish(self.local_position_path_msg)
+
+    def publish_current_trajectory_path(self):
+        """Rebuild cached reference Path (e.g. after trajectory reload); RViz publish is throttled."""
+        self._rebuild_cached_viz_paths()
+
+    def stage_current_mpc_planned_path(self):
+        """Refresh staged MPC horizon Path from solver (small); actual publish is throttled."""
+        if self.mpc_controller is None:
+            return
+        if not hasattr(self.mpc_controller, 'solver') or not hasattr(self.mpc_controller.solver, 'xs'):
+            return
+
+        planned_states = self.mpc_controller.solver.xs
+        if planned_states is None or len(planned_states) == 0:
+            self._staged_mpc_planned_path = None
+            return
+
+        path_msg = Path()
+        path_msg.header.stamp = rospy.Time.now()
+        path_msg.header.frame_id = "map"
+
+        for x in planned_states:
+            if len(x) < 7:
+                continue
+            pose = PoseStamped()
+            pose.header = path_msg.header
+            pose.pose.position.x = float(x[0])
+            pose.pose.position.y = float(x[1])
+            pose.pose.position.z = float(x[2])
+            pose.pose.orientation.x = float(x[3])
+            pose.pose.orientation.y = float(x[4])
+            pose.pose.orientation.z = float(x[5])
+            pose.pose.orientation.w = float(x[6])
+            path_msg.poses.append(pose)
+
+        self._staged_mpc_planned_path = path_msg if len(path_msg.poses) > 0 else None
+
+    def publish_current_planned_path(self):
+        """Compatibility: only refresh staged path; use flush for publish timing."""
+        self.stage_current_mpc_planned_path()
+
+    def _append_uav_actual_path_point(self):
+        """Append UAV pose to path buffer; publish via _maybe_flush_viz_path_publishes."""
+        if self.state is None or len(self.state) < 7:
+            return
+
+        pos = np.array(self.state[0:3], dtype=float)
+        if self.viz_path_min_position_step > 0.0 and self._last_uav_path_position_sample is not None:
+            if np.linalg.norm(pos - self._last_uav_path_position_sample) < self.viz_path_min_position_step:
+                return
+        self._last_uav_path_position_sample = pos.copy()
+
+        pose_msg = PoseStamped()
+        pose_msg.header.stamp = rospy.Time.now()
+        pose_msg.header.frame_id = "map"
+        pose_msg.pose.position.x = float(self.state[0])
+        pose_msg.pose.position.y = float(self.state[1])
+        pose_msg.pose.position.z = float(self.state[2])
+        pose_msg.pose.orientation.x = float(self.state[3])
+        pose_msg.pose.orientation.y = float(self.state[4])
+        pose_msg.pose.orientation.z = float(self.state[5])
+        pose_msg.pose.orientation.w = float(self.state[6])
+
+        self.path_msg.header.stamp = pose_msg.header.stamp
+        self.path_msg.header.frame_id = "map"
+        self.path_msg.poses.append(pose_msg)
+
+        if len(self.path_msg.poses) > self.uav_actual_path_max_length:
+            self.path_msg.poses = self.path_msg.poses[-self.uav_actual_path_max_length :]
+
+    def publish_uav_actual_path(self):
+        """Deprecated per-cycle name: append only."""
+        self._append_uav_actual_path_point()
+
+    def get_ee_pose_from_state(self, state_q):
+        """Get end-effector pose from joint state q."""
+        if not (self.arm_enabled and self.robot_name == 's500_uam'):
+            return None
+        if self.trajectory_obj is None or not hasattr(self.trajectory_obj, 'robot_model'):
+            return None
+
+        model = self.trajectory_obj.robot_model
+        if len(state_q) < model.nq:
+            return None
+
+        try:
+            gripper_frame_id = model.getFrameId("gripper_link")
+            if gripper_frame_id >= model.nframes:
+                return None
+
+            data = model.createData()
+            q = np.array(state_q[:model.nq], dtype=float)
+            pin.forwardKinematics(model, data, q)
+            pin.updateFramePlacements(model, data)
+            gripper_pose = data.oMf[gripper_frame_id]
+            quat = pin.Quaternion(gripper_pose.rotation)
+            return gripper_pose.translation, quat
+        except Exception as e:
+            rospy.logwarn_throttle(1.0, f"Failed to compute EE pose: {e}")
+            return None
+
+    def _append_ee_actual_path_point(self):
+        """Append EE pose to actual path; planned EE path is cached. Publish via viz flush."""
+        if not (self.arm_enabled and self.robot_name == 's500_uam'):
+            return
+
+        ee_pose_current = self.get_ee_pose_from_state(self.state)
+        if ee_pose_current is None:
+            return
+
+        ee_translation, ee_quat = ee_pose_current
+        pos = np.array(ee_translation, dtype=float)
+        if self.viz_path_min_position_step > 0.0 and self._last_ee_path_position_sample is not None:
+            if np.linalg.norm(pos - self._last_ee_path_position_sample) < self.viz_path_min_position_step:
+                return
+        self._last_ee_path_position_sample = pos.copy()
+
+        pose_current = PoseStamped()
+        pose_current.header.stamp = rospy.Time.now()
+        pose_current.header.frame_id = "map"
+        pose_current.pose.position.x = float(ee_translation[0])
+        pose_current.pose.position.y = float(ee_translation[1])
+        pose_current.pose.position.z = float(ee_translation[2])
+        pose_current.pose.orientation.x = float(ee_quat.x)
+        pose_current.pose.orientation.y = float(ee_quat.y)
+        pose_current.pose.orientation.z = float(ee_quat.z)
+        pose_current.pose.orientation.w = float(ee_quat.w)
+
+        self.ee_actual_path_msg.header.stamp = pose_current.header.stamp
+        self.ee_actual_path_msg.header.frame_id = "map"
+        self.ee_actual_path_msg.poses.append(pose_current)
+
+        if len(self.ee_actual_path_msg.poses) > self.ee_actual_path_max_length:
+            self.ee_actual_path_msg.poses = self.ee_actual_path_msg.poses[-self.ee_actual_path_max_length :]
+
+    def publish_ee_paths(self):
+        """Deprecated per-cycle name: append EE actual only; planned path uses cache."""
+        self._append_ee_actual_path_point()
+
     def detect_environment(self):
         """Auto detect the running environment"""
         
@@ -2167,6 +2549,8 @@ class TrajectoryPublisher:
         self.recording_enabled = True
         self.recording_start_time = rospy.Time.now()
         self.trajectory_end_time = None
+        self.tracking_performance_computed = False
+        self.last_tracking_performance = {}
         
         # Clear previous recorded data
         for key in self.recorded_data.keys():
@@ -2182,6 +2566,69 @@ class TrajectoryPublisher:
         
         # Save data to file
         # self.save_recorded_data()
+
+    def compute_and_log_tracking_performance(self):
+        """Compute and print trajectory tracking performance once per run."""
+        if self.tracking_performance_computed:
+            return
+
+        pos = np.asarray(self.recorded_data.get('position', []), dtype=float)
+        ref_pos = np.asarray(self.recorded_data.get('reference_position', []), dtype=float)
+        vel = np.asarray(self.recorded_data.get('velocity', []), dtype=float)
+        ref_vel = np.asarray(self.recorded_data.get('reference_velocity', []), dtype=float)
+
+        n = min(len(pos), len(ref_pos), len(vel), len(ref_vel))
+        if n <= 0:
+            rospy.logwarn("Tracking performance skipped: no recorded samples.")
+            self.tracking_performance_computed = True
+            self.last_tracking_performance = {}
+            return
+
+        pos = pos[:n]
+        ref_pos = ref_pos[:n]
+        vel = vel[:n]
+        ref_vel = ref_vel[:n]
+
+        pos_err_vec = pos - ref_pos
+        vel_err_vec = vel - ref_vel
+        pos_err_norm = np.linalg.norm(pos_err_vec, axis=1)
+        vel_err_norm = np.linalg.norm(vel_err_vec, axis=1)
+
+        metrics = {
+            'num_samples': int(n),
+            'position_error_mean': float(np.mean(pos_err_norm)),
+            'position_error_rmse': float(np.sqrt(np.mean(np.square(pos_err_norm)))),
+            'position_error_max': float(np.max(pos_err_norm)),
+            'position_error_mae_xyz': np.mean(np.abs(pos_err_vec), axis=0).tolist(),
+            'velocity_error_mean': float(np.mean(vel_err_norm)),
+            'velocity_error_rmse': float(np.sqrt(np.mean(np.square(vel_err_norm)))),
+            'velocity_error_max': float(np.max(vel_err_norm)),
+            'velocity_error_mae_xyz': np.mean(np.abs(vel_err_vec), axis=0).tolist(),
+        }
+
+        self.tracking_performance_computed = True
+        self.last_tracking_performance = metrics
+
+        p_mae = metrics['position_error_mae_xyz']
+        v_mae = metrics['velocity_error_mae_xyz']
+        rospy.loginfo(
+            "[Tracking Performance] samples=%d | "
+            "pos(mean/rmse/max)=%.4f / %.4f / %.4f m | "
+            "vel(mean/rmse/max)=%.4f / %.4f / %.4f (state units/s)",
+            metrics['num_samples'],
+            metrics['position_error_mean'],
+            metrics['position_error_rmse'],
+            metrics['position_error_max'],
+            metrics['velocity_error_mean'],
+            metrics['velocity_error_rmse'],
+            metrics['velocity_error_max'],
+        )
+        rospy.loginfo(
+            "[Tracking Performance] pos MAE xyz = [%.4f, %.4f, %.4f] m | "
+            "vel MAE xyz = [%.4f, %.4f, %.4f] (state units/s)",
+            p_mae[0], p_mae[1], p_mae[2],
+            v_mae[0], v_mae[1], v_mae[2],
+        )
         
     def handle_data_recording(self):
         """Handle data recording logic in main control loop"""

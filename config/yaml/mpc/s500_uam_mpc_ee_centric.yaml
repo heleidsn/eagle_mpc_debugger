@@ -9,14 +9,24 @@ mpc_controller:
   solver: "SolverSbFDDP"
   iters: 10
   dt: 50
+  # Dedicated EE-centric MPC parameters (used by Crocoddyl EE-centric implementation)
+  horizon: 20
+  max_iterations: 10
+  enable_ee_tracking_cost: true
+  ee_frame_name: "gripper_link"
+  ee_tracking_weight: 500.0
+  ee_terminal_weight: 1000.0
 
   rail_weight: 1
-  rail_activation_weights: [10, 10, 10, 1, 1, 1, 10, 10, 1, 1, 1, 1, 1, 1, 1, 1]   # need to add some weights for arm joints
-  # rail_activation_weights: [100, 100, 100, 5, 5, 5, 20, 50, 1, 1, 1, 1, 1, 1, 1, 1]   # need to add some weights for arm joints
-  # rail_activation_weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-  # rail_activation_weights: [0, 0, 0, 0, 0, 0, 10000, 10000, 0, 0, 0, 0, 0, 0, 1, 1]   # need to add some weights for arm joints
+  # EE-centric tuning:
+  # - reduce base pose/angular-velocity penalties
+  # - increase arm joint position/velocity penalties
+  # This makes the optimizer prioritize arm motion consistency, which improves EE trajectory tracking.
+  # state tangent order:
+  # [px, py, pz, rx, ry, rz, j1, j2, vx, vy, vz, wx, wy, wz, vj1, vj2]
+  rail_activation_weights: [0.5, 0.5, 0.5, 0.2, 0.2, 0.2, 30, 30, 0.5, 0.5, 0.5, 0.2, 0.2, 0.2, 20, 20]
   rail_control_weight: 0
-  
+
   control_reference: [4.94, 4.94, 4.94, 4.94, 0, 0]
 
   # State limits parameters for rail-mpc

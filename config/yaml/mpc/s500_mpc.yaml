@@ -22,8 +22,8 @@ mpc_controller:
   carrot_state_limits_u_bound: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
   carrot_state_limits_l_bound: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
-  rail_weight: 100
-  rail_activation_weights: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+  rail_weight: 1
+  rail_activation_weights: [100, 100, 100, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 
   rail_control_weight: 0
   control_reference: [5, 5, 5, 5]
