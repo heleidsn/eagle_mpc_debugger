@@ -6,8 +6,11 @@
     <!-- vehicle model and world -->
     <arg name="est" default="ekf2"/>
     <arg name="vehicle" default="s500"/>
-    <arg name="world" default="$(find eagle_mpc_debugger)/worlds/empty.world"/>
-    <arg name="sdf" default="$(find eagle_mpc_debugger)/models/sdf/s500_uam/s500.sdf"/>
+    <arg name="world_name" default="empty"/>
+    <arg name="model_type" default="real"/>
+    <arg name="world" default="$(find eagle_mpc_debugger)/worlds/$(arg world_name).world"/>
+    <arg name="sdf" value="$(find eagle_mpc_debugger)/models/sdf/s500_uam/s500.sdf" if="$(eval arg('model_type') == 'real')"/>
+    <arg name="sdf" value="$(find eagle_mpc_debugger)/models/sdf/s500_uam/s500_ideal.sdf" if="$(eval arg('model_type') == 'ideal')"/>
 
     <!-- gazebo configs -->
     <arg name="gui" default="true"/>
