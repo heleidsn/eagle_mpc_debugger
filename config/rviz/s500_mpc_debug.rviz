@@ -4,9 +4,10 @@ Panels:
     Name: Displays
     Property Tree Widget:
       Expanded:
-        - /Pose1
+        - /EE axes1/Namespaces1
+        - /Axes1
       Splitter Ratio: 0.5
-    Tree Height: 442
+    Tree Height: 528
   - Class: rviz/Selection
     Name: Selection
   - Class: rviz/Tool Properties
@@ -239,6 +240,31 @@ Visualization Manager:
       Topic: /mavros/local_position/pose
       Unreliable: false
       Value: true
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Marker Topic: /suite_mpc/robot_markers
+      Name: Robot
+      Namespaces:
+        suite_mpc_robot: true
+      Queue Size: 100
+      Value: true
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Marker Topic: /suite_mpc/ee_axes
+      Name: EE axes
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: true
+    - Alpha: 1
+      Class: rviz/Axes
+      Enabled: true
+      Length: 0.30000001192092896
+      Name: Axes
+      Radius: 0.019999999552965164
+      Reference Frame: <Fixed Frame>
+      Show Trail: false
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -267,7 +293,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 4.645079612731934
+      Distance: 4.554592609405518
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -275,33 +301,33 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 0.457774817943573
-        Y: -0.22604382038116455
-        Z: 0.7187363505363464
+        X: 0.14269079267978668
+        Y: 0.10047255456447601
+        Z: 1.1888973712921143
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.5947974324226379
+      Pitch: 0.10979744046926498
       Target Frame: map
-      Yaw: 0.6399906873703003
+      Yaw: 4.683149814605713
     Saved: ~
 Window Geometry:
   Displays:
-    collapsed: false
-  Height: 1437
-  Hide Left Dock: false
+    collapsed: true
+  Height: 2123
+  Hide Left Dock: true
   Hide Right Dock: false
-  QMainWindow State: 000000ff00000000fd00000002000000000000020b000004cdfc0200000004fb000000100044006900730070006c0061007900730100000056000002780000012600fffffffb0000001200530065006c0065006300740069006f006e01000002d7000001240000008600fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007301000004040000011f0000008600fffffffb0000000a0056006900650077007300000002a3000000ec000000ec00ffffff00000003000006ee0000004bfc0100000001fb0000000800540069006d00650100000000000006ee0000054300ffffff000004da000004cd00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  QMainWindow State: 000000ff00000000fd0000000200000000000003cb00000400fc0200000004fb000000100044006900730070006c0061007900730000000056000002ce0000012600fffffffb0000001200530065006c0065006300740069006f006e000000032d000000910000008600fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007300000003c70000008f0000008600fffffffb0000000a0056006900650077007300000002a3000000ec000000ec00ffffff0000000300000eb80000004bfc0100000001fb0000000800540069006d0065010000000000000eb80000054300ffffff00000eb80000077b00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Selection:
-    collapsed: false
+    collapsed: true
   Time:
     collapsed: false
   Tool Properties:
-    collapsed: false
+    collapsed: true
   Views:
     collapsed: false
-  Width: 1774
-  X: 89
-  Y: 842
+  Width: 3768
+  X: 3912
+  Y: 0
